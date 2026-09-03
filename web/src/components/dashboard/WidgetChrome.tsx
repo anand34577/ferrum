@@ -33,15 +33,15 @@ export function WidgetChrome({ type, editing, onRemove, settings, onSettingsChan
   }
 
   return (
-    <div className="relative flex h-full flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] shadow-xs">
+    <div className="relative flex h-full flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] transition-colors duration-200">
       <div
         className={cn(
-          "drag-handle flex shrink-0 items-center gap-2 border-b border-[var(--border)] px-3 py-2",
+          "drag-handle flex shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--bg-muted)]/30 px-3.5 py-2.5",
           editing && "cursor-move",
         )}
       >
         {editing && <GripVertical className="h-3.5 w-3.5 text-[var(--text-muted)]" aria-hidden />}
-        <span className="font-display text-xs font-semibold text-[var(--text)]">{widgetLabel(type)}</span>
+        <span className="panel-label text-[11px] text-[var(--text)]">{widgetLabel(type)}</span>
         {editing && (onMoveUp || onMoveDown) && (
           <div className="flex items-center">
             <button

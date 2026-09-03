@@ -290,10 +290,10 @@ export function TasksPage() {
 
 function SummaryChip({ label, value, tone, icon }: { label: string; value: number; tone: "ok" | "warn" | "error"; icon?: React.ReactNode }) {
   return (
-    <div className={cn("flex items-center gap-2.5 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-2.5 shadow-xs")}>
+    <div className={cn("flex items-center gap-2.5 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-2.5")}>
       <span
         className={cn(
-          "flex h-7 w-7 items-center justify-center rounded-full",
+          "flex h-7 w-7 items-center justify-center rounded-sm",
           tone === "ok" && "bg-[color-mix(in_oklab,var(--status-ok)_14%,transparent)] text-[var(--status-ok)]",
           tone === "warn" && "bg-[color-mix(in_oklab,var(--status-warn)_14%,transparent)] text-[var(--status-warn)]",
           tone === "error" && "bg-[color-mix(in_oklab,var(--status-error)_14%,transparent)] text-[var(--status-error)]",

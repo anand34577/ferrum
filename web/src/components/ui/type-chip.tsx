@@ -19,11 +19,3 @@ export function TypeChip({ type, className }: { type: string; className?: string
   )
 }
 
-/** Guest power state as a dot color — running green, anything not running
- * (stopped/paused/unknown) red so a guest that's down reads as "attention"
- * everywhere, not as a neutral gray. */
-export function guestDotStatus(status?: string): "ok" | "warn" | "error" {
-  if (status === "running") return "ok"
-  if (status === "stopped") return "error"
-  return "warn"
-}

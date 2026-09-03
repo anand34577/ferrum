@@ -2,9 +2,9 @@ import type { HTMLAttributes } from "react"
 import { cn } from "@/lib/utils"
 
 const railTint: Record<string, string> = {
-  ok: "color-mix(in oklab, var(--status-ok) 7%, var(--bg-surface))",
-  warn: "color-mix(in oklab, var(--status-warn) 7%, var(--bg-surface))",
-  error: "color-mix(in oklab, var(--status-error) 7%, var(--bg-surface))",
+  ok: "color-mix(in oklab, var(--status-ok) 6%, var(--bg-surface))",
+  warn: "color-mix(in oklab, var(--status-warn) 6%, var(--bg-surface))",
+  error: "color-mix(in oklab, var(--status-error) 6%, var(--bg-surface))",
   brand: "color-mix(in oklab, var(--color-brand-500) 6%, var(--bg-surface))",
 }
 
@@ -21,9 +21,10 @@ export function Card({ className, rail, interactive, style, ...props }: CardProp
   return (
     <div
       className={cn(
-        "rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] shadow-xs",
+        "relative rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] shadow-card transition-all duration-200",
+        "dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),0_1px_3px_rgba(0,0,0,0.4)]",
         interactive &&
-          "transition-[transform,box-shadow,border-color] duration-150 hover:-translate-y-0.5 hover:border-[var(--border-strong)] hover:shadow-md",
+          "cursor-pointer hover:border-[var(--border-strong)] hover:shadow-md dark:hover:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08),0_8px_24px_rgba(0,0,0,0.6)]",
         className,
       )}
       style={rail ? { background: railTint[rail], ...style } : style}
@@ -33,7 +34,7 @@ export function Card({ className, rail, interactive, style, ...props }: CardProp
 }
 
 export function CardHeader({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("flex flex-col gap-1 p-4 pb-2", className)} {...props} />
+  return <div className={cn("flex flex-col gap-1.5 p-5 pb-2", className)} {...props} />
 }
 
 export function CardTitle({
@@ -50,9 +51,9 @@ export function CardTitle({
 }
 
 export function CardDescription({ className, ...props }: HTMLAttributes<HTMLParagraphElement>) {
-  return <p className={cn("text-xs text-[var(--text-muted)]", className)} {...props} />
+  return <p className={cn("text-xs leading-relaxed text-[var(--text-muted)]", className)} {...props} />
 }
 
 export function CardContent({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("p-4 pt-2", className)} {...props} />
+  return <div className={cn("p-5 pt-2", className)} {...props} />
 }

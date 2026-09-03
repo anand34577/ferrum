@@ -17,7 +17,7 @@ export function ErrorState({ title = "Couldn't load this content", message, onRe
     <div
       role="alert"
       className={cn(
-        "flex flex-col items-center justify-center rounded-lg border border-[color-mix(in_oklab,var(--status-error)_30%,var(--border))] px-6 py-10 text-center",
+        "flex flex-col items-center justify-center rounded-lg border border-[color-mix(in_oklab,var(--status-error)_25%,var(--border))] bg-[color-mix(in_oklab,var(--status-error)_4%,var(--bg-surface))] px-6 py-10 text-center",
         className,
       )}
     >

@@ -46,7 +46,7 @@ export function NotificationBell() {
         {total > 0 && (
           <span
             className={cn(
-              "absolute right-1 top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 text-[9px] font-bold leading-none text-white",
+              "absolute right-1 top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-sm px-0.5 text-[9px] font-bold leading-none text-white",
               summaryQuery.data?.critical ? "bg-[var(--status-error)]" : "bg-[var(--status-warn)]",
             )}
             aria-hidden
