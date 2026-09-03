@@ -25,6 +25,11 @@ type OIDCConfig struct {
 	ClientID     string
 	ClientSecret string
 	RedirectURL  string
+	// AllowAutoProvision controls whether a first-time SSO login creates a
+	// new local account (the historical default) or is refused — see
+	// Service.FindOrCreateOIDCUser and ErrOIDCUserNotProvisioned. An admin
+	// who wants SSO restricted to pre-existing accounts turns this off.
+	AllowAutoProvision bool
 }
 
 // OIDCClient implements the OpenID Connect authorization-code flow against
@@ -51,6 +56,9 @@ type oidcDiscovery struct {
 	TokenEndpoint         string `json:"token_endpoint"`
 	JWKSURI               string `json:"jwks_uri"`
 	UserinfoEndpoint      string `json:"userinfo_endpoint"`
+	// EndSessionEndpoint (RP-Initiated Logout 1.0) is optional per spec —
+	// not every provider advertises one (see EndSessionURL).
+	EndSessionEndpoint string `json:"end_session_endpoint"`
 }
 
 func NewOIDCClient(cfg OIDCConfig) *OIDCClient {
@@ -62,6 +70,12 @@ func (c *OIDCClient) DisplayName() string {
 		return c.cfg.DisplayName
 	}
 	return "SSO"
+}
+
+// AllowAutoProvision reports whether a first-time SSO login may create a new
+// local account (see OIDCConfig.AllowAutoProvision).
+func (c *OIDCClient) AllowAutoProvision() bool {
+	return c.cfg.AllowAutoProvision
 }
 
 // discoveryTTL bounds how long a cached discovery document is trusted, so a
@@ -118,6 +132,11 @@ type Claims struct {
 	Email             string
 	EmailVerified     bool
 	PreferredUsername string
+	// RawIDToken is the verified ID token JWT itself, kept only so it can be
+	// handed back to the provider as id_token_hint on RP-Initiated Logout —
+	// see EndSessionURL. Ferrum's own session is a random bearer token; this
+	// is never used to re-authenticate a request.
+	RawIDToken string
 }
 
 // Exchange trades an authorization code for an ID token at the provider's
@@ -162,7 +181,48 @@ func (c *OIDCClient) Exchange(code, nonce string) (*Claims, error) {
 		return nil, errors.New("OIDC provider did not return an id_token")
 	}
 
-	return c.verifyIDToken(tokenResp.IDToken, d.Issuer, nonce)
+	claims, err := c.verifyIDToken(tokenResp.IDToken, d.Issuer, nonce)
+	if err != nil {
+		return nil, err
+	}
+	claims.RawIDToken = tokenResp.IDToken
+	return claims, nil
+}
+
+// EndSessionURL builds the RP-Initiated Logout redirect (OpenID Connect
+// RP-Initiated Logout 1.0): the browser is sent here to end the session at
+// the provider too, not just at Ferrum, then bounced back to Ferrum's login
+// page (same origin as the configured callback URL — never taken from the
+// request, which is attacker-controlled). ok is false when the provider
+// doesn't advertise an end_session_endpoint (optional per spec — plenty of
+// providers omit it), in which case there's nothing to redirect to and
+// Ferrum's own logout (already done by the caller) is all that happens.
+func (c *OIDCClient) EndSessionURL(idTokenHint string) (endSessionURL string, ok bool) {
+	d, err := c.discover()
+	if err != nil || d.EndSessionEndpoint == "" {
+		return "", false
+	}
+	q := url.Values{"client_id": {c.cfg.ClientID}}
+	if idTokenHint != "" {
+		q.Set("id_token_hint", idTokenHint)
+	}
+	if redirect := c.postLogoutRedirectURI(); redirect != "" {
+		q.Set("post_logout_redirect_uri", redirect)
+	}
+	return d.EndSessionEndpoint + "?" + q.Encode(), true
+}
+
+// postLogoutRedirectURI derives Ferrum's login page from the configured
+// callback URL's origin (…/api/v1/auth/oidc/callback → …/login), so it's
+// never a second thing the admin has to configure separately.
+func (c *OIDCClient) postLogoutRedirectURI() string {
+	u, err := url.Parse(c.cfg.RedirectURL)
+	if err != nil {
+		return ""
+	}
+	u.Path = "/login"
+	u.RawQuery = ""
+	return u.String()
 }
 
 func (c *OIDCClient) verifyIDToken(idToken, expectIssuer, expectNonce string) (*Claims, error) {

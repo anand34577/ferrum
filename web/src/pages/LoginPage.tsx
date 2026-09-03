@@ -24,7 +24,11 @@ export function LoginPage() {
   })
 
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get("sso_error")) {
+    const ssoError = new URLSearchParams(window.location.search).get("sso_error")
+    if (ssoError === "no_account") {
+      toast.error("No account exists for that SSO identity, and new accounts aren't created automatically. Ask an admin to create one.")
+      window.history.replaceState(null, "", window.location.pathname)
+    } else if (ssoError) {
       toast.error("Single sign-on failed. Please try again or use your password.")
       window.history.replaceState(null, "", window.location.pathname)
     }

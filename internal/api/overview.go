@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -196,6 +197,7 @@ func (s *Server) buildFleetEntry(ctx context.Context, id, name, host string, por
 	}
 
 	entry.Sto.ByType = map[string]int64{}
+	var storageRows []pve.ClusterResource
 	for _, res := range resources {
 		switch res.Type {
 		case "node":
@@ -230,15 +232,18 @@ func (s *Server) buildFleetEntry(ctx context.Context, id, name, host string, por
 			}
 		case "storage":
 			if res.MaxDisk > 0 {
-				entry.Sto.Total += res.MaxDisk
-				entry.Sto.Used += res.Disk
-				plugin := res.PluginType
-				if plugin == "" {
-					plugin = "unknown"
-				}
-				entry.Sto.ByType[plugin] += res.Disk
+				storageRows = append(storageRows, res)
 			}
 		}
+	}
+	for _, res := range dedupeSharedStorage(storageRows) {
+		entry.Sto.Total += res.MaxDisk
+		entry.Sto.Used += res.Disk
+		plugin := res.PluginType
+		if plugin == "" {
+			plugin = "unknown"
+		}
+		entry.Sto.ByType[plugin] += res.Disk
 	}
 	if entry.CPU.Cores > 0 {
 		entry.CPU.Pct = entry.CPU.UsedCore / float64(entry.CPU.Cores) * 100
@@ -251,6 +256,42 @@ func (s *Server) buildFleetEntry(ctx context.Context, id, name, host string, por
 	}
 
 	return entry
+}
+
+// localOnlyPluginTypes never represent a physical volume shared across
+// nodes — every other plugin type (nfs, cifs, pbs, cephfs, rbd, iscsi, ...)
+// is treated as network storage even when PVE's own Shared flag is 0, since
+// plenty of real setups add the same NFS/CIFS target as a near-identical
+// per-node definition without ever ticking "Shared" in the storage config.
+var localOnlyPluginTypes = map[string]bool{"dir": true, "lvm": true, "lvmthin": true, "zfspool": true, "btrfs": true}
+
+// dedupeSharedStorage collapses cluster/resources storage rows that
+// represent the *same* physical volume reported once per node it's mounted
+// on — summing them as-is (the naive approach) multiplied a shared pool's
+// capacity by the node count, e.g. an 8-node cluster made a 2TB NFS share
+// read as 16TB. Local-only storage (dir/lvm/zfspool/...) is left exactly as
+// reported: it's genuinely separate capacity per node.
+//
+// Within the "could be shared" group, rows are deduped by an exact
+// (name, total, used) match: two truly independent volumes are vanishingly
+// unlikely to report byte-for-byte identical total *and* used capacity at
+// the same instant, while duplicate reports of one physical volume always do.
+func dedupeSharedStorage(rows []pve.ClusterResource) []pve.ClusterResource {
+	out := make([]pve.ClusterResource, 0, len(rows))
+	seen := map[string]bool{}
+	for _, r := range rows {
+		if r.Shared == 0 && localOnlyPluginTypes[r.PluginType] {
+			out = append(out, r)
+			continue
+		}
+		key := fmt.Sprintf("%s|%d|%d", r.Storage, r.MaxDisk, r.Disk)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, r)
+	}
+	return out
 }
 
 func countType(rows []pve.ClusterStatus, typ string) int {

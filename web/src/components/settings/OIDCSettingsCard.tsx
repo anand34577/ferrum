@@ -16,6 +16,7 @@ interface OIDCSettings {
   issuerUrl: string
   clientId: string
   redirectUrl: string
+  allowAutoProvision: boolean
   hasSecret: boolean
 }
 
@@ -71,6 +72,7 @@ function OIDCSettingsForm({ initial }: { initial: OIDCSettings }) {
         issuerUrl: form.issuerUrl,
         clientId: form.clientId,
         redirectUrl: form.redirectUrl,
+        allowAutoProvision: form.allowAutoProvision,
         // Omit entirely when blank — the server keeps the stored secret.
         ...(form.clientSecret ? { clientSecret: form.clientSecret } : {}),
       }),
@@ -89,6 +91,17 @@ function OIDCSettingsForm({ initial }: { initial: OIDCSettings }) {
           <p className="text-xs text-[var(--text-muted)]">Shows a "Continue with ..." button on the login page.</p>
         </div>
         <Switch checked={form.enabled} onCheckedChange={(v) => setForm({ ...form, enabled: v })} />
+      </div>
+
+      <div className="flex items-center justify-between rounded-md border border-[var(--border)] px-3 py-2.5">
+        <div>
+          <p className="text-sm font-medium">Auto-create new accounts</p>
+          <p className="text-xs text-[var(--text-muted)]">
+            When off, a first-time SSO login is refused unless a local account with a matching (verified) email already exists —
+            useful when accounts should only be provisioned by an admin.
+          </p>
+        </div>
+        <Switch checked={form.allowAutoProvision} onCheckedChange={(v) => setForm({ ...form, allowAutoProvision: v })} />
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

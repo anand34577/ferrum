@@ -80,18 +80,33 @@ export function StoragePage() {
   // Shared storage (nfs/cifs/pbs/cephfs/iscsi/...) is the opposite: PVE's
   // cluster/resources reports the *same* pool once per node it's mounted
   // on, so naively summing it the same way multiplied its capacity by the
-  // node count (an 8-node cluster made a 2TB NFS share read as 16TB). It's
-  // deduped below to one entry per (connection, pool name) before any
-  // total is computed.
-  const localPools = storagePools.filter((p) => !p.shared)
+  // node count (an 8-node cluster made a 2TB NFS share read as 16TB).
+  //
+  // PVE's own `shared` flag is not a reliable signal for this split: it
+  // only reflects whether the storage config has the "Shared" checkbox
+  // ticked, and plenty of real setups instead add the same NFS/CIFS target
+  // as a near-identical per-node definition without ever ticking it — which
+  // reports shared:0 despite being one physical volume, and (worse) fed
+  // several rows sharing one name into a chart's category axis, which
+  // recharts doesn't handle sensibly. So the split below leads with
+  // plugintype (network-capable types are "shared" regardless of the flag)
+  // and, within that group, dedupes by an exact (name, total, used) match:
+  // two truly independent volumes are vanishingly unlikely to report
+  // byte-for-byte identical total *and* used capacity at the same instant,
+  // while duplicate reports of one physical volume always do.
+  const LOCAL_ONLY_TYPES = new Set(["dir", "lvm", "lvmthin", "zfspool", "btrfs"])
+  const isNetworkStorage = (p: ClusterResource) => !!p.shared || (!!p.plugintype && !LOCAL_ONLY_TYPES.has(p.plugintype))
+
+  const localPools = storagePools.filter((p) => !isNetworkStorage(p))
   const sharedPools = useMemo(() => {
     const seen = new Map<string, ClusterResource & { connName: string }>()
     for (const p of storagePools) {
-      if (!p.shared) continue
-      const key = `${p.connName}|${p.storage ?? p.name}`
+      if (!isNetworkStorage(p)) continue
+      const key = `${p.connName}|${p.storage ?? p.name}|${p.maxdisk ?? 0}|${p.disk ?? 0}`
       if (!seen.has(key)) seen.set(key, p)
     }
     return Array.from(seen.values())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storagePools])
 
   function rollUp(pools: (ClusterResource & { connName: string })[]) {
@@ -124,18 +139,30 @@ export function StoragePage() {
   const localCapacity = useMemo(() => rollUp(localPools), [localPools])
   const sharedCapacity = useMemo(() => rollUp(sharedPools), [sharedPools])
 
-  function usageBars(pools: (ClusterResource & { connName: string })[]) {
+  // suffixNode disambiguates local pools that legitimately share a name
+  // across nodes (e.g. every node's "local-lvm") — a bar chart's category
+  // axis needs a unique label per row, or a charting library like recharts
+  // has no sane way to lay out same-named rows as distinct bars.
+  function usageBars(pools: (ClusterResource & { connName: string })[], suffixNode: boolean) {
     return pools
       .filter((p) => (p.maxdisk ?? 0) > 0)
-      .map((p) => ({ name: p.storage ?? p.name ?? "unknown", pct: Math.min(100, ((p.disk ?? 0) / (p.maxdisk ?? 1)) * 100) }))
+      .map((p) => {
+        const base = p.storage ?? p.name ?? "unknown"
+        return { name: suffixNode && p.node ? `${base} (${p.node})` : base, pct: Math.min(100, ((p.disk ?? 0) / (p.maxdisk ?? 1)) * 100) }
+      })
       .sort((a, b) => b.pct - a.pct)
       .slice(0, 8)
   }
-  // Local pools stay one bar per node (each is genuinely separate capacity);
-  // shared pools use the deduped list so a pool mounted on every node in the
-  // cluster shows up once, not once per node at an identical percentage.
+  // Local pools stay one bar per node (each is genuinely separate capacity),
+  // labeled with their node since the same name (e.g. "local-lvm") is
+  // expected on every node; shared pools use the deduped list so a pool
+  // mounted on every node in the cluster shows up once, not once per node
+  // at an identical percentage.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const usageByPool = useMemo(() => usageBars([...localPools, ...sharedPools]), [localPools, sharedPools])
+  const usageByPool = useMemo(
+    () => [...usageBars(localPools, true), ...usageBars(sharedPools, false)].sort((a, b) => b.pct - a.pct).slice(0, 8),
+    [localPools, sharedPools],
+  )
 
   const columns = useMemo<ColumnDef<ClusterResource & { connName: string }>[]>(
     () => [

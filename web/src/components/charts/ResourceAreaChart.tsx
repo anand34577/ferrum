@@ -34,11 +34,16 @@ function TooltipContent({
   payload,
   label,
   series,
+  fallbackFormatter,
 }: {
   active?: boolean
   payload?: Array<{ dataKey?: string | number; value?: unknown }>
   label?: unknown
   series: ChartSeries[]
+  /** Used when a series has no formatter of its own — normally the same
+   * yTickFormatter already given to the Y axis, so a chart with a unit
+   * (%, bytes, B/s, ...) never needs to also duplicate it per-series. */
+  fallbackFormatter?: (v: number) => string
 }) {
   if (!active || !payload || payload.length === 0) return null
   // Band payloads share the label with their main series — keep the first.
@@ -48,7 +53,8 @@ function TooltipContent({
     const s = series.find((x) => x.key === p.dataKey)
     if (!s || seen.has(s.label) || typeof p.value !== "number") continue
     seen.add(s.label)
-    items.push({ label: s.label, color: s.color, text: s.formatter ? s.formatter(p.value) : String(Math.round(p.value * 100) / 100) })
+    const formatter = s.formatter ?? fallbackFormatter
+    items.push({ label: s.label, color: s.color, text: formatter ? formatter(p.value) : String(Math.round(p.value * 100) / 100) })
   }
   if (items.length === 0) return null
   return (
@@ -119,7 +125,7 @@ export function ResourceAreaChart({
             domain={yDomain}
             allowDecimals={allowDecimals}
           />
-          <Tooltip content={<TooltipContent series={series} />} cursor={{ stroke: "var(--border-strong)", strokeDasharray: "3 3" }} />
+          <Tooltip content={<TooltipContent series={series} fallbackFormatter={yTickFormatter} />} cursor={{ stroke: "var(--border-strong)", strokeDasharray: "3 3" }} />
           {/* Peak envelopes first so the average line and its gradient sit on top. */}
           {series
             .filter((s) => s.band)

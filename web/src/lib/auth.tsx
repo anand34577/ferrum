@@ -7,6 +7,10 @@ interface AuthState {
   needsSetup: boolean
   loading: boolean
   refresh: () => void
+  /** Clears local auth state deterministically — does not wait for (or
+   * depend on) a subsequent /auth/me round trip. See the comment above
+   * signOut's body for why that matters. */
+  signOut: () => void
 }
 
 const AuthContext = createContext<AuthState | null>(null)
@@ -27,23 +31,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     throwOnError: (err) => !(err instanceof ApiError && err.status === 401),
   })
 
-  // When an API call hits a 401 while we believed we were logged in, the
-  // session has expired mid-use: clear the cache so the user lands on the
-  // login page instead of a wall of error states. A 401 with no cached user
-  // is the normal signed-out state (the initial /auth/me probe) — clearing
-  // there would wipe the cache, refetch, 401 again, and loop forever.
+  // signOut is the one place that actually clears local auth state — both
+  // the explicit "Sign out" button and the 401 handler below funnel through
+  // it, so there's exactly one code path to get right instead of two that
+  // can drift.
+  //
+  // React Query keeps a query's last-good `data` around through a *failed*
+  // refetch (only a new *successful* fetch, or removing the query from the
+  // cache, replaces it) — invalidateQueries()'s "revalidate in the
+  // background" model assumes the stale data is still fine to show while
+  // that happens. That assumption is wrong for auth: after logout, the
+  // stale "signed in as X" is never fine to keep showing, so this pins
+  // ["auth","me"] to null directly instead of waiting for a refetch to 401
+  // and hoping the cache update lands before the next render.
+  function signOut() {
+    queryClient.clear()
+    queryClient.setQueryData(["auth", "me"], null)
+  }
+
+  // A 401 on any API call while we believed we were logged in means the
+  // session expired (or was revoked) mid-use — same cleanup as an explicit
+  // sign-out. A 401 with no cached user is the normal signed-out state (the
+  // initial /auth/me probe); reacting to that would loop forever.
   useEffect(
     () =>
       onUnauthorized(() => {
         if (queryClient.getQueryData<User>(["auth", "me"])) {
-          queryClient.clear()
+          signOut()
         }
       }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [queryClient],
   )
 
   // Memoized so unrelated re-renders of the provider don't re-render every
-  // useAuth consumer (the refresh closure is stable across renders).
+  // useAuth consumer (the refresh/signOut closures are stable across renders).
   const value = useMemo<AuthState>(
     () => ({
       user: meQuery.data ?? null,
@@ -52,7 +74,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refresh: () => {
         queryClient.invalidateQueries({ queryKey: ["auth"] })
       },
+      signOut,
     }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [meQuery.data, meQuery.isLoading, setupQuery.data?.needsSetup, setupQuery.isLoading, queryClient],
   )
 

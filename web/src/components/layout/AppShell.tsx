@@ -104,7 +104,7 @@ const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigat
 const paletteShortcutLabel = isMac ? "⌘K" : "Ctrl K"
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const { user, refresh } = useAuth()
+  const { user, signOut } = useAuth()
   const { effectiveTheme, toggle } = useTheme()
   const navigate = useNavigate()
   const [collapsed, setCollapsed] = useState(false)
@@ -113,16 +113,30 @@ export function AppShell({ children }: { children: ReactNode }) {
   const groups = visibleGroups(user?.isAdmin ?? false)
 
   async function logout() {
+    // logoutUrl is set only for an SSO session whose provider supports
+    // RP-Initiated Logout (see authLogout/EndSessionURL server-side) — a
+    // plain sign-out would otherwise leave the user still logged in at the
+    // identity provider, so signing back in skips straight past its login
+    // page. A full navigation (not fetch) because ending the IdP's own
+    // session needs the browser to actually visit it.
+    let logoutUrl: string | undefined
     try {
-      await api.post("/auth/logout")
+      const res = await api.post<{ logoutUrl?: string }>("/auth/logout")
+      logoutUrl = res?.logoutUrl
     } catch {
       toast.error("Sign out failed — the server didn't respond. You're still signed in here.")
     } finally {
       // Clear local state regardless: if the server is unreachable the
       // session may still be alive there, but the UI must not pretend
-      // the sign-out silently failed.
-      refresh()
-      navigate("/")
+      // the sign-out silently failed. signOut() pins the cached user to
+      // null directly rather than invalidating-and-hoping a refetch lands
+      // in time — see the comment on AuthProvider's signOut for why.
+      signOut()
+      if (logoutUrl) {
+        window.location.href = logoutUrl
+      } else {
+        navigate("/")
+      }
     }
   }
 
