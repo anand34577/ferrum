@@ -59,7 +59,7 @@ export function SettingsPage() {
 
       {connId && (
         <>
-          <DatacenterOptionsCard connId={connId} />
+          <DatacenterOptionsSection connId={connId} />
           <SubscriptionCard connId={connId} nodes={(connections.find((c) => c.connectionId === connId)?.resources ?? []).filter((r) => r.type === "node")} />
         </>
       )}
@@ -91,17 +91,15 @@ function AboutCard() {
   )
 }
 
-function DatacenterOptionsCard({ connId }: { connId: string }) {
+function DatacenterOptionsForm({
+  connId,
+  initial,
+}: {
+  connId: string
+  initial: DatacenterOptions
+}) {
   const queryClient = useQueryClient()
-  const optionsQuery = useQuery({
-    queryKey: ["datacenter-options", connId],
-    queryFn: () => api.get<DatacenterOptions>(`/connections/${connId}/cluster/options`),
-  })
-  const [form, setForm] = useState<DatacenterOptions>({})
-
-  useEffect(() => {
-    setForm(optionsQuery.data ?? {})
-  }, [optionsQuery.data])
+  const [form, setForm] = useState<DatacenterOptions>(initial)
 
   const save = useMutation({
     mutationFn: () => api.put(`/connections/${connId}/cluster/options`, form),
@@ -110,6 +108,61 @@ function DatacenterOptionsCard({ connId }: { connId: string }) {
       queryClient.invalidateQueries({ queryKey: ["datacenter-options", connId] })
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to save datacenter options"),
+  })
+
+  return (
+    <>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label>Keyboard layout</Label>
+          <Input value={form.keyboard ?? ""} onChange={(e) => setForm({ ...form, keyboard: e.target.value })} placeholder="en-us" />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Console viewer</Label>
+          <Select value={form.console ?? ""} onValueChange={(v) => setForm({ ...form, console: v })}>
+            <SelectTrigger>
+              <SelectValue placeholder="Default" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="html5">HTML5 (noVNC)</SelectItem>
+              <SelectItem value="xtermjs">xterm.js</SelectItem>
+              <SelectItem value="vv">SPICE</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label>HTTP proxy</Label>
+          <Input value={form.http_proxy ?? ""} onChange={(e) => setForm({ ...form, http_proxy: e.target.value })} placeholder="http://proxy:8080" />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Notification email from</Label>
+          <Input value={form.email_from ?? ""} onChange={(e) => setForm({ ...form, email_from: e.target.value })} placeholder="proxmox@example.com" />
+        </div>
+        <div className="space-y-1.5">
+          <Label>MAC address prefix</Label>
+          <Input value={form.mac_prefix ?? ""} onChange={(e) => setForm({ ...form, mac_prefix: e.target.value })} placeholder="BC:24:11" />
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <Label>Description (cluster-wide MOTD)</Label>
+        <textarea
+          className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-sm"
+          rows={3}
+          value={form.description ?? ""}
+          onChange={(e) => setForm({ ...form, description: e.target.value })}
+        />
+      </div>
+      <Button size="sm" loading={save.isPending} onClick={() => save.mutate()}>
+        Save options
+      </Button>
+    </>
+  )
+}
+
+function DatacenterOptionsSection({ connId }: { connId: string }) {
+  const optionsQuery = useQuery({
+    queryKey: ["datacenter-options", connId],
+    queryFn: () => api.get<DatacenterOptions>(`/connections/${connId}/cluster/options`),
   })
 
   return (
@@ -127,51 +180,11 @@ function DatacenterOptionsCard({ connId }: { connId: string }) {
             <Skeleton className="h-9 w-2/3" />
           </div>
         ) : (
-          <>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label>Keyboard layout</Label>
-                <Input value={form.keyboard ?? ""} onChange={(e) => setForm({ ...form, keyboard: e.target.value })} placeholder="en-us" />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Console viewer</Label>
-                <Select value={form.console ?? ""} onValueChange={(v) => setForm({ ...form, console: v })}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Default" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="html5">HTML5 (noVNC)</SelectItem>
-                    <SelectItem value="xtermjs">xterm.js</SelectItem>
-                    <SelectItem value="vv">SPICE</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label>HTTP proxy</Label>
-                <Input value={form.http_proxy ?? ""} onChange={(e) => setForm({ ...form, http_proxy: e.target.value })} placeholder="http://proxy:8080" />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Notification email from</Label>
-                <Input value={form.email_from ?? ""} onChange={(e) => setForm({ ...form, email_from: e.target.value })} placeholder="proxmox@example.com" />
-              </div>
-              <div className="space-y-1.5">
-                <Label>MAC address prefix</Label>
-                <Input value={form.mac_prefix ?? ""} onChange={(e) => setForm({ ...form, mac_prefix: e.target.value })} placeholder="BC:24:11" />
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Description (cluster-wide MOTD)</Label>
-              <textarea
-                className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-sm"
-                rows={3}
-                value={form.description ?? ""}
-                onChange={(e) => setForm({ ...form, description: e.target.value })}
-              />
-            </div>
-            <Button size="sm" loading={save.isPending} onClick={() => save.mutate()}>
-              Save options
-            </Button>
-          </>
+          <DatacenterOptionsForm
+            key={connId + JSON.stringify(optionsQuery.data)}
+            connId={connId}
+            initial={optionsQuery.data ?? {}}
+          />
         )}
       </CardContent>
     </Card>

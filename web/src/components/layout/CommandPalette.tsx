@@ -125,22 +125,22 @@ export function CommandPalette() {
       open={open}
       onOpenChange={setOpen}
       label="Command palette"
-      overlayClassName="fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px]"
-      contentClassName="fixed left-1/2 top-[12vh] z-50 w-[calc(100vw-2rem)] max-w-xl -translate-x-1/2 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-lg"
+      overlayClassName="fixed inset-0 z-50 bg-black/65 backdrop-blur-sm"
+      contentClassName="fixed left-1/2 top-[12vh] z-50 w-[calc(100vw-2rem)] max-w-xl -translate-x-1/2 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] shadow-2xl dark:shadow-[0_24px_64px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.08)]"
     >
       <div
-        className="flex items-center gap-2.5 border-b border-[var(--border)] px-4 py-2"
+        className="flex items-center gap-2.5 border-b border-[var(--border)] px-4 py-3"
         cmdk-input-wrapper=""
       >
-        <Search className="h-4 w-4 shrink-0 text-[var(--text-muted)]" aria-hidden />
+        <Search className="h-4 w-4 shrink-0 text-brand-500" aria-hidden />
         {/* Same focus treatment as ui/Input — a rounded ring that follows the
             input's radius, not the global square outline. */}
         <Command.Input
           autoFocus
           placeholder="Jump to a page, node, or guest…"
-          className="h-9 w-full rounded-md bg-transparent px-2 text-sm outline-none placeholder:text-[var(--text-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+          className="h-9 w-full rounded-lg bg-transparent px-2 text-sm outline-none placeholder:text-[var(--text-muted)] focus-visible:outline-none"
         />
-        <kbd className="shrink-0 rounded border border-[var(--border)] bg-[var(--bg-surface)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-faint)]">
+        <kbd className="shrink-0 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-faint)]">
           Esc
         </kbd>
       </div>

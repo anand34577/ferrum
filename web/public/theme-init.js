@@ -7,8 +7,8 @@
     var dark = stored === "dark" || (stored !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
     if (dark) document.documentElement.classList.add("dark");
     var meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute("content", dark ? "#15171b" : "#ffffff");
-  } catch (e) {
+    if (meta) meta.setAttribute("content", dark ? "#090b0e" : "#ffffff");
+  } catch {
     /* no storage / no matchMedia — default light theme applies */
   }
 })();

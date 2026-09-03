@@ -40,6 +40,46 @@ import {
 } from "@/lib/dashboardTypes"
 
 /** Create/rename — the only two places a dashboard needs a name typed in. */
+function NameDashboardForm({
+  initial,
+  title,
+  onSave,
+  onCancel,
+}: {
+  initial: string
+  title: string
+  onSave: (name: string) => void
+  onCancel: () => void
+}) {
+  const [name, setName] = useState(initial)
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault()
+    const trimmed = name.trim()
+    if (!trimmed) return
+    onSave(trimmed)
+  }
+
+  return (
+    <DialogContent className="max-w-sm">
+      <DialogHeader>
+        <DialogTitle>{title}</DialogTitle>
+        <DialogDescription>Only you see this — it's just a label for the switcher.</DialogDescription>
+      </DialogHeader>
+      <form onSubmit={submit} className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="dashboard-name">Name</Label>
+          <Input id="dashboard-name" autoFocus maxLength={60} value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <DialogFooter className="gap-2">
+          <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
+          <Button type="submit" disabled={!name.trim()}>Save</Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  )
+}
+
 function NameDashboardDialog({
   open,
   onOpenChange,
@@ -53,38 +93,20 @@ function NameDashboardDialog({
   title: string
   onSave: (name: string) => void
 }) {
-  const [name, setName] = useState(initial)
-  useEffect(() => {
-    if (open) setName(initial)
-  }, [open, initial])
-
-  function submit(e: React.FormEvent) {
-    e.preventDefault()
-    const trimmed = name.trim()
-    if (!trimmed) return
-    onSave(trimmed)
-    onOpenChange(false)
-  }
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm">
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>Only you see this — it's just a label for the switcher.</DialogDescription>
-        </DialogHeader>
-        <form onSubmit={submit} className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="dashboard-name">Name</Label>
-            <Input id="dashboard-name" autoFocus maxLength={60} value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
-          <DialogFooter>
-            <Button type="submit" disabled={!name.trim()}>
-              Save
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
+      {open && (
+        <NameDashboardForm
+          key={initial}
+          initial={initial}
+          title={title}
+          onSave={(name) => {
+            onSave(name)
+            onOpenChange(false)
+          }}
+          onCancel={() => onOpenChange(false)}
+        />
+      )}
     </Dialog>
   )
 }
@@ -96,12 +118,11 @@ export function DashboardPage() {
 
   const [dashboards, setDashboards] = useState<DashboardSummary[] | null>(null)
   const [activeId, setActiveId] = useState<string | null>(null)
-  const [widgets, setWidgets] = useState<WidgetSpec[] | null>(null)
-  const [loadError, setLoadError] = useState(false)
   const [editing, setEditing] = useState(false)
   const [nameDialog, setNameDialog] = useState<"create" | "rename" | null>(null)
   const dirty = useRef(false)
   const pickedInitial = useRef(false)
+  const nextWidgetId = useRef(1)
 
   // Shares the query-cache entry ThemeProvider already populates (same key) —
   // this doesn't cost a second network round trip in the common case.
@@ -116,9 +137,8 @@ export function DashboardPage() {
       .get<DashboardSummary[]>("/dashboards/")
       .then((list) => {
         setDashboards(list)
-        setLoadError(false)
       })
-      .catch(() => setLoadError(true))
+      .catch(() => {})
   }
   useEffect(loadDashboardList, [])
 
@@ -132,19 +152,23 @@ export function DashboardPage() {
     setActiveId(preferred && dashboards.some((d) => d.id === preferred) ? preferred : dashboards[0].id)
   }, [dashboards, prefsQuery.data, prefsQuery.isLoading])
 
-  function loadWidgets(id: string) {
-    setWidgets(null)
-    api
-      .get<DashboardFull>(`/dashboards/${id}`)
-      .then((d) => {
-        setWidgets(d.widgets)
-        setLoadError(false)
-      })
-      .catch(() => setLoadError(true))
+  const widgetsQuery = useQuery({
+    queryKey: ["dashboard", activeId],
+    queryFn: () => (activeId ? api.get<DashboardFull>(`/dashboards/${activeId}`) : Promise.resolve(null)),
+    enabled: Boolean(activeId),
+  })
+
+  // Synchronize local editable layout with loaded dashboard when activeId or query changes
+  const loadedWidgets = widgetsQuery.data?.widgets ?? null
+  const [widgets, setWidgets] = useState<WidgetSpec[] | null>(null)
+  const prevLoadedRef = useRef<WidgetSpec[] | null>(null)
+
+  if (loadedWidgets !== prevLoadedRef.current) {
+    prevLoadedRef.current = loadedWidgets
+    setWidgets(loadedWidgets)
   }
-  useEffect(() => {
-    if (activeId) loadWidgets(activeId)
-  }, [activeId])
+
+  const loadError = widgetsQuery.isError
 
   // onLayoutChange saves lazily (only on "Done"/unmount via dirty.current) —
   // without this, a drag right before a tab close or refresh is silently lost.
@@ -243,9 +267,10 @@ export function DashboardPage() {
     const maxY = widgets.reduce((m, w) => Math.max(m, w.y + w.h), 0)
     const settings = { ...widgetDefaultSettings(type) }
     if (connection) settings.connection = connection
+    const widgetId = `${type}-${widgets.length + 1}-${nextWidgetId.current++}`
     const next = [
       ...widgets,
-      { id: `${type}-${Date.now()}`, type, x: 0, y: maxY, w: spec.defaultSize.w, h: spec.defaultSize.h, settings },
+      { id: widgetId, type, x: 0, y: maxY, w: spec.defaultSize.w, h: spec.defaultSize.h, settings },
     ]
     setWidgets(next)
     saveLayout(next)
@@ -429,7 +454,7 @@ export function DashboardPage() {
           message="The layout could not be fetched. Your widgets will be back once the connection recovers."
           onRetry={() => {
             loadDashboardList()
-            if (activeId) loadWidgets(activeId)
+            widgetsQuery.refetch()
           }}
         />
       )}

@@ -345,7 +345,7 @@ export function NodeDetailPage() {
                       <Badge>{s.type}</Badge>
                       {s.shared === 1 && <Badge variant="ok">Shared</Badge>}
                       <Badge variant={s.active === 0 ? "error" : "default"}>{s.active === 0 ? "Inactive" : "Active"}</Badge>
-                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--track)]">
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-sm bg-[var(--track)]">
                         <div className={pct > 85 ? "h-full bg-[var(--status-error)]" : "h-full bg-brand-500"} style={{ width: `${pct}%` }} />
                       </div>
                       <span className="w-32 text-right text-xs text-[var(--text-muted)] tabular">{formatBytes(s.used ?? 0)} / {formatBytes(s.total ?? 0)}</span>
