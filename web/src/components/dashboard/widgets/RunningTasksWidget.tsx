@@ -1,0 +1,32 @@
+import { Badge } from "@/components/ui/badge"
+import type { WidgetSettings } from "@/lib/dashboardTypes"
+import { scopedConnection } from "@/lib/fleet"
+import { useClusterTasks } from "@/lib/useClusterTasks"
+
+function statusVariant(status: string): "ok" | "warn" | "error" | "default" {
+  if (status === "OK") return "ok"
+  if (status === "running" || !status) return "warn"
+  return "error"
+}
+
+export function RunningTasksWidget({ settings }: { settings: WidgetSettings }) {
+  const limit = Number(settings.limit) || 8
+  const { tasks } = useClusterTasks(scopedConnection(settings))
+  const rows = tasks.slice(0, limit)
+
+  if (rows.length === 0) {
+    return <p className="text-sm text-[var(--text-muted)]">No recent tasks.</p>
+  }
+
+  return (
+    <div className="space-y-1.5">
+      {rows.map((t) => (
+        <div key={t.upid} className="flex items-center gap-2 text-sm">
+          <span className="w-24 shrink-0 truncate text-xs text-[var(--text-muted)]">{t.connName}</span>
+          <span className="min-w-0 flex-1 truncate font-mono text-xs">{t.type}</span>
+          <Badge variant={statusVariant(t.status)}>{t.status || "running"}</Badge>
+        </div>
+      ))}
+    </div>
+  )
+}

@@ -1,0 +1,367 @@
+@import "tailwindcss";
+
+/* The app toggles a .dark class on <html> (lib/theme.tsx) — point Tailwind's
+   dark: variant at the class instead of the OS media query so every dark:
+   utility follows the in-app theme toggle. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Self-hosted (not CDN) so the UI renders correctly with zero network access. */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/inter-variable.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("/fonts/space-grotesk-variable.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-variable.woff2") format("woff2");
+}
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  /* Ferrum's default brand color is oxide — the color of weathered iron, and
+     the namesake reaction (ferrum + oxygen = rust). The ramp itself lives in
+     --accent-* below (a runtime token, like --elev-* for shadows) so a user's
+     accent preference can repaint every brand-* utility by swapping those
+     variables via [data-accent] — Tailwind v4 inlines @theme color values
+     directly into utility CSS, so referencing them here (rather than putting
+     hex literals straight in @theme) is what keeps them swappable at runtime. */
+  --color-brand-50: var(--accent-50);
+  --color-brand-100: var(--accent-100);
+  --color-brand-200: var(--accent-200);
+  --color-brand-300: var(--accent-300);
+  --color-brand-400: var(--accent-400);
+  --color-brand-500: var(--accent-500);
+  --color-brand-600: var(--accent-600);
+  --color-brand-700: var(--accent-700);
+  --color-brand-800: var(--accent-800);
+
+  /* Slightly tighter than the generic "bubbly SaaS" 8/12/16px scale —
+     reads more like a technical instrument panel than a consumer app. */
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.625rem;
+
+  /* Elevation utilities reference runtime tokens (defined in :root/.dark
+     below) so dark mode can swap to darker, tighter shadows — Tailwind v4
+     inlines literal values, so the indirection is what keeps them themable. */
+  --shadow-xs: var(--elev-xs);
+  --shadow-sm: var(--elev-sm);
+  --shadow-md: var(--elev-md);
+  --shadow-lg: var(--elev-lg);
+}
+
+:root {
+  color-scheme: light;
+
+  /* Cool steel neutrals, not the warm-cream default — this is a fleet of
+     iron and silicon, not a stationery brand. */
+  --bg: #eef0f3;
+  --bg-surface: #ffffff;
+  --bg-surface-hover: #f4f6f8;
+  --bg-elevated: #ffffff;
+  --bg-muted: #e4e7ec;
+  --border: #d7dbe2;
+  --border-strong: #c2c8d2;
+  --text: #14171c;
+  --text-muted: #5b6270;
+  --text-faint: #6e7480; /* 4.6:1 on white — WCAG AA for the 10-11px text that uses it */
+  --ring: var(--accent-600);
+
+  /* Default accent ramp — oxide, the color of weathered iron (see the brand
+     comment in @theme above). A user's accent preference is persisted server-
+     side (PUT /auth/me/preferences) and applied as [data-accent] on <html>;
+     the presets below override this ramp, and [data-accent] wins over :root
+     by specificity alone (equal ordering, one more selector). */
+  --accent-50: #fbeee6;
+  --accent-100: #f5dac6;
+  --accent-200: #eec0a0;
+  --accent-300: #e39e72;
+  --accent-400: #d97a49;
+  --accent-500: #bd5a2c;
+  --accent-600: #9c481f;
+  --accent-700: #7c3a19;
+  --accent-800: #5e2c13;
+
+  /* Status hues are deliberately spaced away from the brand oxide (~18°)
+     so "this needs attention" never gets mistaken for "this is Ferrum's
+     accent": ok is green (~150°), warn is gold (~42°), error is crimson
+     (~4°). */
+  --status-ok: #1f8a4c;
+  --status-warn: #8a6208; /* 5.1:1 on white */
+  --status-error: #c62828;
+  --status-info: #3667b6;
+
+  /* Chart/gauge/bar "remaining capacity" tracks. --bg-muted fails here in
+     dark mode: #20242a on the #1a1d22 surface reads as transparent, which
+     made unfilled donuts and bars look broken. This sits between border and
+     muted so it reads on every surface token in its theme. */
+  --track: #d5dae1;
+
+  /* Elevation. Kept as runtime tokens so dark mode can swap to darker,
+     tighter shadows (shadow color reads differently on near-black surfaces). */
+  --elev-xs: 0 1px 2px rgb(16 20 26 / 0.05);
+  --elev-sm: 0 1px 2px rgb(16 20 26 / 0.06), 0 1px 3px rgb(16 20 26 / 0.05);
+  --elev-md: 0 2px 4px rgb(16 20 26 / 0.05), 0 4px 12px rgb(16 20 26 / 0.08);
+  --elev-lg: 0 4px 8px rgb(16 20 26 / 0.06), 0 12px 32px rgb(16 20 26 / 0.12);
+
+  /* A small categorical palette for charts with more than one series,
+     kept separate from the semantic status colors above. */
+  --chart-1: #bd5a2c;
+  --chart-2: #1f7a78;
+  --chart-3: #5b6cad;
+  --chart-4: #8a7226;
+  --chart-5: #a14f74;
+  --chart-6: #4f7a5a;
+
+  /* The sidebar is a fixed dark "control panel" regardless of the content
+     theme — like an instrument rail bolted onto whichever room it's in,
+     rather than a surface that repaints itself with the rest of the app. */
+  --sidebar-bg: #15171b;
+  --sidebar-border: #262930;
+  --sidebar-text: #e7e9ec;
+  --sidebar-text-muted: #8b919c;
+  --sidebar-active-bg: #21242b;
+  --sidebar-active-text: #ffffff;
+
+}
+
+.dark {
+  color-scheme: dark;
+
+  --bg: #121417;
+  --bg-surface: #1a1d22;
+  --bg-surface-hover: #20242a;
+  --bg-elevated: #1f2329;
+  --bg-muted: #20242a;
+  --border: #2b3038;
+  --border-strong: #3a414c;
+  --text: #e7e9ec;
+  --text-muted: #969ea9;
+  --text-faint: #9aa3b0; /* 5.5:1 on the dark surface */
+  --ring: var(--accent-400);
+
+  --status-ok: #3ecb7d;
+  --status-warn: #dfab3c;
+  --status-error: #ef5b52;
+  --status-info: #6d9ee8;
+
+  --track: #3a414c;
+
+  --elev-xs: 0 1px 2px rgb(0 0 0 / 0.4);
+  --elev-sm: 0 1px 2px rgb(0 0 0 / 0.45), 0 1px 3px rgb(0 0 0 / 0.35);
+  --elev-md: 0 2px 4px rgb(0 0 0 / 0.4), 0 4px 12px rgb(0 0 0 / 0.45);
+  --elev-lg: 0 4px 8px rgb(0 0 0 / 0.4), 0 12px 32px rgb(0 0 0 / 0.55);
+
+  --chart-1: #d97a49;
+  --chart-2: #3fa19e;
+  --chart-3: #8b98d6;
+  --chart-4: #c2a544;
+  --chart-5: #c97ba0;
+  --chart-6: #7aa885;
+}
+
+/* Accent presets — same 9-step ramp shape as the default oxide, just hue-
+   shifted, so contrast and the light/dark split stay correct for every
+   choice. Applied via [data-accent] on <html> alongside the .dark class;
+   "oxide" needs no rule since it's already :root's default. */
+[data-accent="azure"] {
+  --accent-50: #eaf1fb;
+  --accent-100: #cfe0f6;
+  --accent-200: #a3c6ed;
+  --accent-300: #70a7e0;
+  --accent-400: #4a8ad2;
+  --accent-500: #3568b8;
+  --accent-600: #2a5595;
+  --accent-700: #234674;
+  --accent-800: #1c3759;
+}
+
+[data-accent="verdant"] {
+  --accent-50: #e8f6ef;
+  --accent-100: #c7ecdc;
+  --accent-200: #98dabd;
+  --accent-300: #63c299;
+  --accent-400: #3aa87c;
+  --accent-500: #268a64;
+  --accent-600: #1d6f51;
+  --accent-700: #185940;
+  --accent-800: #134632;
+}
+
+[data-accent="violet"] {
+  --accent-50: #f1edfb;
+  --accent-100: #ddd2f4;
+  --accent-200: #c0abe9;
+  --accent-300: #9d7ddb;
+  --accent-400: #8058c9;
+  --accent-500: #6a3fb0;
+  --accent-600: #54318f;
+  --accent-700: #432772;
+  --accent-800: #341e59;
+}
+
+[data-accent="slate"] {
+  --accent-50: #eef1f4;
+  --accent-100: #d9e0e7;
+  --accent-200: #bcc7d1;
+  --accent-300: #98a7b6;
+  --accent-400: #76889b;
+  --accent-500: #5c6e82;
+  --accent-600: #495868;
+  --accent-700: #3b4756;
+  --accent-800: #2e3844;
+}
+
+* {
+  border-color: var(--border);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv05" 1; /* Inter: open numerals pair well with mono metrics */
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--color-brand-500);
+  color: white;
+}
+
+/* Keyboard focus is always visible, always the same shape: a 2px outline
+   with a hairline offset so it reads on both light and dark surfaces.
+   Components with their own focus-visible rings override this freely — the
+   outline respects the element's real border-radius (no re-shaping).
+
+   Must live in @layer base: Tailwind v4 emits utilities inside cascade
+   layers, and unlayered CSS beats every layer — unlayered, this rule won
+   over `outline-none` and stacked a square outline on top of components'
+   rounded focus rings. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+/* thin, unobtrusive scrollbars for the dense inventory/log panes */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+/* React Flow chrome (Topology page) — the stock Controls/MiniMap/selection
+   styles hardcode light-theme whites and near-black strokes, which read
+   wrong in dark mode (and vice versa). Re-point them at the app tokens so
+   both themes follow the toggle.
+
+   The Controls' background/color/border are themed by defining xyflow's
+   own `--xy-controls-button-*` prop variables (the values its stylesheet
+   consumes) rather than overriding its rules: @xyflow's style.css is
+   bundled AFTER this file (it's imported inside TopologyPage), so plain
+   overrides lose the cascade — but CSS variables resolve regardless of
+   order. xyflow's dark defaults only activate under `.react-flow.dark`,
+   which never matches this app (we toggle `.dark` on <html>), so without
+   these the buttons stay white-on-white in dark mode. */
+:root {
+  --xy-controls-button-background-color: var(--bg-elevated);
+  --xy-controls-button-background-color-hover: var(--bg-surface-hover);
+  --xy-controls-button-color: var(--text-muted);
+  --xy-controls-button-color-hover: var(--text);
+  --xy-controls-button-border-color: var(--border);
+}
+
+.dark {
+  --xy-controls-button-background-color: var(--bg-elevated);
+  --xy-controls-button-background-color-hover: var(--bg-surface-hover);
+  --xy-controls-button-color: var(--text-muted);
+  --xy-controls-button-color-hover: var(--text);
+  --xy-controls-button-border-color: var(--border);
+}
+
+.react-flow__controls {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: var(--elev-sm);
+}
+
+.react-flow__controls-button svg {
+  fill: currentColor;
+}
+
+.react-flow__minimap {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.react-flow__node.selected,
+.react-flow__node:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+/* Metric digits align in columns — every number in tables, stats and charts
+   should sit inside this utility. */
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Recharts portals its tooltip into the chart wrapper as an absolutely
+   positioned box that overflows the wrapper near the plot edges. Inside a
+   scroll container (widget bodies, the page) that overflow extends the
+   scrollable area on hover — a scrollbar flashes in and the chart visibly
+   resizes. Clipping at the wrapper bounds stops that; the tooltip placement
+   math already flips it to stay inside the plot area, so content is cut
+   only in the degenerate "tooltip bigger than the chart" case. */
+.recharts-wrapper {
+  overflow: clip;
+}
+
+/* Hides the scrollbar while keeping the element scrollable (wheel, touch,
+   keyboard) — used on the collapsed sidebar rail so the scrollbar can't
+   push the centered icons off the rail's midline. */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Respect the OS "reduce motion" setting: kill decorative movement but keep
+   opacity fades (they don't cause vestibular issues and state changes still
+   need to be perceivable). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

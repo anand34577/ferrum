@@ -1,0 +1,78 @@
+import { type ClassValue, clsx } from "clsx"
+import { twMerge } from "tailwind-merge"
+
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs))
+}
+
+export function formatBytes(bytes: number): string {
+  if (!bytes) return "0 B"
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"]
+  const i = Math.floor(Math.log(bytes) / Math.log(1024))
+  const value = bytes / 1024 ** i
+  return `${value.toFixed(value >= 10 || i === 0 ? 0 : 1)} ${units[i]}`
+}
+
+export function formatUptime(seconds: number): string {
+  if (!seconds) return "-"
+  const days = Math.floor(seconds / 86400)
+  const hours = Math.floor((seconds % 86400) / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  if (days > 0) return `${days}d ${hours}h`
+  if (hours > 0) return `${hours}h ${minutes}m`
+  return `${minutes}m`
+}
+
+export function formatPercent(value: number): string {
+  return `${Math.round(value * 100)}%`
+}
+
+/** Formats a bytes-per-second rate, e.g. 1.5 MB/s. */
+export function formatRate(bytesPerSec: number): string {
+  if (!bytesPerSec || bytesPerSec < 0) return "0 B/s"
+  return `${formatBytes(bytesPerSec)}/s`
+}
+
+/** Adaptive precision percent for tooltips/charts: 12.3% (not 12% or 12.34%). */
+export function formatPercentFine(pct: number): string {
+  return `${pct.toFixed(1)}%`
+}
+
+/** Formats an RRD unix timestamp for chart axis ticks, with granularity
+ * chosen by the visible time span (minutes → hours → days → months). */
+export function formatRRDTick(unixSeconds: number, spanSeconds: number): string {
+  const d = new Date(unixSeconds * 1000)
+  if (spanSeconds <= 3 * 3600) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+  if (spanSeconds <= 4 * 86400) return d.toLocaleString([], { weekday: "short", hour: "2-digit" })
+  if (spanSeconds <= 400 * 86400) return d.toLocaleDateString([], { month: "short", day: "numeric" })
+  return d.toLocaleDateString([], { month: "short", year: "2-digit" })
+}
+
+/** Full timestamp for chart tooltips. */
+export function formatRRDTooltip(unixSeconds: number): string {
+  return new Date(unixSeconds * 1000).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+}
+
+/** Coarse relative time for "last checked 2m ago"-style status lines. */
+export function formatRelativeTime(iso: string): string {
+  const then = new Date(iso).getTime()
+  if (!Number.isFinite(then)) return "unknown"
+  const secs = Math.max(0, Math.floor((Date.now() - then) / 1000))
+  if (secs < 60) return `${secs}s ago`
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`
+  return `${Math.floor(secs / 86400)}d ago`
+}
+
+/** Badge tone for a guest/node running state — shared so "running"/"online"
+ * vs "stopped"/"offline" doesn't drift between pages. */
+export function guestStatusVariant(status?: string): "ok" | "warn" | "error" | "default" {
+  if (status === "running" || status === "online") return "ok"
+  if (status === "stopped" || status === "offline") return "error"
+  return "default"
+}

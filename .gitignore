@@ -1,0 +1,7 @@
+/data/
+*.db
+*.db.secret
+*.exe
+/web/node_modules/
+/web/dist/assets/
+config.yaml

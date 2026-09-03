@@ -1,0 +1,41 @@
+# Copy to config.yaml and adjust as needed. Every value can also be set via
+# the FERRUM_* environment variables shown below, which take precedence.
+
+server:
+  addr: ":8080" # FERRUM_ADDR
+  # secureCookies: mark the session cookie Secure so browsers only send it
+  # over HTTPS. Enable this whenever Ferrum is served over TLS (directly or
+  # behind a reverse proxy). FERRUM_SECURE_COOKIES
+  secureCookies: false
+  # behindProxy: set when Ferrum runs behind a reverse proxy — client IPs
+  # are read from X-Forwarded-For and the session cookie is additionally
+  # marked Secure for requests the proxy reports as https.
+  # FERRUM_BEHIND_PROXY
+  behindProxy: false
+
+db:
+  driver: sqlite # FERRUM_DB_DRIVER — "sqlite" (default) or "postgres"
+  path: ./data/ferrum.db # FERRUM_DB_PATH — used when driver is sqlite
+  # dsn: postgres://user:pass@localhost:5432/ferrum?sslmode=disable # FERRUM_DB_DSN — required when driver is postgres
+
+# secret: set explicitly to pin the encryption key used for stored connection
+# credentials (recommended for Postgres/shared-DB deployments so all
+# instances share one key; minimum 16 characters). If left blank, a random
+# secret is generated and persisted next to the SQLite file on first run —
+# fine for a single-node SQLite install. FERRUM_SECRET
+
+# oidc: optional single sign-on via any standard OpenID Connect provider
+# (Keycloak, Authentik, Entra ID, Okta, ...). Local username/password login
+# keeps working regardless — this adds a "Continue with ..." button next to
+# it. The first SSO login for a *provider-verified* email that already has a
+# local account links the two; otherwise a new (non-admin) account is created
+# automatically. Unverified IdP email addresses never link into existing
+# accounts. The first login requires promoting the user to admin from the
+# Users page.
+oidc:
+  enabled: false # FERRUM_OIDC_ENABLED
+  displayName: Keycloak # FERRUM_OIDC_DISPLAY_NAME — shown on the login button
+  issuerUrl: https://keycloak.example.com/realms/myrealm # FERRUM_OIDC_ISSUER_URL
+  clientId: ferrum # FERRUM_OIDC_CLIENT_ID
+  clientSecret: "" # FERRUM_OIDC_CLIENT_SECRET — from a confidential client in Keycloak
+  redirectUrl: https://ferrum.example.com/api/v1/auth/oidc/callback # FERRUM_OIDC_REDIRECT_URL — register this exact URL in Keycloak

@@ -1,0 +1,89 @@
+import { useQuery } from "@tanstack/react-query"
+import { Bell } from "lucide-react"
+import { useState } from "react"
+import { useNavigate } from "react-router-dom"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { api, type AlertInstance } from "@/lib/api"
+import { cn } from "@/lib/utils"
+
+const SEVERITY_DOT: Record<string, string> = { critical: "bg-[var(--status-error)]", warning: "bg-[var(--status-warn)]" }
+
+/** Header notification bell — the only place an active alert is visible
+ * outside the Alerts page itself. The count polls continuously (cheap); the
+ * list underneath is only fetched once the panel opens (heavier, on demand). */
+export function NotificationBell() {
+  const navigate = useNavigate()
+  const [open, setOpen] = useState(false)
+
+  const summaryQuery = useQuery({
+    queryKey: ["alerts-summary"],
+    queryFn: () => api.get<{ warning: number; critical: number }>("/alerts/summary"),
+    refetchInterval: 30_000,
+  })
+  const total = (summaryQuery.data?.critical ?? 0) + (summaryQuery.data?.warning ?? 0)
+
+  const activeAlertsQuery = useQuery({
+    queryKey: ["alerts", "active"],
+    queryFn: () => api.get<AlertInstance[]>("/alerts/?status=active"),
+    enabled: open,
+    staleTime: 10_000,
+  })
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger
+        className="relative flex h-9 w-9 items-center justify-center rounded-md text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-muted)] hover:text-[var(--text)]"
+        aria-label={total > 0 ? `${total} active alert${total === 1 ? "" : "s"}` : "Notifications — nothing active"}
+      >
+        <Bell className="h-4 w-4" aria-hidden />
+        {total > 0 && (
+          <span
+            className={cn(
+              "absolute right-1 top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 text-[9px] font-bold leading-none text-white",
+              summaryQuery.data?.critical ? "bg-[var(--status-error)]" : "bg-[var(--status-warn)]",
+            )}
+            aria-hidden
+          >
+            {total > 9 ? "9+" : total}
+          </span>
+        )}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-80">
+        <DropdownMenuLabel>Active alerts</DropdownMenuLabel>
+        {activeAlertsQuery.isLoading && <div className="px-2.5 py-4 text-center text-xs text-[var(--text-muted)]">Loading…</div>}
+        {!activeAlertsQuery.isLoading && (activeAlertsQuery.data?.length ?? 0) === 0 && (
+          <div className="px-2.5 py-4 text-center text-xs text-[var(--text-muted)]">Nothing needs attention.</div>
+        )}
+        {activeAlertsQuery.data?.slice(0, 8).map((a) => (
+          <DropdownMenuItem key={a.id} onSelect={() => navigate("/alerts")} className="items-start gap-2.5">
+            <span className={cn("mt-1 h-1.5 w-1.5 shrink-0 rounded-full", SEVERITY_DOT[a.severity] ?? "bg-[var(--text-faint)]")} aria-hidden />
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium">{a.resourceName}</p>
+              <p className="truncate text-xs text-[var(--text-muted)]">
+                {a.connectionName} · {a.value.toFixed(1)}% ≥ {a.threshold}%
+              </p>
+            </div>
+          </DropdownMenuItem>
+        ))}
+        {activeAlertsQuery.data && activeAlertsQuery.data.length > 8 && (
+          <p className="px-2.5 pb-1 text-center text-[10px] text-[var(--text-faint)]">+{activeAlertsQuery.data.length - 8} more</p>
+        )}
+        {(activeAlertsQuery.data?.length ?? 0) > 0 && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => navigate("/alerts")} className="justify-center text-xs font-medium text-brand-600 dark:text-brand-400">
+              View all alerts
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}

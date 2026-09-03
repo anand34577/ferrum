@@ -1,0 +1,7 @@
+web/node_modules
+web/dist
+data
+*.exe
+dist-check
+server.log
+cookies.txt

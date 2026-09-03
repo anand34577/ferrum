@@ -1,0 +1,20 @@
+import { type InputHTMLAttributes, forwardRef } from "react"
+import { cn } from "@/lib/utils"
+
+export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
+  ({ className, ...props }, ref) => (
+    <input
+      ref={ref}
+      className={cn(
+        "flex h-9 w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 text-sm text-[var(--text)] shadow-xs transition-colors",
+        "placeholder:text-[var(--text-faint)] hover:border-[var(--border-strong)]",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:border-transparent",
+        "disabled:cursor-not-allowed disabled:opacity-50",
+        "aria-[invalid=true]:border-[var(--status-error)] aria-[invalid=true]:focus-visible:ring-[var(--status-error)]",
+        className,
+      )}
+      {...props}
+    />
+  ),
+)
+Input.displayName = "Input"
