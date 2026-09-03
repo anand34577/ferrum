@@ -74,10 +74,10 @@ export function CapacityPlanningWidget({ settings }: { settings: WidgetSettings 
               </p>
             </div>
             {/* Physical capacity rail with allocated + used overlays */}
-            <div className="relative h-3.5 overflow-hidden rounded-full bg-[var(--track)]">
+            <div className="relative h-3.5 overflow-hidden rounded-sm bg-[var(--track)]">
               <div className="absolute inset-y-0 left-0 bg-brand-200/70 dark:bg-brand-800/60" style={{ width: `${Math.min(100, allocPct)}%` }} title={`Allocated ${row.unit(row.allocated)}`} />
               <div
-                className={cn("absolute inset-y-0 left-0 rounded-full", usedPct > 90 ? "bg-[var(--status-error)]" : usedPct > 75 ? "bg-[var(--status-warn)]" : "bg-brand-500")}
+                className={cn("absolute inset-y-0 left-0 rounded-sm", usedPct > 90 ? "bg-[var(--status-error)]" : usedPct > 75 ? "bg-[var(--status-warn)]" : "bg-brand-500")}
                 style={{ width: `${Math.min(100, usedPct)}%` }}
                 title={`Actual use ${row.unit(row.used)}`}
               />

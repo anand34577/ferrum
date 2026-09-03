@@ -9,8 +9,8 @@
     var look = localStorage.getItem("ferrum-look");
     if (look === "proxmox" || look === "terminal") document.documentElement.dataset.look = look;
     var meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute("content", dark ? "#15171b" : "#ffffff");
-  } catch (e) {
+    if (meta) meta.setAttribute("content", dark ? "#090b0e" : "#ffffff");
+  } catch {
     /* no storage / no matchMedia — default light theme applies */
   }
 })();

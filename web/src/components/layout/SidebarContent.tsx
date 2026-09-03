@@ -35,7 +35,7 @@ export function SidebarContent({
       {groups.map((group) => (
         <div key={group.label} className={cn("mb-4 px-2.5 last:mb-0", collapsed && "px-2")}>
           {!collapsed && (
-            <div className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--sidebar-text-muted)]">
+            <div className="panel-label mb-1.5 px-2.5 text-[10px] tracking-[0.1em] text-[var(--sidebar-text-muted)] opacity-70">
               {group.label}
             </div>
           )}
@@ -53,11 +53,11 @@ export function SidebarContent({
               // chrome that visibly reflects the accent choice on every page,
               // since the sidebar itself stays a fixed dark rail.
               const linkClass = cn(
-                "flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors",
-                collapsed && "justify-center",
+                "group relative flex items-center gap-2.5 rounded-sm px-2.5 py-1.5 font-display text-[15px] font-medium tracking-wide transition-all duration-150 select-none",
+                collapsed && "justify-center px-2",
                 active
-                  ? "bg-[var(--sidebar-active-bg)] text-[var(--sidebar-active-text)]"
-                  : "text-[var(--sidebar-text-muted)] hover:bg-[var(--sidebar-active-bg)] hover:text-[var(--sidebar-text)]",
+                  ? "border border-brand-700/50 bg-[var(--sidebar-active-bg)] text-[var(--sidebar-active-text)]"
+                  : "border border-transparent text-[var(--sidebar-text-muted)] hover:bg-[var(--sidebar-active-bg)] hover:text-[var(--sidebar-text)]",
               )
               const link = (
                 <NavLink
@@ -68,7 +68,13 @@ export function SidebarContent({
                   aria-label={collapsed ? item.label : undefined}
                   aria-current={active ? "page" : undefined}
                 >
-                  <item.icon className={cn("h-4 w-4 shrink-0", active && "text-brand-400")} aria-hidden />
+                  <item.icon
+                    className={cn(
+                      "h-4 w-4 shrink-0 transition-all duration-150 group-hover:scale-110",
+                      active ? "text-brand-400" : "text-[var(--sidebar-text-muted)] group-hover:text-[var(--sidebar-text)]",
+                    )}
+                    aria-hidden
+                  />
                   {!collapsed && <span className="truncate">{item.label}</span>}
                 </NavLink>
               )

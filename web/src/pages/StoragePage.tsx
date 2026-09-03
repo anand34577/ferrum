@@ -135,7 +135,7 @@ export function StoragePage() {
           const pct = p.maxdisk ? Math.min(100, ((p.disk ?? 0) / p.maxdisk) * 100) : 0
           return (
             <div className="flex items-center gap-2">
-              <div className="h-1.5 w-24 overflow-hidden rounded-full bg-[var(--track)]">
+              <div className="h-1.5 w-24 overflow-hidden rounded-sm bg-[var(--track)]">
                 <div className={pct > 85 ? "h-full bg-[var(--status-error)]" : "h-full bg-brand-500"} style={{ width: `${pct}%` }} />
               </div>
               <span className="whitespace-nowrap text-xs text-[var(--text-muted)]">
@@ -209,8 +209,8 @@ export function StoragePage() {
                           <span className="truncate font-medium" title={r.name}>{r.name}</span>
                           <span className="shrink-0 text-[var(--text-muted)] tabular">{share.toFixed(0)}%</span>
                         </p>
-                        <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-[var(--track)]">
-                          <div className="h-full rounded-full" style={{ width: `${share}%`, background: color }} />
+                        <div className="mt-1 h-1 w-full overflow-hidden rounded-sm bg-[var(--track)]">
+                          <div className="h-full rounded-sm" style={{ width: `${share}%`, background: color }} />
                         </div>
                       </div>
                       <div className="shrink-0 text-right tabular">

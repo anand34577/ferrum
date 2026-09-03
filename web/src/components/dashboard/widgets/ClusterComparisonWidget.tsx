@@ -11,9 +11,9 @@ function Bar({ pct }: { pct: number }) {
   const tone = utilizationTone(pct)
   return (
     <div className="flex items-center justify-end gap-2">
-      <div className="h-1.5 w-full min-w-10 overflow-hidden rounded-full bg-[var(--track)]">
+      <div className="h-1.5 w-full min-w-10 overflow-hidden rounded-sm bg-[var(--track)]">
         <div
-          className={cn("h-full rounded-full", tone === "error" ? "bg-[var(--status-error)]" : tone === "warn" ? "bg-[var(--status-warn)]" : "bg-brand-500")}
+          className={cn("h-full rounded-sm", tone === "error" ? "bg-[var(--status-error)]" : tone === "warn" ? "bg-[var(--status-warn)]" : "bg-brand-500")}
           style={{ width: `${Math.min(100, pct)}%` }}
         />
       </div>

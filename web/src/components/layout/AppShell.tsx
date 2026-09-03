@@ -27,9 +27,11 @@ import { useNavigate } from "react-router-dom"
 import { BrandMark } from "@/components/layout/BrandMark"
 import { api } from "@/lib/api"
 import { CommandPalette } from "@/components/layout/CommandPalette"
+import { MasterCautionBar } from "@/components/layout/MasterCautionBar"
 import { NotificationBell } from "@/components/layout/NotificationBell"
 import { ShortcutsDialog } from "@/components/layout/ShortcutsDialog"
 import { MobileDrawer, SidebarContent } from "@/components/layout/MobileDrawer"
+import { StatusDot } from "@/components/ui/status-dot"
 import { useAuth } from "@/lib/auth"
 import { useTheme } from "@/lib/theme"
 import { cn } from "@/lib/utils"
@@ -172,33 +174,40 @@ export function AppShell({ children }: { children: ReactNode }) {
       </MobileDrawer>
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-[var(--border)] bg-[var(--bg-surface)] px-4">
-          <div className="flex min-w-0 items-center gap-1">
+        <MasterCautionBar />
+        <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-[var(--border)] bg-[var(--bg-surface)]/80 px-4 backdrop-blur-xl">
+          <div className="flex min-w-0 items-center gap-2">
             <button
               onClick={() => setMobileOpen(true)}
-              className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--text-muted)] hover:bg-[var(--bg-muted)] hover:text-[var(--text)] md:hidden"
+              className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text)] md:hidden"
               aria-label="Open menu"
             >
               <Menu className="h-4.5 w-4.5" />
             </button>
             <button
               onClick={() => document.dispatchEvent(new CustomEvent("ferrum:open-command-palette"))}
-              className="hidden items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--bg)]/60 px-3 py-1.5 text-xs text-[var(--text-muted)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text)] sm:flex"
+              className="hidden h-9 cursor-pointer items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]/50 px-3 text-xs text-[var(--text-muted)] transition-all hover:border-brand-500/40 hover:bg-[var(--bg-surface)] hover:text-[var(--text)] sm:flex"
               aria-label="Open command palette"
             >
-              <Search className="h-3.5 w-3.5" /> Search…
-              <kbd className="ml-2 rounded border border-[var(--border)] bg-[var(--bg-surface)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-faint)]">
+              <Search className="h-3.5 w-3.5" />
+              <span>Search inventory & commands…</span>
+              <kbd className="ml-2 rounded-sm border border-[var(--border)] bg-[var(--bg-surface)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-faint)]">
                 {paletteShortcutLabel}
               </kbd>
             </button>
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-2">
+            <div className="hidden items-center gap-2.5 rounded-sm border border-[var(--border)] bg-[var(--bg-surface)]/90 px-3 py-1 text-xs font-medium text-[var(--text-muted)] backdrop-blur-xs lg:flex">
+              <StatusDot status="ok" pulse />
+              <span className="panel-label text-[10px]">Fleet Telemetry Live</span>
+            </div>
+
             <NotificationBell />
             <Hint label={effectiveTheme === "dark" ? "Switch to light mode" : "Switch to dark mode"}>
               <button
                 onClick={toggle}
-                className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-muted)] hover:text-[var(--text)]"
+                className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md border border-transparent text-[var(--text-muted)] transition-all hover:border-[var(--border)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text)] active:scale-95"
                 aria-label={effectiveTheme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
               >
                 {effectiveTheme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
@@ -207,10 +216,10 @@ export function AppShell({ children }: { children: ReactNode }) {
 
             <DropdownMenu>
               <DropdownMenuTrigger
-                className="flex items-center gap-2.5 rounded-md px-1.5 py-1 transition-colors hover:bg-[var(--bg-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+                className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1 transition-colors hover:bg-[var(--bg-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
                 aria-label="Account menu"
               >
-                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-brand-600 font-display text-xs font-bold text-white" aria-hidden>
+                <span className="flex h-7 w-7 items-center justify-center rounded-md border border-brand-700 bg-brand-600 font-mono text-xs font-bold text-white" aria-hidden>
                   {initial}
                 </span>
                 <span className="hidden text-sm font-medium sm:block">{user?.username}</span>

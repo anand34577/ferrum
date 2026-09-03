@@ -22,7 +22,6 @@ export function useLiveRates(status: GuestLiveStatus | undefined): LiveRates {
   useEffect(() => {
     if (!status || status.status !== "running") {
       prev.current = null
-      setRates({})
       return
     }
     const now = Date.now() / 1000
@@ -45,6 +44,10 @@ export function useLiveRates(status: GuestLiveStatus | undefined): LiveRates {
     }
     prev.current = { t: now, ...cur }
   }, [status])
+
+  if (!status || status.status !== "running") {
+    return {}
+  }
 
   return rates
 }

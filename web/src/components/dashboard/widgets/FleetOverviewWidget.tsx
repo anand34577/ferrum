@@ -49,9 +49,9 @@ export function FleetOverviewWidget() {
               <m.icon className="h-3.5 w-3.5 shrink-0 text-brand-500 opacity-80" />
             </div>
             <p className={cn("font-display text-xl font-semibold leading-tight tabular", tone === "error" ? "text-[var(--status-error)]" : tone === "warn" ? "text-[var(--status-warn)]" : "text-[var(--status-ok)]")}>{m.value}</p>
-            <div className="mt-1 h-1 overflow-hidden rounded-full bg-[var(--track)]">
+            <div className="mt-1 h-1 overflow-hidden rounded-sm bg-[var(--track)]">
               <div
-                className={cn("h-full rounded-full", tone === "error" ? "bg-[var(--status-error)]" : tone === "warn" ? "bg-[var(--status-warn)]" : "bg-brand-500")}
+                className={cn("h-full rounded-sm", tone === "error" ? "bg-[var(--status-error)]" : tone === "warn" ? "bg-[var(--status-warn)]" : "bg-brand-500")}
                 style={{ width: `${Math.min(100, m.pct)}%` }}
               />
             </div>

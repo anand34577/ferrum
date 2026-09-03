@@ -50,8 +50,8 @@ function loadPositions(): PositionMap {
 function LoadBar({ pct }: { pct: number }) {
   const color = pct >= 90 ? "bg-[var(--status-error)]" : pct >= 75 ? "bg-[var(--status-warn)]" : "bg-brand-500"
   return (
-    <div className="h-1 min-w-10 flex-1 overflow-hidden rounded-full bg-[var(--track)]">
-      <div className={cn("h-full rounded-full", color)} style={{ width: `${Math.min(100, pct)}%` }} />
+    <div className="h-1 min-w-10 flex-1 overflow-hidden rounded-sm bg-[var(--track)]">
+      <div className={cn("h-full rounded-sm", color)} style={{ width: `${Math.min(100, pct)}%` }} />
     </div>
   )
 }
@@ -68,36 +68,56 @@ function Chip({ kind }: { kind: string }) {
 
 /** The central hub everything hangs from — double-click the title to rename
  * it (persisted locally). */
-function RootNode({ data }: NodeProps<Node<{ label: string; connections: number; nodes: number; guests: number; editing: boolean; onStartEdit: () => void; onRename: (name: string) => void }>>) {
-  const [draft, setDraft] = useState(data.label)
-  useEffect(() => setDraft(data.label), [data.label])
+function RootNameEditor({
+  initial,
+  onSave,
+  onCancel,
+}: {
+  initial: string
+  onSave: (val: string) => void
+  onCancel: () => void
+}) {
+  const [draft, setDraft] = useState(initial)
+  return (
+    <span className="flex items-center gap-1">
+      <input
+        autoFocus
+        value={draft}
+        className="nodrag w-40 rounded border border-brand-400/60 bg-[var(--bg-surface)] px-1.5 py-0.5 font-display text-sm font-semibold text-[var(--text)] outline-none"
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation()
+          if (e.key === "Enter") onSave(draft.trim() || DEFAULT_ROOT_NAME)
+          if (e.key === "Escape") onCancel()
+        }}
+        aria-label="Root node name"
+      />
+      <button
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => onSave(draft.trim() || DEFAULT_ROOT_NAME)}
+        className="text-[var(--status-ok)]"
+        aria-label="Save name"
+      >
+        <Check className="h-3.5 w-3.5" />
+      </button>
+    </span>
+  )
+}
 
+/** The central hub everything hangs from — double-click the title to rename
+ * it (persisted locally). */
+function RootNode({ data }: NodeProps<Node<{ label: string; connections: number; nodes: number; guests: number; editing: boolean; onStartEdit: () => void; onRename: (name: string) => void }>>) {
   return (
     <div className="flex min-w-52 flex-col items-center gap-0.5 rounded-xl bg-[var(--bg-elevated)] px-5 py-3 text-center shadow-lg ring-2 ring-brand-500/60">
       <div onDoubleClick={data.onStartEdit} className="flex cursor-text items-center gap-1.5" title="Double-click to rename">
         <Waypoints className="h-4 w-4 shrink-0 text-brand-400" />
         {data.editing ? (
-          <span className="flex items-center gap-1">
-            <input
-              autoFocus
-              className="nodrag w-40 rounded border border-brand-400/60 bg-[var(--bg-surface)] px-1.5 py-0.5 font-display text-sm font-semibold text-[var(--text)] outline-none"
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                e.stopPropagation()
-                if (e.key === "Enter") data.onRename(draft.trim() || DEFAULT_ROOT_NAME)
-                if (e.key === "Escape") data.onRename(data.label)
-              }}
-              aria-label="Root node name"
-            />
-            <button
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => data.onRename(draft.trim() || DEFAULT_ROOT_NAME)}
-              className="text-[var(--status-ok)]"
-              aria-label="Save name"
-            >
-              <Check className="h-3.5 w-3.5" />
-            </button>
-          </span>
+          <RootNameEditor
+            key={data.label}
+            initial={data.label}
+            onSave={data.onRename}
+            onCancel={() => data.onRename(data.label)}
+          />
         ) : (
           <>
             <span className="font-display text-sm font-semibold text-[var(--text)]">{data.label}</span>

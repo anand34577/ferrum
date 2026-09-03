@@ -39,12 +39,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusDot } from "@/components/ui/status-dot"
 import { Hint } from "@/components/ui/tooltip"
-import { TypeChip, guestDotStatus } from "@/components/ui/type-chip"
+import { TypeChip } from "@/components/ui/type-chip"
 import { CreateGuestDialog } from "@/components/inventory/CreateGuestDialog"
 import { GuestDetailDialog } from "@/components/inventory/GuestDetailDialog"
 import { api, ApiError, type ClusterResource, type ConnectionInventory } from "@/lib/api"
 import { buildConsoleUrl } from "@/lib/console"
-import { cn, formatBytes, formatPercent, formatUptime } from "@/lib/utils"
+import { cn, formatBytes, formatPercent, formatUptime, guestDotStatus } from "@/lib/utils"
 
 export function InventoryPage() {
   const queryClient = useQueryClient()
@@ -268,8 +268,8 @@ export function InventoryPage() {
       </div>
 
       {selected.size > 0 && (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border border-[color-mix(in_oklab,var(--color-brand-500)_35%,var(--border))] bg-[color-mix(in_oklab,var(--color-brand-500)_8%,var(--bg-surface))] px-3 py-2">
-          <span className="text-sm font-medium">{selected.size} selected</span>
+        <div className="flex flex-wrap items-center gap-2.5 rounded-lg border border-[color-mix(in_oklab,var(--color-brand-500)_35%,var(--border))] bg-[color-mix(in_oklab,var(--color-brand-500)_8%,var(--bg-surface))] px-4 py-2.5">
+          <span className="text-sm font-semibold text-brand-600 dark:text-brand-400">{selected.size} selected</span>
           <Button size="sm" variant="secondary" disabled={bulkPowerAction.isPending} onClick={() => bulkPower("start")}>
             <Play className="h-3.5 w-3.5" /> Start
           </Button>
