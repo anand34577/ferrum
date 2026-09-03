@@ -4,6 +4,7 @@ package poller
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"ferrum/internal/connections"
+	"ferrum/internal/notify"
 	"ferrum/internal/pve"
 	"ferrum/internal/store"
 )
@@ -28,12 +30,21 @@ type rule struct {
 // evaluates enabled alert rules against the live values, opening, updating,
 // or resolving alert_instances rows as thresholds are crossed.
 type AlertEvaluator struct {
-	db    *store.DB
-	conns *connections.Resolver
+	db       *store.DB
+	conns    *connections.Resolver
+	notifier *notify.Notifier // nil until SetNotifier is called — every send site is nil-checked
 }
 
 func NewAlertEvaluator(db *store.DB, conns *connections.Resolver) *AlertEvaluator {
 	return &AlertEvaluator{db: db, conns: conns}
+}
+
+// SetNotifier attaches the Gotify/SMTP dispatcher — mirrors Server.SetOIDC:
+// call it (or don't) once at startup, and again whenever the admin settings
+// UI saves new notification config, since Notifier itself is mutated in
+// place rather than swapped.
+func (e *AlertEvaluator) SetNotifier(n *notify.Notifier) {
+	e.notifier = n
 }
 
 // Run blocks, evaluating rules every interval until ctx is cancelled.
@@ -180,6 +191,31 @@ func (e *AlertEvaluator) evaluateConnection(ctx context.Context, conn connection
 	}
 }
 
+// optedInEmails looks up every account that's opted in to per-user alert
+// emails (user_preferences.notify_email) and has an email address on file.
+// Best-effort: a lookup failure just means no per-user recipients get added
+// this time, not a failed notification — the admin's global list still goes out.
+func (e *AlertEvaluator) optedInEmails(ctx context.Context) []string {
+	rows, err := e.db.QueryContext(ctx, `
+		SELECT u.email FROM users u JOIN user_preferences p ON p.user_id = u.id
+		WHERE p.notify_email = 1 AND u.email != ''`)
+	if err != nil {
+		slog.Error("alert evaluator: loading opted-in notification emails failed", "error", err)
+		return nil
+	}
+	defer rows.Close()
+	var emails []string
+	for rows.Next() {
+		var email string
+		if err := rows.Scan(&email); err != nil {
+			slog.Error("alert evaluator: scanning opted-in email failed", "error", err)
+			continue
+		}
+		emails = append(emails, email)
+	}
+	return emails
+}
+
 func (e *AlertEvaluator) loadRules(ctx context.Context) ([]rule, error) {
 	rows, err := e.db.QueryContext(ctx, `SELECT id, metric, connection_id, threshold, severity FROM alert_rules WHERE enabled = 1`)
 	if err != nil {
@@ -274,6 +310,19 @@ func (e *AlertEvaluator) upsertActive(ctx context.Context, ru rule, conn connect
 	}
 	if isNew {
 		slog.Warn("alert triggered", "rule", ru.Metric, "connection", conn.Name, "resource", resourceName, "value", value, "threshold", ru.Threshold, "severity", ru.Severity)
+		if e.notifier != nil {
+			title := fmt.Sprintf("[%s] %s", strings.ToUpper(ru.Severity), resourceName)
+			message := fmt.Sprintf("%s on %s is at %.0f%% (threshold %.0f%%)", ru.Metric, conn.Name, value, ru.Threshold)
+			emails := e.optedInEmails(context.Background())
+			// Fire-and-forget on a background context, not ctx: ctx belongs
+			// to this poll tick and may already be near its deadline by the
+			// time an SMTP round trip would need it.
+			go func() {
+				for _, err := range e.notifier.Notify(context.Background(), title, message, emails...) {
+					slog.Error("alert notification failed", "error", err)
+				}
+			}()
+		}
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -15,6 +16,8 @@ import (
 
 	"ferrum/internal/auth"
 	"ferrum/internal/connections"
+	"ferrum/internal/notify"
+	"ferrum/internal/poller"
 	"ferrum/internal/secrets"
 	"ferrum/internal/store"
 )
@@ -26,9 +29,32 @@ type Server struct {
 	connections *connections.Resolver
 	options     ServerOptions
 	webFS       fs.FS
-	oidc        *auth.OIDCClient // nil when SSO isn't configured
+
+	oidcMu sync.RWMutex
+	oidc   *auth.OIDCClient // nil when SSO isn't configured; guarded because the settings UI can replace it at any time
+
+	evaluator *poller.AlertEvaluator // its SetNotifier is called when the notification settings are saved; nil until SetAlertEvaluator is called
+	notify    *notify.Notifier       // never nil — Notify is a no-op when no channel is enabled
+
+	securityMu       sync.RWMutex
+	require2FAAdmins bool // enforced by requireTOTPEnrolled below; toggled live from Settings
 
 	logins *loginLimiter
+}
+
+// SetRequire2FAAdmins toggles whether admin accounts without TOTP enabled
+// are blocked from everything except /auth/2fa/* and /auth/me|logout until
+// they enroll — see requireTOTPEnrolled.
+func (s *Server) SetRequire2FAAdmins(v bool) {
+	s.securityMu.Lock()
+	s.require2FAAdmins = v
+	s.securityMu.Unlock()
+}
+
+func (s *Server) getRequire2FAAdmins() bool {
+	s.securityMu.RLock()
+	defer s.securityMu.RUnlock()
+	return s.require2FAAdmins
 }
 
 // ServerOptions carries deployment-level behavior that handlers need at
@@ -43,16 +69,39 @@ type ServerOptions struct {
 	BehindProxy bool
 }
 
-// SetOIDC attaches an SSO client built from config. Call it (or don't) once
-// at startup — nil is the normal "SSO not configured" state.
+// SetOIDC swaps in an SSO client built from the current admin-configured (or
+// config.yaml/env, at startup) settings. Called once at boot and again every
+// time the OIDC settings are saved from the UI — nil is the normal "SSO not
+// configured" state and clears any previously active client.
 func (s *Server) SetOIDC(client *auth.OIDCClient) {
+	s.oidcMu.Lock()
 	s.oidc = client
+	s.oidcMu.Unlock()
+}
+
+func (s *Server) getOIDC() *auth.OIDCClient {
+	s.oidcMu.RLock()
+	defer s.oidcMu.RUnlock()
+	return s.oidc
+}
+
+// Notifier exposes the server's Gotify/SMTP dispatcher so main.go can hand
+// the same instance to the alert evaluator at startup.
+func (s *Server) Notifier() *notify.Notifier {
+	return s.notify
+}
+
+// SetAlertEvaluator lets the notification settings handlers push a newly
+// saved Gotify/SMTP config into the running poller without a restart.
+func (s *Server) SetAlertEvaluator(e *poller.AlertEvaluator) {
+	s.evaluator = e
 }
 
 func New(db *store.DB, authSvc *auth.Service, secretBox *secrets.Box, opts ServerOptions) *Server {
 	return &Server{
 		db: db, auth: authSvc, secrets: secretBox, options: opts,
 		connections: connections.New(db, secretBox),
+		notify:      notify.New(notify.Settings{}),
 		logins:      newLoginLimiter(),
 	}
 }
@@ -123,6 +172,7 @@ func (s *Server) Router() http.Handler {
 
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAuth)
+			r.Use(s.requireTOTPEnrolled)
 
 			r.Route("/connections", func(r chi.Router) {
 				// Everything under /connections proxies a live PVE instance;
@@ -280,6 +330,18 @@ func (s *Server) Router() http.Handler {
 				r.Use(s.requireAdmin)
 				r.Get("/roles", s.listRoles)
 				r.Get("/audit", s.auditLog)
+
+				r.Route("/settings", func(r chi.Router) {
+					r.Get("/oidc", s.getOIDCSettings)
+					r.Put("/oidc", s.putOIDCSettings)
+					r.Get("/notifications", s.getNotificationSettings)
+					r.Put("/notifications", s.putNotificationSettings)
+					r.Post("/notifications/test", s.testNotification)
+					r.Get("/security", s.getSecuritySettings)
+					r.Put("/security", s.putSecuritySettings)
+					r.Get("/defaults", s.getDefaultPreferences)
+					r.Put("/defaults", s.putDefaultPreferences)
+				})
 			})
 			// Compatibility: the frontend calls /roles and /audit directly;
 			// keep the un-prefixed paths working but admin-only.
@@ -338,6 +400,23 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		}
 		ctx := context.WithValue(r.Context(), userCtxKey, user)
 		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// requireTOTPEnrolled blocks admin accounts without TOTP enabled from every
+// route in the group it's mounted on, when the admin-configured "require
+// 2FA for admins" setting is on. Deliberately mounted only on the general
+// protected group (/connections, /users, /dashboards, ...) — the /auth
+// route tree (2fa/enroll, /auth/me, /auth/logout) lives in a separate group
+// specifically so a blocked admin can still reach enrollment and sign out.
+func (s *Server) requireTOTPEnrolled(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u := userFromContext(r)
+		if s.getRequire2FAAdmins() && u != nil && u.IsAdmin && !u.TOTPEnabled {
+			writeErrorCode(w, http.StatusForbidden, "totp_required", "your administrator requires two-factor authentication — enable it on your profile to continue")
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -440,4 +519,11 @@ func (s *Server) writeError(w http.ResponseWriter, status int, err error) {
 
 func writeErrorMsg(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// writeErrorCode is writeErrorMsg plus a machine-readable code the frontend
+// can switch on (e.g. "totp_required" to redirect to the enrollment page)
+// without parsing the human-readable message.
+func writeErrorCode(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg, "code": code})
 }

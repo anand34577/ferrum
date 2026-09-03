@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { AlertTriangle, Check, Copy, KeyRound, ShieldCheck, ShieldOff, UserRound } from "lucide-react"
+import { AlertTriangle, Bell, Check, Copy, KeyRound, ShieldCheck, ShieldOff, UserRound } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 import { AppearanceCard } from "@/components/settings/AppearanceCard"
@@ -9,9 +9,100 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { PageHeader } from "@/components/ui/page-header"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Switch } from "@/components/ui/switch"
 import { api, ApiError } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
+
+interface PersonalPreferences {
+  notifyEmail: boolean
+  landingPage: string
+}
+
+const LANDING_PAGES = [
+  { value: "/", label: "Fleet Overview" },
+  { value: "/dashboard", label: "Custom Dashboard" },
+  { value: "/inventory", label: "Inventory" },
+  { value: "/topology", label: "Topology" },
+  { value: "/storage", label: "Storage" },
+  { value: "/pools", label: "Resource Pools" },
+  { value: "/ha", label: "High Availability" },
+  { value: "/backups", label: "Backups" },
+  { value: "/firewall", label: "Firewall" },
+  { value: "/alerts", label: "Alerts" },
+  { value: "/tasks", label: "Task Center" },
+]
+
+/** Personal notification opt-in and landing page — shares the
+ * ["auth","preferences"] query key with ThemeProvider/AppearanceCard, so
+ * this costs no extra request beyond what the page already makes. */
+function PersonalPreferencesCard() {
+  const query = useQuery({
+    queryKey: ["auth", "preferences"],
+    queryFn: () => api.get<PersonalPreferences>("/auth/me/preferences"),
+  })
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Bell className="h-4 w-4" /> Notifications &amp; navigation
+        </CardTitle>
+        <CardDescription>Personal to your account — doesn't change anyone else's.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {query.isLoading ? (
+          <Skeleton className="h-20 w-full" />
+        ) : (
+          <PersonalPreferencesForm key={JSON.stringify(query.data)} initial={query.data ?? { notifyEmail: false, landingPage: "/" }} />
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function PersonalPreferencesForm({ initial }: { initial: PersonalPreferences }) {
+  const { user } = useAuth()
+  const queryClient = useQueryClient()
+  const [form, setForm] = useState(initial)
+
+  const save = useMutation({
+    mutationFn: (next: PersonalPreferences) => api.put<PersonalPreferences>("/auth/me/preferences", next),
+    onSuccess: (data) => queryClient.setQueryData(["auth", "preferences"], (old: object | undefined) => ({ ...old, ...data })),
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to save"),
+  })
+
+  function update(next: PersonalPreferences) {
+    setForm(next)
+    save.mutate(next)
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between rounded-md border border-[var(--border)] px-3 py-2.5">
+        <div>
+          <p className="text-sm font-medium">Email me alert notifications</p>
+          <p className="text-xs text-[var(--text-muted)]">
+            Sent to {user?.email || "your account email"} whenever an alert first triggers, on top of any admin-configured recipients.
+            Requires the admin to have SMTP enabled in Settings.
+          </p>
+        </div>
+        <Switch checked={form.notifyEmail} onCheckedChange={(v) => update({ ...form, notifyEmail: v })} />
+      </div>
+      <div className="max-w-xs space-y-1.5">
+        <Label>Landing page</Label>
+        <Select value={form.landingPage || "/"} onValueChange={(v) => update({ ...form, landingPage: v })}>
+          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {LANDING_PAGES.map((p) => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-[var(--text-muted)]">Which page opens right after you sign in.</p>
+      </div>
+    </div>
+  )
+}
 
 interface TotpStatus {
   enabled: boolean
@@ -80,6 +171,7 @@ export function ProfilePage() {
       />
 
       <AppearanceCard />
+      <PersonalPreferencesCard />
 
       <Card>
         <CardHeader>

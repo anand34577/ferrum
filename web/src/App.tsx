@@ -1,10 +1,13 @@
 import { AnimatePresence } from "framer-motion"
-import { lazy, Suspense, type ReactNode, type ReactElement } from "react"
-import { Navigate, Route, Routes, useLocation } from "react-router-dom"
+import { lazy, Suspense, useEffect, type ReactNode, type ReactElement } from "react"
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom"
+import { useQuery } from "@tanstack/react-query"
+import { toast } from "sonner"
 import { AppShell } from "@/components/layout/AppShell"
 import { PageTransition } from "@/components/layout/PageTransition"
 import { ErrorBoundary } from "@/components/ui/error-boundary"
 import { CardSkeleton } from "@/components/ui/skeleton"
+import { api, onErrorCode } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
 import { SetupPage } from "@/pages/SetupPage"
 import { LoginPage } from "@/pages/LoginPage"
@@ -65,9 +68,43 @@ function RequireAdmin({ children }: { children: ReactNode }) {
   return <>{children}</>
 }
 
+/** The "/" route: redirects to this account's configured landing page (or
+ * the org-wide default) when it isn't Fleet Overview, otherwise just renders
+ * it. Shares the ["auth","preferences"] query with ThemeProvider, so this
+ * costs no extra request. */
+function HomeRoute() {
+  const query = useQuery({
+    queryKey: ["auth", "preferences"],
+    queryFn: () => api.get<{ landingPage?: string }>("/auth/me/preferences"),
+    staleTime: 60_000,
+  })
+  const landing = query.data?.landingPage
+  if (landing && landing !== "/") return <Navigate to={landing} replace />
+  return <OverviewPage />
+}
+
+/** A blocked-by-2FA-policy response (see requireTOTPEnrolled server-side)
+ * sends the admin straight to Profile & Security to enroll, instead of a
+ * wall of per-page error states across the app. */
+function useEnforceTOTPEnrollment() {
+  const navigate = useNavigate()
+  const location = useLocation()
+  useEffect(
+    () =>
+      onErrorCode((code) => {
+        if (code === "totp_required" && location.pathname !== "/profile") {
+          toast.error("Your administrator requires two-factor authentication — enable it below to continue.")
+          navigate("/profile")
+        }
+      }),
+    [navigate, location.pathname],
+  )
+}
+
 export default function App() {
   const { user, needsSetup, loading } = useAuth()
   const location = useLocation()
+  useEnforceTOTPEnrollment()
 
   if (loading) {
     return (
@@ -94,7 +131,7 @@ export default function App() {
       <ErrorBoundary key={location.pathname}>
         <AnimatePresence mode="wait">
           <Routes location={location} key={location.pathname}>
-            <Route path="/" element={route(<OverviewPage />)} />
+            <Route path="/" element={route(<HomeRoute />)} />
             <Route path="/dashboard" element={route(<DashboardPage />)} />
             <Route path="/inventory" element={route(<InventoryPage />)} />
             <Route path="/nodes/:connId/:node" element={route(<NodeDetailPage />)} />

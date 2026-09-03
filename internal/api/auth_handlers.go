@@ -57,7 +57,7 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("setup completed, first admin created", "username", user.Username)
-	auth.SetSessionCookie(w, token, s.cookieSecure(r))
+	auth.SetSessionCookie(w, token, s.cookieSecure(r), s.auth.SessionTTL())
 	writeJSON(w, http.StatusCreated, user)
 }
 
@@ -102,7 +102,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("login succeeded", "username", user.Username)
-	auth.SetSessionCookie(w, token, s.cookieSecure(r))
+	auth.SetSessionCookie(w, token, s.cookieSecure(r), s.auth.SessionTTL())
 	writeJSON(w, http.StatusOK, user)
 }
 
@@ -152,7 +152,7 @@ func (s *Server) authLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("login succeeded (totp)", "username", user.Username)
-	auth.SetSessionCookie(w, token, s.cookieSecure(r))
+	auth.SetSessionCookie(w, token, s.cookieSecure(r), s.auth.SessionTTL())
 	writeJSON(w, http.StatusOK, user)
 }
 

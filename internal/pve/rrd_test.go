@@ -18,7 +18,7 @@ func TestDecodeRRDPoints(t *testing.T) {
 		t.Fatalf("unmarshal fixture: %v", err)
 	}
 
-	points := decodeRRDPoints(rows)
+	points := decodeRRDPoints(rows, false)
 	if len(points) != 2 {
 		t.Fatalf("expected 2 points, got %d", len(points))
 	}
@@ -63,7 +63,42 @@ func TestDecodeRRDPoints(t *testing.T) {
 }
 
 func TestDecodeRRDPointsEmpty(t *testing.T) {
-	if got := decodeRRDPoints(nil); got != nil {
+	if got := decodeRRDPoints(nil, false); got != nil {
 		t.Errorf("expected nil for empty input, got %v", got)
+	}
+}
+
+// Node rrddata uses memtotal/memused, swaptotal/swapused, and
+// roottotal/rootused instead of the guest schema's maxmem/mem,
+// maxswap/swap, and maxdisk/disk — decodeRRDPoints(forNode=true) must remap
+// them onto the same typed fields, or every node memory/swap/disk chart
+// (Fleet Trend included) silently decodes to zero.
+func TestDecodeRRDPointsNodeAliases(t *testing.T) {
+	raw := `[
+		{"time":1700000000,"cpu":0.1,"maxcpu":8,"memtotal":4000000,"memused":1000000,"swaptotal":2000000,"swapused":500000,"roottotal":8000000,"rootused":3000000,"netin":12.5,"netout":3.25}
+	]`
+
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(raw), &rows); err != nil {
+		t.Fatalf("unmarshal fixture: %v", err)
+	}
+
+	points := decodeRRDPoints(rows, true)
+	if len(points) != 1 {
+		t.Fatalf("expected 1 point, got %d", len(points))
+	}
+
+	p := points[0]
+	if p.Mem != 1000000 || p.MaxMem != 4000000 {
+		t.Errorf("mem fields = %v/%v, want 1000000/4000000", p.Mem, p.MaxMem)
+	}
+	if p.Swap != 500000 || p.MaxSwap != 2000000 {
+		t.Errorf("swap fields = %v/%v, want 500000/2000000", p.Swap, p.MaxSwap)
+	}
+	if p.Disk != 3000000 || p.MaxDisk != 8000000 {
+		t.Errorf("disk fields = %v/%v, want 3000000/8000000", p.Disk, p.MaxDisk)
+	}
+	if _, ok := p.Extra["memused"]; ok {
+		t.Errorf("aliased column leaked into Extra: %v", p.Extra)
 	}
 }

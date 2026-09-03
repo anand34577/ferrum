@@ -95,6 +95,16 @@ func (l *loginLimiter) RecordSuccess(key string) {
 	delete(l.failed, key)
 }
 
+// SetPolicy changes the failure threshold and window — applied to attempts
+// evaluated from this point on; a key already locked out keeps its existing
+// lockedUntil rather than being retroactively reinterpreted.
+func (l *loginLimiter) SetPolicy(maxFailures int, window time.Duration) {
+	l.mu.Lock()
+	l.maxFailures = maxFailures
+	l.window = window
+	l.mu.Unlock()
+}
+
 // sweepLocked prunes stale entries so the map can't grow without bound.
 // Caller must hold l.mu.
 func (l *loginLimiter) sweepLocked() {
