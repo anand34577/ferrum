@@ -45,5 +45,6 @@ Thumbs.db
 # Misc
 cookies.txt
 *.tmp
+.impeccable/
 
 Claude-Account-1.cmd
