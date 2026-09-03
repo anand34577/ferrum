@@ -1,0 +1,31 @@
+[Unit]
+Description=Ferrum — Proxmox VE fleet control
+Documentation=https://github.com/anand34577/ferrum
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ferrum
+Group=ferrum
+ExecStart=/usr/local/bin/ferrum -config /etc/ferrum/config.yaml
+WorkingDirectory=/var/lib/ferrum
+Restart=on-failure
+RestartSec=5s
+
+# SIGTERM triggers the graceful shutdown path in cmd/ferrum/main.go
+# (10s HTTP drain); give systemd a little more room than that before SIGKILL.
+TimeoutStopSec=20s
+
+# Hardening. Ferrum only needs to read its config and its own data
+# directory, and to make outbound HTTPS calls to Proxmox hosts.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ferrum
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

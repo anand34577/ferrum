@@ -1,7 +1,49 @@
+# Local runtime data
 /data/
+/cmd/data/
 *.db
+*.db-journal
 *.db.secret
-*.exe
-/web/node_modules/
-/web/dist/assets/
 config.yaml
+
+# Go build artifacts
+/ferrum
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/dist/
+/dist-check/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+server.log
+
+# Frontend
+/web/node_modules/
+/web/dist/
+
+# Editor / IDE
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+cookies.txt
+*.tmp
+
+Claude-Account-1.cmd
