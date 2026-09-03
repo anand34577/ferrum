@@ -227,6 +227,96 @@
   --accent-800: #2e3844;
 }
 
+/* ------------------------------------------------------------------------
+ * Look-and-feel presets — a whole-app register switch, orthogonal to the
+ * light/dark toggle and the accent color. Applied as [data-look] on <html>
+ * (lib/theme.tsx), same runtime-token mechanism as [data-accent] above:
+ * every component already reads --radius-*, --elev-*, --font-*, and the
+ * --bg/--border/--text ramp, so a look never needs a component-level
+ * conditional — it only ever repaints tokens. "enterprise" is the default
+ * and needs no block: it's simply :root/.dark above.
+ * ---------------------------------------------------------------------- */
+
+/* Enterprise SaaS (default) — restrained neutrals, one accent, Inter +
+   Space Grotesk, moderate radius, soft shadows. No override block: this
+   *is* the :root/.dark baseline: every other look is the one that departs. */
+
+/* Proxmox-native — utilitarian and dense, closer to traditional sysadmin
+   tools (Proxmox's own UI, PRTG, pfSense): plain system font at a smaller
+   root size (Tailwind's rem-based scale shrinks with it, so density is
+   real, not just thinner borders), zero radius, no shadows — bordered grid
+   panels, not floating cards, with the card surface folded into the page
+   background so regions read as one dense sheet split by rules. */
+[data-look="proxmox"] {
+  font-size: 92%;
+  --font-sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+  --font-display: var(--font-sans);
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --elev-xs: none;
+  --elev-sm: none;
+  --elev-md: none;
+  --elev-lg: none;
+}
+[data-look="proxmox"]:not(.dark) {
+  --bg: #dde1e6;
+  --bg-surface: #eef0f3;
+  --bg-surface-hover: #e4e8ec;
+  --bg-elevated: #ffffff;
+  --bg-muted: #d2d7dd;
+  --border: #aeb5bf;
+  --border-strong: #8a919d;
+  --text: #1a1d21;
+}
+[data-look="proxmox"].dark {
+  --bg: #101214;
+  --bg-surface: #17191c;
+  --bg-surface-hover: #1d2023;
+  --bg-elevated: #1d2023;
+  --bg-muted: #202327;
+  --border: #34393f;
+  --border-strong: #4a5058;
+}
+
+/* Terminal — still dark-first and technical, but quiet: the *entire* UI
+   (not just data) sets in monospace, no display face at all, flat
+   near-zero-radius panels, no shadows. Precision over metaphor, no
+   instrument-panel theatrics — the unmistakable signature is the face
+   itself, not caution stripes or condensed caps. */
+[data-look="terminal"] {
+  --font-sans: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+  --font-display: var(--font-sans);
+  --radius-sm: 0.125rem;
+  --radius-md: 0.125rem;
+  --radius-lg: 0.1875rem;
+  --radius-xl: 0.25rem;
+  --elev-xs: none;
+  --elev-sm: none;
+  --elev-md: none;
+  --elev-lg: none;
+}
+[data-look="terminal"]:not(.dark) {
+  --bg: #f3f4f6;
+  --bg-surface: #ffffff;
+  --bg-surface-hover: #ececf0;
+  --bg-elevated: #ffffff;
+  --bg-muted: #e7e8ec;
+  --border: #d4d7dc;
+  --border-strong: #b7bcc4;
+}
+[data-look="terminal"].dark {
+  --bg: #0a0d10;
+  --bg-surface: #12151b;
+  --bg-surface-hover: #171b22;
+  --bg-elevated: #161a22;
+  --bg-muted: #181c24;
+  --border: #202632;
+  --border-strong: #2e3644;
+  --status-info: #22c1dd;
+}
+
 * {
   border-color: var(--border);
 }

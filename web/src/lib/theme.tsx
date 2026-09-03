@@ -15,9 +15,13 @@ import { useAuth } from "@/lib/auth"
 export type ThemePreference = "light" | "dark" | "system"
 export type Theme = "light" | "dark"
 export type Accent = "oxide" | "azure" | "verdant" | "violet" | "slate"
+/** Whole-app visual register, orthogonal to light/dark and accent — see the
+ * "Look-and-feel presets" block in index.css for what each one repaints. */
+export type Look = "enterprise" | "proxmox" | "terminal"
 
 const THEME_KEY = "ferrum-theme"
 const ACCENT_KEY = "ferrum-accent"
+const LOOK_KEY = "ferrum-look"
 
 interface ThemeContextValue {
   /** The stored preference — "system" means follow the OS setting. */
@@ -31,6 +35,10 @@ interface ThemeContextValue {
    * [data-accent] rules. */
   accent: Accent
   setAccent: (a: Accent) => void
+  /** Named look-and-feel preset — repaints typography, radius, elevation,
+   * and surface tone via index.css's [data-look] rules. */
+  look: Look
+  setLook: (l: Look) => void
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null)
@@ -45,12 +53,18 @@ function cachedAccent(): Accent {
   return stored === "azure" || stored === "verdant" || stored === "violet" || stored === "slate" ? stored : "oxide"
 }
 
+function cachedLook(): Look {
+  const stored = localStorage.getItem(LOOK_KEY)
+  return stored === "proxmox" || stored === "terminal" ? stored : "enterprise"
+}
+
 const osDarkQuery = () => window.matchMedia("(prefers-color-scheme: dark)")
 
 // Applies the classes/attributes and keeps the browser UI chrome (theme-color) in sync.
-function applyTheme(theme: Theme, accent: Accent) {
+function applyTheme(theme: Theme, accent: Accent, look: Look) {
   document.documentElement.classList.toggle("dark", theme === "dark")
   document.documentElement.dataset.accent = accent
+  document.documentElement.dataset.look = look
   document
     .querySelector('meta[name="theme-color"]')
     ?.setAttribute("content", theme === "dark" ? "#15171b" : "#ffffff")
@@ -60,16 +74,19 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth()
   const [theme, setThemeState] = useState<ThemePreference>(() => cachedTheme())
   const [accent, setAccentState] = useState<Accent>(() => cachedAccent())
+  const [look, setLookState] = useState<Look>(() => cachedLook())
   const themeRef = useRef(theme)
   themeRef.current = theme
   const accentRef = useRef(accent)
   accentRef.current = accent
+  const lookRef = useRef(look)
+  lookRef.current = look
 
   // The authoritative copy lives in the database — pull it once per session
   // (and after any sign-in) and adopt it when it differs from the cache.
   const prefsQuery = useQuery({
     queryKey: ["auth", "preferences"],
-    queryFn: () => api.get<{ theme: ThemePreference; accent: Accent }>("/auth/me/preferences"),
+    queryFn: () => api.get<{ theme: ThemePreference; accent: Accent; look?: Look }>("/auth/me/preferences"),
     enabled: !!user,
     staleTime: 60_000,
   })
@@ -85,6 +102,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       setAccentState(serverAccent)
       localStorage.setItem(ACCENT_KEY, serverAccent)
     }
+    const serverLook = prefsQuery.data?.look
+    const knownLooks: Look[] = ["enterprise", "proxmox", "terminal"]
+    if (serverLook && knownLooks.includes(serverLook) && serverLook !== lookRef.current) {
+      setLookState(serverLook)
+      localStorage.setItem(LOOK_KEY, serverLook)
+    }
   }, [prefsQuery.data])
 
   const [osDark, setOsDark] = useState(() => osDarkQuery().matches)
@@ -98,14 +121,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const effectiveTheme: Theme = theme === "system" ? (osDark ? "dark" : "light") : theme
 
   useEffect(() => {
-    applyTheme(effectiveTheme, accent)
-  }, [effectiveTheme, accent])
+    applyTheme(effectiveTheme, accent, look)
+  }, [effectiveTheme, accent, look])
 
-  // Both fields persist together — the API stores one row per user, not
+  // All three fields persist together — the API stores one row per user, not
   // independent columns a client can PATCH separately.
-  function save(nextTheme: ThemePreference, nextAccent: Accent) {
+  function save(nextTheme: ThemePreference, nextAccent: Accent, nextLook: Look) {
     if (!user) return
-    api.put("/auth/me/preferences", { theme: nextTheme, accent: nextAccent }).catch((err) => {
+    api.put("/auth/me/preferences", { theme: nextTheme, accent: nextAccent, look: nextLook }).catch((err) => {
       if (!(err instanceof ApiError && err.status === 401)) {
         toast.error("Preference saved for this browser only — the server didn't accept the change.")
       }
@@ -115,13 +138,19 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const setTheme = (next: ThemePreference) => {
     setThemeState(next)
     localStorage.setItem(THEME_KEY, next)
-    save(next, accentRef.current)
+    save(next, accentRef.current, lookRef.current)
   }
 
   const setAccent = (next: Accent) => {
     setAccentState(next)
     localStorage.setItem(ACCENT_KEY, next)
-    save(themeRef.current, next)
+    save(themeRef.current, next, lookRef.current)
+  }
+
+  const setLook = (next: Look) => {
+    setLookState(next)
+    localStorage.setItem(LOOK_KEY, next)
+    save(themeRef.current, accentRef.current, next)
   }
 
   const value = useMemo<ThemeContextValue>(
@@ -132,10 +161,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       toggle: () => setTheme(effectiveTheme === "dark" ? "light" : "dark"),
       accent,
       setAccent,
+      look,
+      setLook,
     }),
-    // setTheme/setAccent close over `user` — include it so a sign-in/out rebinds them.
+    // setTheme/setAccent/setLook close over `user` — include it so a sign-in/out rebinds them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [theme, effectiveTheme, accent, user],
+    [theme, effectiveTheme, accent, look, user],
   )
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
