@@ -21,7 +21,7 @@ export function StorageUsageWidget({ settings }: { settings: WidgetSettings }) {
         return (
           <div key={p.id} className="flex items-center gap-2 text-sm">
             <span className="w-28 truncate">{p.storage ?? p.name}</span>
-            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--track)]">
+            <div className="h-1.5 flex-1 overflow-hidden rounded-sm bg-[var(--track)]">
               <div
                 className={pct > 85 ? "h-full bg-[var(--status-error)]" : "h-full bg-brand-500"}
                 style={{ width: `${pct}%` }}

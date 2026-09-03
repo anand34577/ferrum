@@ -36,9 +36,9 @@ export function MemoryByNodeWidget({ settings }: { settings: WidgetSettings }) {
         return (
           <div key={n.name} className="flex items-center gap-2 text-xs">
             <span className="w-24 shrink-0 truncate text-[var(--text-muted)]" title={n.name}>{n.name}</span>
-            <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-[var(--track)]">
+            <div className="h-2.5 flex-1 overflow-hidden rounded-sm bg-[var(--track)]">
               <div
-                className={cn("h-full rounded-full", tone === "error" ? "bg-[var(--status-error)]" : tone === "warn" ? "bg-[var(--status-warn)]" : "bg-brand-500")}
+                className={cn("h-full rounded-sm", tone === "error" ? "bg-[var(--status-error)]" : tone === "warn" ? "bg-[var(--status-warn)]" : "bg-brand-500")}
                 style={{ width: `${Math.min(100, n.pct)}%` }}
               />
             </div>

@@ -4,15 +4,23 @@ import { type ButtonHTMLAttributes, forwardRef } from "react"
 import { cn } from "@/lib/utils"
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-[color,background-color,border-color,box-shadow,transform] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)] disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98]",
+  "inline-flex cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-[color,background-color,border-color,box-shadow,transform] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)] disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98] select-none",
   {
     variants: {
       variant: {
-        default: "bg-brand-600 text-white shadow-xs hover:bg-brand-700",
-        secondary: "border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text)] shadow-xs hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-hover)]",
-        ghost: "text-[var(--text-muted)] hover:bg-[var(--bg-muted)] hover:text-[var(--text)]",
-        destructive: "bg-[var(--status-error)] text-white shadow-xs hover:brightness-90",
-        outline: "border border-[var(--border)] bg-transparent text-[var(--text)] hover:bg-[var(--bg-muted)]",
+        // A flat annunciator switch, not a glossy gradient pill: solid panel
+        // color, one hairline top highlight (the physical bezel edge), state
+        // change is a brightness step — never a two-tone gradient sweep.
+        default:
+          "border border-brand-700 bg-brand-600 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.16)] hover:bg-brand-700 active:bg-brand-800",
+        secondary:
+          "border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text)] active:bg-[var(--bg-muted)]",
+        ghost:
+          "text-[var(--text-muted)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text)] active:bg-[var(--bg-muted)]",
+        destructive:
+          "border border-[color-mix(in_oklab,var(--status-error)_60%,black)] bg-[var(--status-error)] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.14)] hover:brightness-110 active:brightness-95",
+        outline:
+          "border border-[var(--border)] bg-transparent text-[var(--text)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-hover)] active:bg-[var(--bg-muted)]",
       },
       size: {
         default: "h-9 px-4",

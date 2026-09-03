@@ -106,16 +106,16 @@ export function DataTable<T>({
                 onChange={(e) => setGlobalFilter(e.target.value)}
                 placeholder={searchPlaceholder}
                 aria-label={searchPlaceholder}
-                className="h-8 max-w-xs pl-8"
+                className="h-8.5 w-64 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] pl-8 text-xs transition-colors hover:border-[var(--border-strong)]"
               />
             </div>
           )}
           {toolbar}
           {selection && selection.selected.size > 0 && (
             <div className="flex flex-1 flex-wrap items-center gap-2 rounded-md border border-[color-mix(in_oklab,var(--color-brand-500)_35%,var(--border))] bg-[color-mix(in_oklab,var(--color-brand-500)_8%,var(--bg-surface))] px-3 py-1.5">
-              <span className="text-xs font-medium">{selection.selected.size} selected</span>
+              <span className="text-xs font-semibold text-brand-600 dark:text-brand-400">{selection.selected.size} selected</span>
               {selection.bulkActions?.(Array.from(selection.selected))}
-              <Button size="sm" variant="ghost" className="ml-auto" onClick={() => selection.onSelectedChange(new Set())}>
+              <Button size="sm" variant="ghost" className="ml-auto text-xs" onClick={() => selection.onSelectedChange(new Set())}>
                 <X className="h-3.5 w-3.5" /> Clear
               </Button>
             </div>
@@ -123,13 +123,13 @@ export function DataTable<T>({
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-md border border-[var(--border)] bg-[var(--bg-surface)]">
+      <div className="overflow-x-auto rounded-lg border border-[var(--border)] bg-[var(--bg-surface)]">
         <table className="w-full text-sm">
           <thead>
             {table.getHeaderGroups().map((hg) => (
-              <tr key={hg.id} className="border-b border-[var(--border)] bg-[var(--bg-muted)]">
+              <tr key={hg.id} className="border-b border-[var(--border)] bg-[var(--bg-muted)]/50 backdrop-blur-xs">
                 {selection && (
-                  <th className="w-8 px-3 py-2">
+                  <th className="w-8 px-3.5 py-2.5">
                     <Checkbox checked={allFilteredSelected} onCheckedChange={toggleAll} aria-label="Select all rows" />
                   </th>
                 )}
@@ -147,22 +147,22 @@ export function DataTable<T>({
                       scope="col"
                       aria-sort={ariaSort}
                       className={cn(
-                        "px-3 py-2 text-left font-mono text-[11px] font-medium uppercase tracking-wider text-[var(--text-muted)]",
+                        "px-3.5 py-2.5 text-left font-mono text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]",
                         hideBelowMd && "hidden md:table-cell",
                       )}
                     >
                       {header.isPlaceholder ? null : sortable ? (
                         <button
-                          className="flex items-center gap-1 hover:text-[var(--text)]"
+                          className="flex items-center gap-1.5 transition-colors hover:text-[var(--text)]"
                           onClick={header.column.getToggleSortingHandler()}
                           aria-label={`${String(header.column.columnDef.header)}: activate to sort${
                             sorted === "asc" ? ", currently ascending" : sorted === "desc" ? ", currently descending" : ""
                           }`}
                         >
                           {flexRender(header.column.columnDef.header, header.getContext())}
-                          {sorted === "asc" && <ArrowUp className="h-3 w-3" />}
-                          {sorted === "desc" && <ArrowDown className="h-3 w-3" />}
-                          {!sorted && <ArrowUpDown className="h-3 w-3 opacity-40" />}
+                          {sorted === "asc" && <ArrowUp className="h-3 w-3 text-brand-500" />}
+                          {sorted === "desc" && <ArrowDown className="h-3 w-3 text-brand-500" />}
+                          {!sorted && <ArrowUpDown className="h-3 w-3 opacity-35" />}
                         </button>
                       ) : (
                         flexRender(header.column.columnDef.header, header.getContext())
@@ -178,12 +178,12 @@ export function DataTable<T>({
               Array.from({ length: 6 }).map((_, i) => (
                 <tr key={`skeleton-${i}`} className="border-b border-[var(--border)] last:border-0">
                   {selection && (
-                    <td className="px-3 py-2.5">
+                    <td className="px-3.5 py-2.5">
                       <Skeleton className="h-4 w-4" />
                     </td>
                   )}
                   {columns.map((col, c) => (
-                    <td key={c} className={cn("px-3 py-2.5", (col.meta as { hideBelowMd?: boolean } | undefined)?.hideBelowMd && "hidden md:table-cell")}>
+                    <td key={c} className={cn("px-3.5 py-2.5", (col.meta as { hideBelowMd?: boolean } | undefined)?.hideBelowMd && "hidden md:table-cell")}>
                       <Skeleton className="h-4 max-w-32" style={{ width: `${40 + ((i * 13 + c * 29) % 45)}%`, opacity: 1 - i * 0.1 }} />
                     </td>
                   ))}
@@ -197,12 +197,12 @@ export function DataTable<T>({
                   <tr
                     key={row.id}
                     className={cn(
-                      "border-b border-[var(--border)] transition-colors last:border-0 hover:bg-[var(--bg-surface-hover)]",
+                      "border-b border-[var(--border)] transition-colors duration-150 last:border-0 hover:bg-[var(--bg-surface-hover)]/70",
                       checked && "bg-[color-mix(in_oklab,var(--color-brand-500)_7%,transparent)]",
                     )}
                   >
                     {selection && id && (
-                      <td className="px-3 py-2">
+                      <td className="px-3.5 py-2.5">
                         <Checkbox checked={checked} onCheckedChange={() => toggleRow(id)} aria-label="Select row" />
                       </td>
                     )}
@@ -210,7 +210,7 @@ export function DataTable<T>({
                       <td
                         key={cell.id}
                         className={cn(
-                          "px-3 py-2 align-middle",
+                          "px-3.5 py-2.5 align-middle text-xs",
                           (cell.column.columnDef.meta as { hideBelowMd?: boolean } | undefined)?.hideBelowMd && "hidden md:table-cell",
                         )}
                       >
@@ -222,7 +222,7 @@ export function DataTable<T>({
               })}
             {!loading && rows.length === 0 && (
               <tr>
-                <td colSpan={columns.length + (selection ? 1 : 0)} className="px-3 py-10 text-center text-sm text-[var(--text-muted)]">
+                <td colSpan={columns.length + (selection ? 1 : 0)} className="px-3.5 py-12 text-center text-sm text-[var(--text-muted)]">
                   {emptyMessage}
                 </td>
               </tr>
@@ -232,13 +232,13 @@ export function DataTable<T>({
       </div>
 
       {!loading && table.getPageCount() > 1 && (
-        <div className="flex items-center justify-between text-xs text-[var(--text-muted)]">
+        <div className="flex items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-xs text-[var(--text-muted)]">
           <span className="tabular">
             Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()} · {data.length} rows
           </span>
           <div className="flex gap-1">
             <Button
-              size="icon"
+              size="icon-sm"
               variant="ghost"
               aria-label="Previous page"
               className={cn(!table.getCanPreviousPage() && "opacity-40")}
@@ -248,7 +248,7 @@ export function DataTable<T>({
               <ChevronLeft className="h-4 w-4" />
             </Button>
             <Button
-              size="icon"
+              size="icon-sm"
               variant="ghost"
               aria-label="Next page"
               className={cn(!table.getCanNextPage() && "opacity-40")}

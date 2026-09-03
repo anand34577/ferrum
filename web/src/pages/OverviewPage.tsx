@@ -22,6 +22,7 @@ import { useMemo, useState } from "react"
 import { Link } from "react-router-dom"
 import { Heatmap, type HeatmapRow } from "@/components/charts/Heatmap"
 import { KpiCard } from "@/components/charts/KpiCard"
+import { Button } from "@/components/ui/button"
 import { ErrorState } from "@/components/ui/error-state"
 import { PageHeader } from "@/components/ui/page-header"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -76,13 +77,20 @@ function UsageBar({ pct, className }: { pct: number; className?: string }) {
   const tone = utilizationTone(pct)
   return (
     <div className={cn("flex min-w-0 items-center gap-2", className)}>
-      <div className="h-1.5 w-full min-w-14 overflow-hidden rounded-full bg-[var(--track)]">
+      <div className="h-2 w-full min-w-14 overflow-hidden rounded-sm bg-[var(--track)]">
         <div
-          className={cn("h-full rounded-full", tone === "error" ? "bg-[var(--status-error)]" : tone === "warn" ? "bg-[var(--status-warn)]" : "bg-brand-500")}
-          style={{ width: `${Math.min(100, pct)}%` }}
+          className={cn(
+            "h-full rounded-sm transition-all duration-300 ease-out",
+            tone === "error"
+              ? "bg-[var(--status-error)] shadow-[0_0_8px_rgba(239,68,68,0.4)]"
+              : tone === "warn"
+                ? "bg-[var(--status-warn)] shadow-[0_0_8px_rgba(245,158,11,0.3)]"
+                : "bg-brand-500 shadow-[0_0_6px_rgba(189,90,44,0.3)]",
+          )}
+          style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
         />
       </div>
-      <span className={cn("w-12 shrink-0 text-right text-xs tabular", toneClass[tone])}>{pct.toFixed(0)}%</span>
+      <span className={cn("w-11 shrink-0 text-right text-xs font-semibold tabular", toneClass[tone])}>{pct.toFixed(0)}%</span>
     </div>
   )
 }
@@ -101,7 +109,7 @@ function SplitBar({
   const fmt = formatValue ?? ((v: number) => String(v))
   return (
     <div>
-      <div className="flex h-2 w-full overflow-hidden rounded-full bg-[var(--track)]" role="img" aria-label={segments.map((s) => `${s.label} ${fmt(s.value)}`).join(", ")}>
+      <div className="flex h-2 w-full overflow-hidden rounded-sm bg-[var(--track)]" role="img" aria-label={segments.map((s) => `${s.label} ${fmt(s.value)}`).join(", ")}>
         {total > 0 &&
           segments
             .filter((s) => s.value > 0)
@@ -258,9 +266,9 @@ export function OverviewPage() {
         icon={Waypoints}
         actions={
           <Link to="/dashboard">
-            <span className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-4 text-sm font-medium shadow-xs transition-colors hover:bg-[var(--bg-surface-hover)]">
+            <Button variant="secondary" size="sm" className="gap-2 shadow-xs">
               <LayoutDashboard className="h-4 w-4" /> Custom dashboard
-            </span>
+            </Button>
           </Link>
         }
       />
@@ -296,7 +304,7 @@ export function OverviewPage() {
 
       {/* --- Attention banner: anything unreachable, with why and when --- */}
       {!isLoading && totals.offline.length > 0 && (
-        <div className="rounded-lg border border-[color-mix(in_oklab,var(--status-error)_35%,var(--border))] bg-[color-mix(in_oklab,var(--status-error)_8%,var(--bg-surface))] px-4 py-3">
+        <div className="rounded-xl border border-[color-mix(in_oklab,var(--status-error)_35%,var(--border))] bg-[color-mix(in_oklab,var(--status-error)_8%,var(--bg-surface))] px-4.5 py-3.5 shadow-xs">
           <p className="flex items-center gap-2 text-sm font-medium text-[var(--status-error)]">
             <AlertTriangle className="h-4 w-4 shrink-0" />
             {totals.offline.length} connection{totals.offline.length === 1 ? "" : "s"} unreachable — the numbers above only cover what's online
@@ -324,8 +332,8 @@ export function OverviewPage() {
       <div className="grid items-start gap-4 xl:grid-cols-3">
         {/* --- Per-connection comparison + guest/alert detail panels --- */}
         <div className="min-w-0 space-y-4 xl:col-span-2">
-          <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] shadow-xs">
-            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-[var(--border)] px-4 py-2.5">
+          <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] shadow-card">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-[var(--border)] bg-[var(--bg-muted)]/30 px-4.5 py-3">
               <p className="flex items-center gap-1.5 font-display text-xs font-semibold">
                 <Waypoints className="h-3.5 w-3.5 text-brand-500" /> Cluster comparison
               </p>
@@ -413,7 +421,7 @@ export function OverviewPage() {
           {/* --- Hottest guests: the whole estate's busiest workloads, so the
                   column under the comparison table stays as tall as the
                   right rail instead of dead space. --- */}
-          <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-4 shadow-xs">
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4.5 shadow-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),0_1px_3px_rgba(0,0,0,0.4)]">
             <div className="flex items-center justify-between gap-2">
               <p className="flex items-center gap-1.5 font-display text-xs font-semibold">
                 <Flame className="h-3.5 w-3.5 text-brand-500" /> Hottest guests
@@ -444,7 +452,7 @@ export function OverviewPage() {
           </div>
 
           {/* --- Active alerts: what the alert rules are firing right now --- */}
-          <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-4 shadow-xs">
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4.5 shadow-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),0_1px_3px_rgba(0,0,0,0.4)]">
             <div className="flex items-center justify-between gap-2">
               <p className="flex items-center gap-1.5 font-display text-xs font-semibold">
                 <ShieldAlert className={cn("h-3.5 w-3.5", alerts.length > 0 ? "text-[var(--status-warn)]" : "text-brand-500")} /> Active alerts
@@ -483,7 +491,7 @@ export function OverviewPage() {
 
         {/* --- Right rail: health matrix + fleet signals --- */}
         <div className="space-y-4">
-          <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-4 shadow-xs">
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4.5 shadow-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),0_1px_3px_rgba(0,0,0,0.4)]">
             <p className="flex items-center gap-1.5 font-display text-xs font-semibold">
               <Activity className="h-3.5 w-3.5 text-brand-500" /> Fleet health matrix
             </p>
@@ -497,7 +505,7 @@ export function OverviewPage() {
             )}
           </div>
 
-          <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-4 shadow-xs">
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4.5 shadow-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),0_1px_3px_rgba(0,0,0,0.4)]">
             <p className="flex items-center gap-1.5 font-display text-xs font-semibold">
               <Boxes className="h-3.5 w-3.5 text-brand-500" /> Fleet signals
             </p>
@@ -575,10 +583,13 @@ function ResourceCard({
 }) {
   const tone = utilizationTone(pct)
   return (
-    <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-4 shadow-xs">
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4.5 transition-colors duration-200 hover:border-[var(--border-strong)] dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),0_1px_3px_rgba(0,0,0,0.4)]">
       <div className="flex items-center justify-between gap-2">
         <p className="flex items-center gap-1.5 font-display text-xs font-semibold">
-          <Icon className="h-3.5 w-3.5 text-brand-500" /> {title}
+          <span className="flex h-5 w-5 items-center justify-center rounded bg-[color-mix(in_oklab,var(--color-brand-500)_12%,transparent)] text-brand-500">
+            <Icon className="h-3 w-3" />
+          </span>
+          {title}
         </p>
         <p className={cn("font-display text-lg font-semibold tabular", toneClass[tone])}>{pct.toFixed(1)}%</p>
       </div>

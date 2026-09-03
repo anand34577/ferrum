@@ -22,12 +22,12 @@ function ThemePreview({ variant, active }: { variant: ThemePreference; active: b
     <div
       aria-hidden
       className={cn(
-        "pointer-events-none h-16 w-full overflow-hidden rounded-md border text-[7px]",
-        dark ? "border-[#3a414c] bg-[#121417]" : "border-[#d7dbe2] bg-[#eef0f3]",
+        "pointer-events-none h-16 w-full overflow-hidden rounded-sm border text-[7px]",
+        dark ? "border-[#202632] bg-[#090b0e]" : "border-[#d7dbe2] bg-[#eef0f3]",
         active && "ring-2 ring-[var(--ring)] ring-offset-2 ring-offset-[var(--bg-surface)]",
       )}
     >
-      <div className={cn("flex h-2.5 items-center gap-0.5 border-b px-1", dark ? "border-[#2b3038] bg-[#1a1d22]" : "border-[#d7dbe2] bg-white")}>
+      <div className={cn("flex h-2.5 items-center gap-0.5 border-b px-1", dark ? "border-[#202632] bg-[#12151b]" : "border-[#d7dbe2] bg-white")}>
         <span className="h-1 w-1 rounded-full bg-[var(--status-ok)]" />
         <span className={cn("h-1 w-4 rounded-full", dark ? "bg-[#3a414c]" : "bg-[#d7dbe2]")} />
       </div>

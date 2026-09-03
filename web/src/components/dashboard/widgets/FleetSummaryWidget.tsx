@@ -59,9 +59,9 @@ export function FleetSummaryWidget({ settings }: { settings: WidgetSettings }) {
             </div>
             <c.icon className="h-6 w-6 shrink-0 text-brand-500 opacity-70" />
           </div>
-          <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-[var(--track)]">
+          <div className="mt-1.5 h-1 overflow-hidden rounded-sm bg-[var(--track)]">
             <div
-              className={cn("h-full rounded-full", c.progress > 90 ? "bg-[var(--status-error)]" : c.progress > 75 ? "bg-[var(--status-warn)]" : "bg-brand-500")}
+              className={cn("h-full rounded-sm", c.progress > 90 ? "bg-[var(--status-error)]" : c.progress > 75 ? "bg-[var(--status-warn)]" : "bg-brand-500")}
               style={{ width: `${Math.min(100, c.progress)}%` }}
             />
           </div>

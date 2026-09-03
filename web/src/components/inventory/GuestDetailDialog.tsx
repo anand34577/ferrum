@@ -16,7 +16,8 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { StatusDot } from "@/components/ui/status-dot"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { TypeChip, guestDotStatus } from "@/components/ui/type-chip"
+import { TypeChip } from "@/components/ui/type-chip"
+import { guestDotStatus } from "@/lib/utils"
 import {
   api,
   ApiError,
