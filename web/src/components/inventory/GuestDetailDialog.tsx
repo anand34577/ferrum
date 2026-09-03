@@ -528,10 +528,10 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
             ) : (
               <div className="grid gap-4">
                 <MetricChart title="CPU utilization" rows={metricRows} series={GUEST_SERIES.cpu(metricPeaks)} yDomain={[0, 100]} yTickFormatter={FORMATTERS.pct} />
-                <MetricChart title="Memory" rows={metricRows} series={GUEST_SERIES.memory(metricPeaks)} yTickFormatter={FORMATTERS.bytes} showLegend />
+                <MetricChart title="Memory" rows={metricRows} series={GUEST_SERIES.memory(metricPeaks)} valueKind="bytes" showLegend />
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <MetricChart title="Network traffic" rows={metricRows} series={GUEST_SERIES.network(metricPeaks)} yTickFormatter={FORMATTERS.rate} showLegend />
-                  <MetricChart title="Disk I/O" rows={metricRows} series={GUEST_SERIES.disk(metricPeaks)} yTickFormatter={FORMATTERS.rate} showLegend />
+                  <MetricChart title="Network traffic" rows={metricRows} series={GUEST_SERIES.network(metricPeaks)} valueKind="rate" showLegend />
+                  <MetricChart title="Disk I/O" rows={metricRows} series={GUEST_SERIES.disk(metricPeaks)} valueKind="rate" showLegend />
                 </div>
               </div>
             )}
@@ -666,6 +666,7 @@ function MetricChart({
   series,
   yTickFormatter,
   yDomain,
+  valueKind,
   showLegend,
 }: {
   title: string
@@ -673,12 +674,13 @@ function MetricChart({
   series: SeriesSpec[]
   yTickFormatter?: (v: number) => string
   yDomain?: [number | "auto" | "dataMin", number | "auto" | "dataMax"]
+  valueKind?: "bytes" | "rate"
   showLegend?: boolean
 }) {
   return (
     <div>
       <p className="mb-1 text-xs font-medium text-[var(--text-muted)]">{title}</p>
-      <ResourceAreaChart data={rows} series={series} yTickFormatter={yTickFormatter} yDomain={yDomain} showLegend={showLegend} syncId="guest-metrics" height={170} />
+      <ResourceAreaChart data={rows} series={series} yTickFormatter={yTickFormatter} yDomain={yDomain} valueKind={valueKind} showLegend={showLegend} syncId="guest-metrics" height={170} />
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { cn, formatBytes, formatPercent, formatUptime } from "./utils"
+import { byteUnitIndex, cn, formatBytes, formatBytesAtUnit, formatPercent, formatUptime } from "./utils"
 
 describe("formatBytes", () => {
   it("formats zero as 0 B", () => {
@@ -10,20 +10,35 @@ describe("formatBytes", () => {
     expect(formatBytes(512)).toBe("512 B")
   })
 
-  it("formats kilobytes with one decimal below 10", () => {
+  it("formats kilobytes with up to 2 decimals", () => {
     expect(formatBytes(1536)).toBe("1.5 KB")
   })
 
-  it("drops the decimal once the value reaches double digits", () => {
+  it("shows a full 2 decimals when the value actually needs them", () => {
+    // ~19.96 GB — the exact kind of value that used to get rounded away.
+    expect(formatBytes(19.962 * 1024 ** 3)).toBe("19.96 GB")
+  })
+
+  it("drops a trailing .00 once the value is a whole number", () => {
     expect(formatBytes(10 * 1024)).toBe("10 KB")
+    expect(formatBytes(1024 ** 4)).toBe("1 TB")
   })
 
   it("formats gigabytes", () => {
     expect(formatBytes(2.5 * 1024 ** 3)).toBe("2.5 GB")
   })
+})
 
-  it("formats terabytes", () => {
-    expect(formatBytes(1024 ** 4)).toBe("1.0 TB")
+describe("formatBytesAtUnit / byteUnitIndex", () => {
+  it("locks a value to a given unit instead of picking its own", () => {
+    const gbIndex = byteUnitIndex(2 * 1024 ** 3) // GB
+    // 500 MB expressed in GB, not MB — same unit as a GB-scale axis max.
+    expect(formatBytesAtUnit(500 * 1024 ** 2, gbIndex)).toBe("0.49 GB")
+  })
+
+  it("round-trips through formatBytes for the value's own natural unit", () => {
+    const bytes = 2.5 * 1024 ** 3
+    expect(formatBytesAtUnit(bytes, byteUnitIndex(bytes))).toBe(formatBytes(bytes))
   })
 })
 

@@ -1,5 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Activity, Cpu, HardDrive, MemoryStick, Network, Power, RefreshCw, Server, Terminal, Upload } from "lucide-react"
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Activity, Cpu, HardDrive, MemoryStick, Network, Power, RefreshCw, Server, Terminal, Thermometer, Upload } from "lucide-react"
 import { useMemo, useState } from "react"
 import { useParams } from "react-router-dom"
 import { toast } from "sonner"
@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useConfirm } from "@/components/ui/confirm-dialog"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ErrorState } from "@/components/ui/error-state"
 import { PageHeader } from "@/components/ui/page-header"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -20,18 +21,31 @@ import {
   api,
   ApiError,
   type AptUpdate,
+  type Disk,
   type NetworkInterface,
   type NodeStatus,
   type RRDPoint,
+  type SmartData,
   type Storage,
   type SyslogEntry,
 } from "@/lib/api"
 import { FORMATTERS, NODE_SERIES, buildRRDRows, hasAnySeries, rowNum, type ChartRow, type SeriesSpec } from "@/lib/metrics"
-import { formatBytes, formatPercentFine, formatRate, formatUptime } from "@/lib/utils"
+import { cn, formatBytes, formatPercentFine, formatRate, formatUptime } from "@/lib/utils"
 
 const TIMEFRAMES = ["hour", "day", "week", "month", "year"] as const
 
 const CHART_SYNC = "node-metrics"
+
+/** Proxmox's disk SMART data has no dedicated temperature field — it's just
+ * another attribute row, named differently across ATA ("Temperature_Celsius")
+ * and NVMe ("Temperature", "42 Celsius") reports. Extracted here as the
+ * leading integer of whichever attribute name contains "temperature". */
+function smartTemperatureC(smart: SmartData | undefined): number | undefined {
+  const attr = smart?.attributes?.find((a) => a.name.toLowerCase().includes("temperature"))
+  if (!attr?.value && !attr?.raw) return undefined
+  const match = (attr.raw || attr.value || "").match(/-?\d+/)
+  return match ? parseInt(match[0], 10) : undefined
+}
 
 export function NodeDetailPage() {
   const { connId = "", node = "" } = useParams()
@@ -54,6 +68,27 @@ export function NodeDetailPage() {
     staleTime: 60_000,
   })
   const storageQuery = useQuery({ queryKey: ["node-storage", connId, node], queryFn: () => api.get<Storage[]>(`${base}/storage`) })
+  const disksQuery = useQuery({ queryKey: ["node-disks", connId, node], queryFn: () => api.get<Disk[]>(`${base}/disks`) })
+  // Temperature isn't in the disk list itself (only SMART carries it), so
+  // it's fetched per-disk in the background to show inline — the SMART
+  // dialog covers everything else, this is purely for the at-a-glance read.
+  const diskTempQueries = useQueries({
+    queries: (disksQuery.data ?? []).map((d) => ({
+      queryKey: ["node-disk-smart", connId, node, d.devpath],
+      queryFn: () => api.get<SmartData>(`${base}/disks/smart?disk=${encodeURIComponent(d.devpath)}`),
+      staleTime: 60_000,
+      retry: false,
+    })),
+  })
+  const diskTempByPath = new Map(
+    (disksQuery.data ?? []).map((d, i) => [d.devpath, smartTemperatureC(diskTempQueries[i]?.data)]),
+  )
+  const [smartDisk, setSmartDisk] = useState<Disk | null>(null)
+  const smartQuery = useQuery({
+    queryKey: ["node-disk-smart", connId, node, smartDisk?.devpath],
+    queryFn: () => api.get<SmartData>(`${base}/disks/smart?disk=${encodeURIComponent(smartDisk!.devpath)}`),
+    enabled: smartDisk !== null,
+  })
   const networkQuery = useQuery({ queryKey: ["node-network", connId, node], queryFn: () => api.get<NetworkInterface[]>(`${base}/network`) })
   const aptQuery = useQuery({ queryKey: ["node-apt", connId, node], queryFn: () => api.get<AptUpdate[]>(`${base}/apt/updates`) })
   const syslogQuery = useQuery({ queryKey: ["node-syslog", connId, node], queryFn: () => api.get<SyslogEntry[]>(`${base}/syslog`) })
@@ -240,7 +275,7 @@ export function NodeDetailPage() {
                 <ResourceAreaChart
                   data={rows}
                   series={NODE_SERIES.memory(peaks)}
-                  yTickFormatter={FORMATTERS.bytes}
+                  valueKind="bytes"
                   syncId={CHART_SYNC}
                   height={180}
                   showLegend
@@ -251,7 +286,7 @@ export function NodeDetailPage() {
                 <ResourceAreaChart
                   data={rows}
                   series={NODE_SERIES.network(peaks)}
-                  yTickFormatter={FORMATTERS.rate}
+                  valueKind="rate"
                   syncId={CHART_SYNC}
                   height={180}
                   showLegend
@@ -319,6 +354,7 @@ export function NodeDetailPage() {
       <Tabs defaultValue="storage">
         <TabsList>
           <TabsTrigger value="storage">Storage</TabsTrigger>
+          <TabsTrigger value="disks">Disks {disksQuery.data?.length ? `(${disksQuery.data.length})` : ""}</TabsTrigger>
           <TabsTrigger value="network">Network</TabsTrigger>
           <TabsTrigger value="updates">Updates {aptQuery.data?.length ? `(${aptQuery.data.length})` : ""}</TabsTrigger>
           <TabsTrigger value="syslog">Syslog</TabsTrigger>
@@ -354,6 +390,71 @@ export function NodeDetailPage() {
                 })}
                 {storageQuery.data?.length === 0 && <p className="text-sm text-[var(--text-muted)]">No storage found.</p>}
               </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="disks">
+          <Card>
+            <CardContent className="space-y-2 pt-4">
+              {disksQuery.isError ? (
+                <ErrorState title="Couldn't load disks" onRetry={disksQuery.refetch} />
+              ) : disksQuery.isLoading ? (
+                <div className="space-y-2" aria-busy>
+                  <Skeleton className="h-12 w-full" />
+                  <Skeleton className="h-12 w-full" />
+                </div>
+              ) : disksQuery.data?.length === 0 ? (
+                <p className="text-sm text-[var(--text-muted)]">No disks reported.</p>
+              ) : (
+                disksQuery.data?.map((d) => (
+                  <div key={d.devpath} className="flex flex-wrap items-center gap-3 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
+                    <HardDrive className="h-4 w-4 shrink-0 text-[var(--text-muted)]" />
+                    <div className="min-w-0 flex-1">
+                      <p className="flex items-center gap-1.5">
+                        <span className="truncate font-medium" title={d.devpath}>{d.model || d.devpath}</span>
+                        <Badge>{d.type.toUpperCase()}</Badge>
+                        {d.health && (
+                          <Badge variant={d.health === "PASSED" ? "ok" : d.health === "FAILED" ? "error" : "default"}>{d.health}</Badge>
+                        )}
+                      </p>
+                      <p className="truncate font-mono text-[10px] text-[var(--text-muted)]">
+                        {d.devpath}{d.serial ? ` · S/N ${d.serial}` : ""}{d.used ? ` · used by ${d.used}` : " · unused"}
+                      </p>
+                    </div>
+                    {typeof d.wearout === "number" && (
+                      <div className="flex w-28 shrink-0 items-center gap-1.5" title="Estimated life remaining">
+                        <div className="h-1.5 flex-1 overflow-hidden rounded-sm bg-[var(--track)]">
+                          <div
+                            className={d.wearout <= 10 ? "h-full bg-[var(--status-error)]" : d.wearout <= 25 ? "h-full bg-[var(--status-warn)]" : "h-full bg-brand-500"}
+                            style={{ width: `${Math.max(0, Math.min(100, d.wearout))}%` }}
+                          />
+                        </div>
+                        <span className="w-8 text-right text-[10px] text-[var(--text-muted)] tabular">{d.wearout}%</span>
+                      </div>
+                    )}
+                    {(() => {
+                      const temp = diskTempByPath.get(d.devpath)
+                      if (temp === undefined) return null
+                      const hot = temp >= 60
+                      const warm = temp >= 50
+                      return (
+                        <span
+                          className={cn(
+                            "flex shrink-0 items-center gap-1 text-xs tabular",
+                            hot ? "text-[var(--status-error)]" : warm ? "text-[var(--status-warn)]" : "text-[var(--text-muted)]",
+                          )}
+                          title="Drive temperature (from SMART)"
+                        >
+                          <Thermometer className="h-3.5 w-3.5" /> {temp}°C
+                        </span>
+                      )
+                    })()}
+                    <span className="shrink-0 text-xs text-[var(--text-muted)] tabular">{formatBytes(d.size)}</span>
+                    <Button size="sm" variant="outline" onClick={() => setSmartDisk(d)}>View SMART</Button>
+                  </div>
+                ))
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -423,6 +524,49 @@ export function NodeDetailPage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <Dialog open={smartDisk !== null} onOpenChange={(open) => !open && setSmartDisk(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>SMART — {smartDisk?.model || smartDisk?.devpath}</DialogTitle>
+            <DialogDescription>{smartDisk?.devpath}{smartDisk?.serial ? ` · S/N ${smartDisk.serial}` : ""}</DialogDescription>
+          </DialogHeader>
+          {smartQuery.isError ? (
+            <ErrorState title="Couldn't load SMART data" onRetry={smartQuery.refetch} />
+          ) : smartQuery.isLoading ? (
+            <Skeleton className="h-48 w-full" />
+          ) : smartQuery.data?.attributes && smartQuery.data.attributes.length > 0 ? (
+            <div className="max-h-[60vh] overflow-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="text-[var(--text-muted)]">
+                  <tr>
+                    <th className="py-1 pr-2 font-medium">Attribute</th>
+                    <th className="py-1 pr-2 font-medium">Value</th>
+                    <th className="py-1 pr-2 font-medium">Worst</th>
+                    <th className="py-1 pr-2 font-medium">Threshold</th>
+                    <th className="py-1 font-medium">Raw</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {smartQuery.data.attributes.map((a, i) => (
+                    <tr key={a.id ?? a.name ?? i} className="border-t border-[var(--border)]">
+                      <td className="py-1 pr-2 tabular">{a.name}</td>
+                      <td className="py-1 pr-2 tabular">{a.value ?? "-"}</td>
+                      <td className="py-1 pr-2 tabular">{a.worst ?? "-"}</td>
+                      <td className="py-1 pr-2 tabular">{a.threshold ?? "-"}</td>
+                      <td className="py-1 font-mono tabular">{a.raw ?? "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : smartQuery.data?.text ? (
+            <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-md bg-[var(--bg-muted)] p-3 font-mono text-[11px]">{smartQuery.data.text}</pre>
+          ) : (
+            <p className="text-sm text-[var(--text-muted)]">No SMART data reported for this disk.</p>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

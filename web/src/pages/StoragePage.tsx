@@ -15,7 +15,7 @@ import { PageHeader } from "@/components/ui/page-header"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusDot } from "@/components/ui/status-dot"
 import { api, type CephOSD, type CephPool, type CephStatus, type ClusterResource, type ConnectionInventory } from "@/lib/api"
-import { formatBytes } from "@/lib/utils"
+import { formatBytes, formatPercentFine } from "@/lib/utils"
 
 const TYPE_COLORS = [
   "var(--chart-1)",
@@ -112,7 +112,7 @@ export function StoragePage() {
   function rollUp(pools: (ClusterResource & { connName: string })[]) {
     // Roll every storage up by pool NAME across connections — both its total
     // capacity and its current usage, so the legend can show used/total and
-    // the share of the whole fleet per pool.
+    // how full each pool actually is.
     const byName = new Map<string, { total: number; used: number }>()
     for (const p of pools) {
       const key = p.storage ?? "unknown"
@@ -126,12 +126,19 @@ export function StoragePage() {
       .sort((a, b) => b.total - a.total)
     const grandTotal = rows.reduce((s, r) => s + r.total, 0)
     const grandUsed = rows.reduce((s, r) => s + r.used, 0)
-    // The donut shows the 7 largest pools; everything smaller folds into an
-    // "other" slice so the ring never turns into confetti.
+    // The ring is sized by USED bytes per pool, not total capacity — a
+    // capacity-share ring reads as "100% used" the instant there's only one
+    // pool (a single slice necessarily fills the whole ring), which is
+    // exactly backwards from what "224 GB used of 1.2 TB" means. A trailing
+    // "Free" slice (the untouched remainder) makes the ring double as an
+    // overall usage gauge; the 7 largest pools get their own slice and
+    // everything smaller folds into "other" so it never turns into confetti.
     const top = rows.slice(0, 7)
-    const restTotal = rows.slice(7).reduce((s, r) => s + r.total, 0)
-    const slices: DonutSlice[] = top.map((r, i) => ({ name: r.name, value: r.total, color: TYPE_COLORS[i % TYPE_COLORS.length] }))
-    if (restTotal > 0) slices.push({ name: `other (${rows.length - 7})`, value: restTotal, color: "var(--text-faint)" })
+    const restUsed = rows.slice(7).reduce((s, r) => s + r.used, 0)
+    const slices: DonutSlice[] = top.map((r, i) => ({ name: r.name, value: r.used, color: TYPE_COLORS[i % TYPE_COLORS.length] }))
+    if (restUsed > 0) slices.push({ name: `other (${rows.length - 7})`, value: restUsed, color: "var(--text-faint)" })
+    const free = grandTotal - grandUsed
+    if (free > 0) slices.push({ name: "Free", value: free, color: "var(--track)" })
     return { rows, slices, grandTotal, grandUsed }
   }
 
@@ -433,22 +440,31 @@ function CapacityCard({ title, capacity }: { title: string; capacity: CapacityRo
       </CardHeader>
       <CardContent className="flex flex-col items-center gap-5 sm:flex-row">
         <div className="w-44 shrink-0 self-center">
-          <DonutChart data={capacity.slices} height={168} centerValue={formatBytes(capacity.grandTotal)} centerLabel="total" formatValue={formatBytes} />
+          <DonutChart
+            data={capacity.slices}
+            height={168}
+            centerValue={capacity.grandTotal > 0 ? formatPercentFine((capacity.grandUsed / capacity.grandTotal) * 100) : "0%"}
+            centerLabel="used"
+            formatValue={formatBytes}
+          />
         </div>
         <ul className="min-w-0 flex-1 space-y-2.5">
           {capacity.rows.slice(0, 7).map((r, i) => {
             const color = TYPE_COLORS[i % TYPE_COLORS.length]
-            const share = capacity.grandTotal > 0 ? (r.total / capacity.grandTotal) * 100 : 0
+            // How full THIS pool is — not its share of the fleet's total
+            // capacity, which is a near-useless (and, with one pool,
+            // always-100%-and-misleading) number to lead with here.
+            const pctUsed = r.total > 0 ? (r.used / r.total) * 100 : 0
             return (
               <li key={r.name} className="grid grid-cols-[auto_1fr_auto] items-center gap-2 text-xs">
                 <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} aria-hidden />
                 <div className="min-w-0">
                   <p className="flex items-baseline justify-between gap-2">
                     <span className="truncate font-medium" title={r.name}>{r.name}</span>
-                    <span className="shrink-0 text-[var(--text-muted)] tabular">{share.toFixed(0)}%</span>
+                    <span className="shrink-0 text-[var(--text-muted)] tabular">{pctUsed.toFixed(0)}% used</span>
                   </p>
                   <div className="mt-1 h-1 w-full overflow-hidden rounded-sm bg-[var(--track)]">
-                    <div className="h-full rounded-sm" style={{ width: `${share}%`, background: color }} />
+                    <div className="h-full rounded-sm" style={{ width: `${Math.min(100, pctUsed)}%`, background: color }} />
                   </div>
                 </div>
                 <div className="shrink-0 text-right tabular">
