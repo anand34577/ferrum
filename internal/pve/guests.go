@@ -488,8 +488,9 @@ func (c *Client) OpenVNCProxy(ctx context.Context, guestType, node string, vmid 
 // AgentNetworkInterface is one interface reported by the QEMU guest agent
 // (requires `qemu-guest-agent` installed and running inside the VM, and the
 // agent enabled in the VM's config — Proxmox's own UI shows this same data
-// under the VM's "Network" tab; LXC containers don't have a guest agent
-// concept since Proxmox already controls their network namespace directly).
+// under the VM's "Network" tab) for a QEMU guest, or by LXCInterfaces for a
+// container — normalized to the same shape either way so the UI needs no
+// per-type branching.
 type AgentNetworkInterface struct {
 	Name            string   `json:"name"`
 	HardwareAddress string   `json:"hardware-address,omitempty"`
@@ -525,6 +526,51 @@ func (c *Client) GuestAgentNetworkInterfaces(ctx context.Context, node string, v
 		interfaces = append(interfaces, AgentNetworkInterface{Name: r.Name, HardwareAddress: r.HardwareAddress, IPAddresses: ips})
 	}
 	return interfaces, nil
+}
+
+// LXCInterfaces reads live IP/MAC info for a running container straight from
+// its network namespace — the host already has direct visibility into that
+// (LXC shares the host kernel), so this needs no agent installed inside the
+// container at all, unlike GuestAgentNetworkInterfaces for QEMU VMs. Each
+// interface carries at most one IPv4 and one IPv6 address (as CIDR, e.g.
+// "192.168.1.50/24"); both are folded into the same IPAddresses list,
+// stripped of the prefix, since the UI just wants the addresses.
+func (c *Client) LXCInterfaces(ctx context.Context, node string, vmid int) ([]AgentNetworkInterface, error) {
+	var out struct {
+		Data []struct {
+			Name   string `json:"name"`
+			Hwaddr string `json:"hwaddr,omitempty"`
+			Inet   string `json:"inet,omitempty"`
+			Inet6  string `json:"inet6,omitempty"`
+		} `json:"data"`
+	}
+	path := fmt.Sprintf("/nodes/%s/lxc/%d/interfaces", PathEscape(node), vmid)
+	if err := c.get(ctx, path, &out); err != nil {
+		return nil, err
+	}
+	interfaces := make([]AgentNetworkInterface, 0, len(out.Data))
+	for _, r := range out.Data {
+		var ips []string
+		if ip := stripCIDR(r.Inet); ip != "" {
+			ips = append(ips, ip)
+		}
+		if ip := stripCIDR(r.Inet6); ip != "" {
+			ips = append(ips, ip)
+		}
+		interfaces = append(interfaces, AgentNetworkInterface{Name: r.Name, HardwareAddress: r.Hwaddr, IPAddresses: ips})
+	}
+	return interfaces, nil
+}
+
+// stripCIDR trims a "/prefix" suffix (PVE reports LXC addresses as CIDR) and
+// filters out the loopback-only case some kernels report for an interface
+// with no address configured.
+func stripCIDR(addr string) string {
+	if addr == "" {
+		return ""
+	}
+	ip, _, _ := strings.Cut(addr, "/")
+	return ip
 }
 
 // VNCWebSocketPath builds the path (relative to the host, port 8006) for the

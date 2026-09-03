@@ -108,7 +108,10 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
     enabled: open,
   })
 
-  const agentEnabled = open && guest?.type === "qemu" && guest?.status === "running"
+  // LXC needs no in-guest agent at all — the host already sees a
+  // container's network namespace directly, so its IPs come back the same
+  // way a QEMU VM's do once the guest agent reports them.
+  const agentEnabled = open && guest?.status === "running"
   const agentQuery = useQuery({
     queryKey: ["guest-agent-network", connId, guest?.id],
     queryFn: () => api.get<AgentNetworkInterface[]>(`${base}/agent/network`),
@@ -441,19 +444,19 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
           </TabsContent>
 
           <TabsContent value="network" className="space-y-2">
-            {guest.type !== "qemu" ? (
-              <p className="text-sm text-[var(--text-muted)]">
-                Live IP reporting needs the QEMU guest agent, which only applies to virtual machines — containers already share the host's network stack directly.
-              </p>
-            ) : guest.status !== "running" ? (
-              <p className="text-sm text-[var(--text-muted)]">Start this VM to see its live network info.</p>
+            {guest.status !== "running" ? (
+              <p className="text-sm text-[var(--text-muted)]">Start this {guest.type === "lxc" ? "container" : "VM"} to see its live network info.</p>
             ) : agentQuery.isLoading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : agentQuery.isError ? (
-              <p className="text-sm text-[var(--text-muted)]">
-                Guest agent unavailable. Install <code className="rounded bg-[var(--bg-muted)] px-1 py-0.5">qemu-guest-agent</code> inside the VM and enable
-                the QEMU Guest Agent option for it, then reopen this dialog.
-              </p>
+              guest.type === "lxc" ? (
+                <p className="text-sm text-[var(--text-muted)]">Couldn't read the container's network namespace.</p>
+              ) : (
+                <p className="text-sm text-[var(--text-muted)]">
+                  Guest agent unavailable. Install <code className="rounded bg-[var(--bg-muted)] px-1 py-0.5">qemu-guest-agent</code> inside the VM and enable
+                  the QEMU Guest Agent option for it, then reopen this dialog.
+                </p>
+              )
             ) : (
               <div className="space-y-1.5">
                 {(agentQuery.data ?? [])
