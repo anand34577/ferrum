@@ -6,6 +6,8 @@
     var stored = localStorage.getItem("ferrum-theme");
     var dark = stored === "dark" || (stored !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
     if (dark) document.documentElement.classList.add("dark");
+    var look = localStorage.getItem("ferrum-look");
+    if (look === "proxmox" || look === "terminal") document.documentElement.dataset.look = look;
     var meta = document.querySelector('meta[name="theme-color"]');
     if (meta) meta.setAttribute("content", dark ? "#090b0e" : "#ffffff");
   } catch {

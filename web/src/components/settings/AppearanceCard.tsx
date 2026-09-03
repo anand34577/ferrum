@@ -1,6 +1,6 @@
 import { Check, Monitor, Moon, Sun } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { useTheme, type Accent, type ThemePreference } from "@/lib/theme"
+import { useTheme, type Accent, type Look, type ThemePreference } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 
 /**
@@ -47,6 +47,40 @@ function ThemePreview({ variant, active }: { variant: ThemePreference; active: b
   )
 }
 
+const LOOKS: { value: Look; label: string; hint: string }[] = [
+  { value: "enterprise", label: "Enterprise", hint: "Clean SaaS dashboard — restrained neutrals, soft shadows, one accent" },
+  { value: "proxmox", label: "Proxmox-native", hint: "Utilitarian and dense — plain system font, flat bordered panels" },
+  { value: "terminal", label: "Terminal", hint: "Quiet and dark — no display face, precision over metaphor" },
+]
+
+/** A real, live mockup, not a static illustration: scoping [data-look] to
+ * this wrapper means every token inside genuinely repaints, so the preview
+ * is never at risk of drifting from what the look actually does. */
+function LookPreview({ variant, dark }: { variant: Look; dark: boolean }) {
+  return (
+    <div
+      data-look={variant}
+      className={cn("pointer-events-none h-16 w-full overflow-hidden border p-1.5", dark && "dark")}
+      style={{ background: "var(--bg)", borderColor: "var(--border)", borderRadius: "var(--radius-lg)" }}
+    >
+      <div className="flex h-full gap-1.5">
+        <div className="w-3 shrink-0" style={{ background: "var(--sidebar-bg, var(--bg-elevated))", borderRadius: "var(--radius-sm)" }} />
+        <div className="flex-1 space-y-1">
+          <div className="h-2 w-10" style={{ background: "var(--color-brand-500)", borderRadius: "var(--radius-sm)" }} />
+          <div
+            className="h-7 w-full border"
+            style={{ background: "var(--bg-surface)", borderColor: "var(--border)", borderRadius: "var(--radius-md)", boxShadow: "var(--elev-xs)" }}
+          />
+          <div className="flex gap-1">
+            <div className="h-1.5 flex-1" style={{ background: "var(--bg-muted)", borderRadius: "var(--radius-sm)" }} />
+            <div className="h-1.5 flex-1" style={{ background: "var(--bg-muted)", borderRadius: "var(--radius-sm)" }} />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 const ACCENTS: { value: Accent; label: string; swatch: string }[] = [
   { value: "oxide", label: "Oxide", swatch: "#bd5a2c" },
   { value: "azure", label: "Azure", swatch: "#3568b8" },
@@ -56,7 +90,7 @@ const ACCENTS: { value: Accent; label: string; swatch: string }[] = [
 ]
 
 export function AppearanceCard() {
-  const { theme, setTheme, accent, setAccent } = useTheme()
+  const { theme, setTheme, effectiveTheme, accent, setAccent, look, setLook } = useTheme()
 
   return (
     <Card>
@@ -67,32 +101,65 @@ export function AppearanceCard() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
-        <div className="grid max-w-xl grid-cols-1 gap-3 sm:grid-cols-3" role="radiogroup" aria-label="UI theme">
-          {OPTIONS.map((opt) => {
-            const active = theme === opt.value
-            const Icon = opt.icon
-            return (
-              <button
-                key={opt.value}
-                role="radio"
-                aria-checked={active}
-                onClick={() => setTheme(opt.value)}
-                className={cn(
-                  "group rounded-lg border p-3.5 text-left transition-all duration-150 cursor-pointer",
-                  active
-                    ? "border-[var(--ring)] bg-[color-mix(in_oklab,var(--color-brand-500)_8%,var(--bg-surface))] ring-1 ring-[var(--ring)]"
-                    : "border-[var(--border)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-hover)]",
-                )}
-              >
-                <ThemePreview variant={opt.value} active={false} />
-                <p className="mt-2.5 flex items-center gap-1.5 text-sm font-medium">
-                  <Icon className="h-3.5 w-3.5 text-[var(--text-muted)]" /> {opt.label}
-                  {active && <span className="ml-auto text-[10px] font-semibold uppercase tracking-wide text-brand-600 dark:text-brand-400">Active</span>}
-                </p>
-                <p className="mt-0.5 text-xs text-[var(--text-muted)]">{opt.hint}</p>
-              </button>
-            )
-          })}
+        <div>
+          <p className="mb-2 text-sm font-medium">Look &amp; feel</p>
+          <div className="grid max-w-xl grid-cols-1 gap-3 sm:grid-cols-3" role="radiogroup" aria-label="Look and feel">
+            {LOOKS.map((opt) => {
+              const active = look === opt.value
+              return (
+                <button
+                  key={opt.value}
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => setLook(opt.value)}
+                  className={cn(
+                    "group rounded-lg border p-3 text-left transition-colors",
+                    active
+                      ? "border-[var(--ring)] bg-[color-mix(in_oklab,var(--color-brand-500)_6%,var(--bg-surface))]"
+                      : "border-[var(--border)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-hover)]",
+                  )}
+                >
+                  <LookPreview variant={opt.value} dark={effectiveTheme === "dark"} />
+                  <p className="mt-2.5 flex items-center gap-1.5 text-sm font-medium">
+                    {opt.label}
+                    {active && <span className="ml-auto text-[10px] font-semibold uppercase tracking-wide text-brand-600 dark:text-brand-400">Active</span>}
+                  </p>
+                  <p className="mt-0.5 text-xs text-[var(--text-muted)]">{opt.hint}</p>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        <div>
+          <p className="mb-2 text-sm font-medium">Theme</p>
+          <div className="grid max-w-xl grid-cols-1 gap-3 sm:grid-cols-3" role="radiogroup" aria-label="UI theme">
+            {OPTIONS.map((opt) => {
+              const active = theme === opt.value
+              const Icon = opt.icon
+              return (
+                <button
+                  key={opt.value}
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => setTheme(opt.value)}
+                  className={cn(
+                    "group rounded-lg border p-3 text-left transition-colors",
+                    active
+                      ? "border-[var(--ring)] bg-[color-mix(in_oklab,var(--color-brand-500)_6%,var(--bg-surface))]"
+                      : "border-[var(--border)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-hover)]",
+                  )}
+                >
+                  <ThemePreview variant={opt.value} active={false} />
+                  <p className="mt-2.5 flex items-center gap-1.5 text-sm font-medium">
+                    <Icon className="h-3.5 w-3.5 text-[var(--text-muted)]" /> {opt.label}
+                    {active && <span className="ml-auto text-[10px] font-semibold uppercase tracking-wide text-brand-600 dark:text-brand-400">Active</span>}
+                  </p>
+                  <p className="mt-0.5 text-xs text-[var(--text-muted)]">{opt.hint}</p>
+                </button>
+              )
+            })}
+          </div>
         </div>
 
         <div>

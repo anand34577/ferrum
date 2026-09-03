@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -26,13 +27,37 @@ import (
 	"ferrum/web"
 )
 
+// version, commit, and date are set at build time via -ldflags, e.g.:
+//
+//	go build -ldflags "-X main.version=v1.2.3 -X main.commit=$(git rev-parse --short HEAD) -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+//
+// See scripts/build.sh / scripts/build.ps1, which set these for release
+// binaries. Left at their defaults for plain `go build`/`go run`.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to config file")
 	dev := flag.Bool("dev", false, "use human-readable logs instead of JSON")
 	healthcheck := flag.Bool("healthcheck", false, "probe the local health endpoint and exit 0/1 (for container HEALTHCHECK)")
+	showVersion := flag.Bool("version", false, "print version information and exit")
+	logFile := flag.String("log-file", "", "append logs to this file instead of stderr — stderr is invisible under the Windows Service Control Manager, which doesn't capture it the way systemd/journald does")
 	flag.Parse()
 
-	logger := newLogger(*dev)
+	if *showVersion {
+		fmt.Printf("ferrum %s (commit %s, built %s)\n", version, commit, date)
+		return
+	}
+
+	logger, closeLog, err := newLogger(*dev, *logFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "opening log file: %v\n", err)
+		os.Exit(1)
+	}
+	defer closeLog()
 	slog.SetDefault(logger)
 
 	cfg, err := config.Load(*configPath)
@@ -56,6 +81,28 @@ func main() {
 		resp.Body.Close()
 		os.Exit(0)
 	}
+
+	run := func(ctx context.Context) { runServer(ctx, cfg) }
+
+	// Under the Windows Service Control Manager there's no console to
+	// deliver os.Interrupt/SIGTERM, so the SCM's own stop/shutdown request
+	// drives ctx cancellation instead. On every other platform (and when
+	// running interactively on Windows) this is a no-op and we fall
+	// through to the normal signal-driven path — systemd's SIGTERM on
+	// Linux included.
+	if runAsWindowsService(run) {
+		return
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	run(ctx)
+}
+
+// runServer opens the database, wires up the API server, and serves until
+// ctx is canceled, then shuts down gracefully. Fatal setup errors log and
+// exit the process directly (there's no partially-started server to unwind).
+func runServer(ctx context.Context, cfg config.Config) {
 	if cfg.Secret == "" {
 		secretPath := cfg.DB.Path
 		if cfg.DB.Driver == "postgres" {
@@ -100,11 +147,9 @@ func main() {
 		slog.Info("SSO enabled", "issuer", cfg.OIDC.IssuerURL)
 	}
 
-	// Signal context governs shutdown; the poller derives from it so it stops
-	// (rather than polling through) the graceful-shutdown window.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
+	// ctx governs shutdown (process signals normally; the Windows SCM's stop
+	// request when running as a service). The poller derives from it so it
+	// stops — rather than polling through — the graceful-shutdown window.
 	pollerCtx, stopPoller := context.WithCancel(ctx)
 	defer stopPoller()
 	go poller.NewAlertEvaluator(db, connections.New(db, secretBox)).Run(pollerCtx, 60*time.Second)
@@ -143,11 +188,24 @@ func main() {
 	}
 }
 
-func newLogger(dev bool) *slog.Logger {
-	if dev {
-		return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+// newLogger builds the default logger and returns a cleanup func that closes
+// the log file, if one was opened (a no-op when logging to stderr).
+func newLogger(dev bool, logFile string) (*slog.Logger, func(), error) {
+	out := io.Writer(os.Stderr)
+	closeLog := func() {}
+	if logFile != "" {
+		f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			return nil, nil, err
+		}
+		out = f
+		closeLog = func() { f.Close() }
 	}
-	return slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	if dev {
+		return slog.New(slog.NewTextHandler(out, &slog.HandlerOptions{Level: slog.LevelDebug})), closeLog, nil
+	}
+	return slog.New(slog.NewJSONHandler(out, &slog.HandlerOptions{Level: slog.LevelInfo})), closeLog, nil
 }
 
 // ensurePersistedSecret generates (or reuses) a random app secret stored

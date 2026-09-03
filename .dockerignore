@@ -2,6 +2,9 @@ web/node_modules
 web/dist
 data
 *.exe
+dist
 dist-check
 server.log
 cookies.txt
+docs
+.github
