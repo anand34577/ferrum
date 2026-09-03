@@ -8,45 +8,60 @@ Fleet control for Proxmox VE — a single dashboard for every cluster and standa
 
 ## Screenshots
 
-Captured against a mock Proxmox cluster (`prod-cluster`: 3 nodes, 16 VMs/LXCs, Ceph + NFS storage) to show the UI populated the way it looks on a real fleet.
+Captured against a mock Proxmox cluster (`prod-cluster`: 3 nodes, 16 VMs/LXCs, Ceph + NFS storage) to show the UI populated the way it looks on a real fleet. Click any thumbnail for the full-size image.
 
-### Fleet overview
-
-![Fleet overview dashboard](docs/screenshots/dashboard.png)
-
-### Inventory
-
-![Inventory — nodes and guests](docs/screenshots/inventory.png)
-
-### Topology
-
-![Topology graph](docs/screenshots/topology.png)
-
-### Storage
-
-![Storage pools and Ceph health](docs/screenshots/storage.png)
-
-### Backups & replication
-
-![Backup jobs and replication](docs/screenshots/backups.png)
-
-### High availability
-
-![HA resources and groups](docs/screenshots/high-availability.png)
-
-### Firewall
-
-![Cluster firewall rules](docs/screenshots/firewall.png)
-
-### Look & feel
-
-Three selectable UI themes — Enterprise, Proxmox-native, and Terminal — each with light/dark and an accent color.
-
-![Appearance settings](docs/screenshots/settings-appearance.png)
-
-### First-run setup
-
-![First-run admin setup](docs/screenshots/setup.png)
+<table>
+<tr>
+<td width="50%">
+<a href="docs/screenshots/dashboard.png"><img src="docs/screenshots/dashboard.png" alt="Fleet overview dashboard"></a>
+<p align="center"><sub><b>Fleet overview</b></sub></p>
+</td>
+<td width="50%">
+<a href="docs/screenshots/inventory.png"><img src="docs/screenshots/inventory.png" alt="Inventory — nodes and guests"></a>
+<p align="center"><sub><b>Inventory</b></sub></p>
+</td>
+</tr>
+<tr>
+<td width="50%">
+<a href="docs/screenshots/topology.png"><img src="docs/screenshots/topology.png" alt="Topology graph"></a>
+<p align="center"><sub><b>Topology</b></sub></p>
+</td>
+<td width="50%">
+<a href="docs/screenshots/storage.png"><img src="docs/screenshots/storage.png" alt="Storage pools and Ceph health"></a>
+<p align="center"><sub><b>Storage</b></sub></p>
+</td>
+</tr>
+<tr>
+<td width="50%">
+<a href="docs/screenshots/backups.png"><img src="docs/screenshots/backups.png" alt="Backup jobs and replication"></a>
+<p align="center"><sub><b>Backups & replication</b></sub></p>
+</td>
+<td width="50%">
+<a href="docs/screenshots/high-availability.png"><img src="docs/screenshots/high-availability.png" alt="HA resources and groups"></a>
+<p align="center"><sub><b>High availability</b></sub></p>
+</td>
+</tr>
+<tr>
+<td width="50%">
+<a href="docs/screenshots/firewall.png"><img src="docs/screenshots/firewall.png" alt="Cluster firewall rules"></a>
+<p align="center"><sub><b>Firewall</b></sub></p>
+</td>
+<td width="50%">
+<a href="docs/screenshots/settings-appearance.png"><img src="docs/screenshots/settings-appearance.png" alt="Appearance settings — Enterprise, Proxmox-native, and Terminal look & feel"></a>
+<p align="center"><sub><b>Look & feel</b> — Enterprise / Proxmox-native / Terminal</sub></p>
+</td>
+</tr>
+<tr>
+<td width="50%">
+<a href="docs/screenshots/connections.png"><img src="docs/screenshots/connections.png" alt="Connections page"></a>
+<p align="center"><sub><b>Connections</b></sub></p>
+</td>
+<td width="50%">
+<a href="docs/screenshots/setup.png"><img src="docs/screenshots/setup.png" alt="First-run admin setup"></a>
+<p align="center"><sub><b>First-run setup</b></sub></p>
+</td>
+</tr>
+</table>
 
 ## Getting started
 

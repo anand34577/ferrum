@@ -23,6 +23,18 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # web/embed.go does `//go:embed all:dist` — go build/vet/test all
+      # fail without a built frontend to embed, so build it first.
+      - name: Build frontend (for go:embed)
+        run: |
+          cd web
+          npm ci
+          npm run build
       - run: go vet ./...
       - run: go build ./...
       - run: go test ./...
