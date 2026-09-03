@@ -186,8 +186,11 @@ func (s *Server) deleteGuest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"upid": upid})
 }
 
-// guestAgentNetwork surfaces live IP/MAC info from the QEMU guest agent —
-// only meaningful for "qemu" guests with the agent installed and running.
+// guestAgentNetwork surfaces live IP/MAC info for the guest — for a QEMU VM
+// via the in-guest qemu-guest-agent (requires it installed, running, and
+// enabled in the VM's Options); for an LXC container, straight from its
+// network namespace, which the host already has direct visibility into, so
+// no agent is needed there at all. Same response shape either way.
 func (s *Server) guestAgentNetwork(w http.ResponseWriter, r *http.Request) {
 	connID, guestType, node := chi.URLParam(r, "id"), chi.URLParam(r, "type"), chi.URLParam(r, "node")
 	vmid, err := vmidParam(r)
@@ -195,18 +198,28 @@ func (s *Server) guestAgentNetwork(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if guestType != "qemu" {
-		writeErrorMsg(w, http.StatusBadRequest, "the guest agent is a QEMU-only feature")
-		return
-	}
 	client, err := s.clientFor(r.Context(), connID)
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	interfaces, err := client.GuestAgentNetworkInterfaces(r.Context(), node, vmid)
-	if err != nil {
-		writeErrorMsg(w, http.StatusBadGateway, "guest agent unavailable — install qemu-guest-agent and enable it in this VM's Options")
+
+	var interfaces []pve.AgentNetworkInterface
+	switch guestType {
+	case "qemu":
+		interfaces, err = client.GuestAgentNetworkInterfaces(r.Context(), node, vmid)
+		if err != nil {
+			writeErrorMsg(w, http.StatusBadGateway, "guest agent unavailable — install qemu-guest-agent and enable it in this VM's Options")
+			return
+		}
+	case "lxc":
+		interfaces, err = client.LXCInterfaces(r.Context(), node, vmid)
+		if err != nil {
+			s.writeError(w, http.StatusBadGateway, err)
+			return
+		}
+	default:
+		writeErrorMsg(w, http.StatusBadRequest, "unknown guest type")
 		return
 	}
 	writeJSON(w, http.StatusOK, interfaces)
