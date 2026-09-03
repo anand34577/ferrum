@@ -21,10 +21,8 @@ export function Card({ className, rail, interactive, style, ...props }: CardProp
   return (
     <div
       className={cn(
-        "relative rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] shadow-card transition-all duration-200",
-        "dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),0_1px_3px_rgba(0,0,0,0.4)]",
-        interactive &&
-          "cursor-pointer hover:border-[var(--border-strong)] hover:shadow-md dark:hover:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08),0_8px_24px_rgba(0,0,0,0.6)]",
+        "card-surface relative rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] shadow-card transition-all duration-200",
+        interactive && "cursor-pointer hover:border-[var(--border-strong)] hover:shadow-[var(--card-shadow-hover)]",
         className,
       )}
       style={rail ? { background: railTint[rail], ...style } : style}

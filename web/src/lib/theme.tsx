@@ -17,7 +17,28 @@ export type Theme = "light" | "dark"
 export type Accent = "oxide" | "azure" | "verdant" | "violet" | "slate"
 /** Whole-app visual register, orthogonal to light/dark and accent — see the
  * "Look-and-feel presets" block in index.css for what each one repaints. */
-export type Look = "enterprise" | "proxmox" | "terminal"
+export type Look =
+  | "enterprise"
+  | "proxmox"
+  | "terminal"
+  | "glassFlightDeck"
+  | "midnight"
+  | "paper"
+  | "glassmorphism"
+  | "neumorphism"
+  | "brutalist"
+
+const KNOWN_LOOKS: Look[] = [
+  "enterprise",
+  "proxmox",
+  "terminal",
+  "glassFlightDeck",
+  "midnight",
+  "paper",
+  "glassmorphism",
+  "neumorphism",
+  "brutalist",
+]
 
 const THEME_KEY = "ferrum-theme"
 const ACCENT_KEY = "ferrum-accent"
@@ -55,7 +76,7 @@ function cachedAccent(): Accent {
 
 function cachedLook(): Look {
   const stored = localStorage.getItem(LOOK_KEY)
-  return stored === "proxmox" || stored === "terminal" ? stored : "enterprise"
+  return (KNOWN_LOOKS as string[]).includes(stored ?? "") ? (stored as Look) : "enterprise"
 }
 
 const osDarkQuery = () => window.matchMedia("(prefers-color-scheme: dark)")
@@ -103,8 +124,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       localStorage.setItem(ACCENT_KEY, serverAccent)
     }
     const serverLook = prefsQuery.data?.look
-    const knownLooks: Look[] = ["enterprise", "proxmox", "terminal"]
-    if (serverLook && knownLooks.includes(serverLook) && serverLook !== lookRef.current) {
+    if (serverLook && KNOWN_LOOKS.includes(serverLook) && serverLook !== lookRef.current) {
       setLookState(serverLook)
       localStorage.setItem(LOOK_KEY, serverLook)
     }
