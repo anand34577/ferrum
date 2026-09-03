@@ -17,6 +17,8 @@ interface OIDCSettings {
   clientId: string
   redirectUrl: string
   allowAutoProvision: boolean
+  singleLogout: boolean
+  postLogoutRedirectUrl?: string
   hasSecret: boolean
 }
 
@@ -73,6 +75,7 @@ function OIDCSettingsForm({ initial }: { initial: OIDCSettings }) {
         clientId: form.clientId,
         redirectUrl: form.redirectUrl,
         allowAutoProvision: form.allowAutoProvision,
+        singleLogout: form.singleLogout,
         // Omit entirely when blank — the server keeps the stored secret.
         ...(form.clientSecret ? { clientSecret: form.clientSecret } : {}),
       }),
@@ -102,6 +105,34 @@ function OIDCSettingsForm({ initial }: { initial: OIDCSettings }) {
           </p>
         </div>
         <Switch checked={form.allowAutoProvision} onCheckedChange={(v) => setForm({ ...form, allowAutoProvision: v })} />
+      </div>
+
+      <div className="rounded-md border border-[var(--border)] px-3 py-2.5">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium">Also sign out at the identity provider (Single Logout)</p>
+            <p className="text-xs text-[var(--text-muted)]">
+              Requires registering the URL below with your provider first — turning this on before doing so breaks sign-out
+              (the provider rejects the redirect with "invalid_redirect_uri").
+            </p>
+          </div>
+          <Switch checked={form.singleLogout} onCheckedChange={(v) => setForm({ ...form, singleLogout: v })} />
+        </div>
+        {form.postLogoutRedirectUrl && (
+          <div className="mt-2.5 flex items-center gap-2">
+            <code className="min-w-0 flex-1 truncate rounded-sm border border-[var(--border)] bg-[var(--bg-muted)] px-2 py-1 text-[11px]">
+              {form.postLogoutRedirectUrl}
+            </code>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => navigator.clipboard.writeText(form.postLogoutRedirectUrl!).then(() => toast.success("Copied"))}
+            >
+              Copy
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

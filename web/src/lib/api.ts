@@ -441,6 +441,39 @@ export interface Storage {
   avail?: number
 }
 
+// Mirrors pve.Disk (internal/pve/disks.go).
+export interface Disk {
+  devpath: string
+  model?: string
+  serial?: string
+  vendor?: string
+  size: number
+  type: string // "hdd" | "ssd" | "usb" | "unknown"
+  rpm?: number
+  wearout?: number // SSD/NVMe life remaining, percent — absent for HDDs
+  health?: string // "PASSED" | "FAILED" | "UNKNOWN"
+  used?: string // what's using it: "LVM", "ZFS", "partitions", "" (unused)
+  wwn?: string
+}
+
+// Mirrors pve.SmartAttribute / pve.SmartData (internal/pve/disks.go).
+export interface SmartAttribute {
+  id?: number
+  name: string
+  value?: string
+  worst?: string
+  threshold?: string
+  raw?: string
+  flags?: string
+  fail?: string
+}
+export interface SmartData {
+  type: string
+  health?: string
+  attributes?: SmartAttribute[]
+  text?: string
+}
+
 // Mirrors pve.StorageContentItem (internal/pve/storage.go).
 export interface StorageContentItem {
   volid: string

@@ -30,6 +30,16 @@ type OIDCConfig struct {
 	// Service.FindOrCreateOIDCUser and ErrOIDCUserNotProvisioned. An admin
 	// who wants SSO restricted to pre-existing accounts turns this off.
 	AllowAutoProvision bool
+	// SingleLogout opts in to RP-Initiated Logout (also ending the session
+	// at the identity provider on sign-out) — see EndSessionURL. Defaults
+	// off: it requires the admin to have registered Ferrum's post-logout
+	// redirect URL with the provider first (e.g. Keycloak's "Valid post
+	// logout redirect URIs"), which an existing SSO deployment upgrading to
+	// this feature hasn't necessarily done — turning it on unconditionally
+	// would have broken sign-out for them (the provider rejects the
+	// redirect with invalid_redirect_uri, stranding the browser mid-logout)
+	// instead of leaving their working, Ferrum-only sign-out alone.
+	SingleLogout bool
 }
 
 // OIDCClient implements the OpenID Connect authorization-code flow against
@@ -76,6 +86,12 @@ func (c *OIDCClient) DisplayName() string {
 // local account (see OIDCConfig.AllowAutoProvision).
 func (c *OIDCClient) AllowAutoProvision() bool {
 	return c.cfg.AllowAutoProvision
+}
+
+// SingleLogoutEnabled reports whether sign-out should also end the session
+// at the identity provider (see OIDCConfig.SingleLogout).
+func (c *OIDCClient) SingleLogoutEnabled() bool {
+	return c.cfg.SingleLogout
 }
 
 // discoveryTTL bounds how long a cached discovery document is trusted, so a

@@ -5,12 +5,33 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB", "PB"]
+
+/** Which BYTE_UNITS index a value naturally falls into — the unit formatBytes
+ * would pick on its own. Exposed so a chart axis can lock every tick to the
+ * same unit (the axis's own max, not each tick's own magnitude) instead of
+ * every tick picking its own — see formatBytesAtUnit. */
+export function byteUnitIndex(bytes: number): number {
+  if (!bytes) return 0
+  return Math.min(BYTE_UNITS.length - 1, Math.max(0, Math.floor(Math.log(Math.abs(bytes)) / Math.log(1024))))
+}
+
+/** Up to 2 decimal places, trimmed when exact (18 GB, not 18.00 GB) — never
+ * fewer than the precision the value actually needs, capped at 2. */
 export function formatBytes(bytes: number): string {
   if (!bytes) return "0 B"
-  const units = ["B", "KB", "MB", "GB", "TB", "PB"]
-  const i = Math.floor(Math.log(bytes) / Math.log(1024))
-  const value = bytes / 1024 ** i
-  return `${value.toFixed(value >= 10 || i === 0 ? 0 : 1)} ${units[i]}`
+  const i = byteUnitIndex(bytes)
+  return formatBytesAtUnit(bytes, i)
+}
+
+/** formatBytes, but forced to a specific unit (from byteUnitIndex) rather
+ * than picking its own — so every tick on one chart axis reads in the same
+ * unit as the axis's max value, instead of each tick switching units
+ * independently (the "4.7 GB" next to "9.3 GB" next to "1.1 TB" problem). */
+export function formatBytesAtUnit(bytes: number, unitIndex: number): string {
+  const value = bytes / 1024 ** unitIndex
+  // toFixed(2) then re-parse to drop trailing zeros (19.20 -> 19.2, 18.00 -> 18).
+  return `${parseFloat(value.toFixed(2))} ${BYTE_UNITS[unitIndex]}`
 }
 
 export function formatUptime(seconds: number): string {

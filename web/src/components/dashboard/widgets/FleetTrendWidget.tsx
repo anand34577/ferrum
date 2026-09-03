@@ -104,11 +104,11 @@ export function FleetTrendWidget({ settings }: { settings: WidgetSettings }) {
         </div>
         <div className="flex min-w-0 flex-col">
           <p className="mb-1 text-[10px] font-medium text-[var(--text-muted)]">Memory (total in use)</p>
-          <ResourceAreaChart data={data} series={[{ key: "mem", label: "Memory used", color: "var(--chart-2)" }]} yTickFormatter={FORMATTERS.bytes} syncId="fleet-trend" height="100%" />
+          <ResourceAreaChart data={data} series={[{ key: "mem", label: "Memory used", color: "var(--chart-2)" }]} valueKind="bytes" syncId="fleet-trend" height="100%" />
         </div>
         <div className="flex min-w-0 flex-col">
           <p className="mb-1 text-[10px] font-medium text-[var(--text-muted)]">Network throughput (total)</p>
-          <ResourceAreaChart data={data} series={NODE_SERIES.network()} yTickFormatter={FORMATTERS.rate} syncId="fleet-trend" height="100%" showLegend />
+          <ResourceAreaChart data={data} series={NODE_SERIES.network()} valueKind="rate" syncId="fleet-trend" height="100%" showLegend />
         </div>
       </div>
     </div>

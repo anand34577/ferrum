@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"ferrum/internal/auth"
@@ -26,14 +27,18 @@ type oidcRow struct {
 	// local account, or must be refused because no matching account already
 	// exists. Defaults to true (the historical always-on behavior).
 	allowAutoProvision bool
+	// singleLogout: whether sign-out also ends the session at the identity
+	// provider (RP-Initiated Logout). Defaults to false — see
+	// auth.OIDCConfig.SingleLogout for why this is opt-in, not automatic.
+	singleLogout bool
 }
 
 func (s *Server) loadOIDCRow(ctx context.Context) (oidcRow, error) {
 	row := oidcRow{allowAutoProvision: true}
-	var enabled, allowAutoProvision int
+	var enabled, allowAutoProvision, singleLogout int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT enabled, display_name, issuer_url, client_id, client_secret, redirect_url, allow_auto_provision FROM oidc_settings WHERE id = 1`).
-		Scan(&enabled, &row.displayName, &row.issuerURL, &row.clientID, &row.clientSecretEnc, &row.redirectURL, &allowAutoProvision)
+		`SELECT enabled, display_name, issuer_url, client_id, client_secret, redirect_url, allow_auto_provision, single_logout FROM oidc_settings WHERE id = 1`).
+		Scan(&enabled, &row.displayName, &row.issuerURL, &row.clientID, &row.clientSecretEnc, &row.redirectURL, &allowAutoProvision, &singleLogout)
 	if err == sql.ErrNoRows {
 		return oidcRow{allowAutoProvision: true}, nil // no row yet — every field at its zero value, same as a freshly disabled config
 	}
@@ -42,19 +47,20 @@ func (s *Server) loadOIDCRow(ctx context.Context) (oidcRow, error) {
 	}
 	row.enabled = enabled == 1
 	row.allowAutoProvision = allowAutoProvision == 1
+	row.singleLogout = singleLogout == 1
 	return row, nil
 }
 
 func (s *Server) saveOIDCRow(ctx context.Context, row oidcRow) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO oidc_settings (id, enabled, display_name, issuer_url, client_id, client_secret, redirect_url, allow_auto_provision, updated_at)
-		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO oidc_settings (id, enabled, display_name, issuer_url, client_id, client_secret, redirect_url, allow_auto_provision, single_logout, updated_at)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			enabled = excluded.enabled, display_name = excluded.display_name, issuer_url = excluded.issuer_url,
 			client_id = excluded.client_id, client_secret = excluded.client_secret, redirect_url = excluded.redirect_url,
-			allow_auto_provision = excluded.allow_auto_provision, updated_at = excluded.updated_at`,
+			allow_auto_provision = excluded.allow_auto_provision, single_logout = excluded.single_logout, updated_at = excluded.updated_at`,
 		boolToInt(row.enabled), row.displayName, row.issuerURL, row.clientID, row.clientSecretEnc, row.redirectURL,
-		boolToInt(row.allowAutoProvision), time.Now().UTC().Format(time.RFC3339))
+		boolToInt(row.allowAutoProvision), boolToInt(row.singleLogout), time.Now().UTC().Format(time.RFC3339))
 	return err
 }
 
@@ -80,6 +86,7 @@ func (s *Server) applyOIDCRow(row oidcRow) {
 		ClientSecret:       secret,
 		RedirectURL:        row.redirectURL,
 		AllowAutoProvision: row.allowAutoProvision,
+		SingleLogout:       row.singleLogout,
 	}))
 	slog.Info("SSO enabled", "issuer", row.issuerURL)
 }
@@ -91,6 +98,14 @@ type oidcSettingsResponse struct {
 	ClientID           string `json:"clientId"`
 	RedirectURL        string `json:"redirectUrl"`
 	AllowAutoProvision bool   `json:"allowAutoProvision"`
+	SingleLogout       bool   `json:"singleLogout"`
+	// PostLogoutRedirectURL is what Ferrum will ask the provider to send the
+	// browser back to for RP-Initiated Logout — the admin needs to register
+	// this exact URL with the provider (e.g. Keycloak's "Valid post logout
+	// redirect URIs") before turning SingleLogout on, or the provider
+	// refuses the redirect with invalid_redirect_uri. Derived from
+	// RedirectURL, so it's blank until that's set.
+	PostLogoutRedirectURL string `json:"postLogoutRedirectUrl,omitempty"`
 	// HasSecret tells the UI a secret is already stored, without ever
 	// sending the secret itself back down to the browser.
 	HasSecret bool `json:"hasSecret"`
@@ -100,8 +115,22 @@ func toOIDCSettingsResponse(row oidcRow) oidcSettingsResponse {
 	return oidcSettingsResponse{
 		Enabled: row.enabled, DisplayName: row.displayName, IssuerURL: row.issuerURL,
 		ClientID: row.clientID, RedirectURL: row.redirectURL, AllowAutoProvision: row.allowAutoProvision,
+		SingleLogout: row.singleLogout, PostLogoutRedirectURL: postLogoutRedirectURL(row.redirectURL),
 		HasSecret: row.clientSecretEnc != "",
 	}
+}
+
+// postLogoutRedirectURL mirrors auth.OIDCClient's private derivation
+// (callback URL's origin + "/login") so the settings UI can show the admin
+// exactly what to register at the provider without needing a live client.
+func postLogoutRedirectURL(redirectURL string) string {
+	u, err := url.Parse(redirectURL)
+	if err != nil || redirectURL == "" {
+		return ""
+	}
+	u.Path = "/login"
+	u.RawQuery = ""
+	return u.String()
 }
 
 func (s *Server) getOIDCSettings(w http.ResponseWriter, r *http.Request) {
@@ -125,6 +154,7 @@ type oidcSettingsPatch struct {
 	ClientSecret       *string `json:"clientSecret"`
 	RedirectURL        *string `json:"redirectUrl"`
 	AllowAutoProvision *bool   `json:"allowAutoProvision"`
+	SingleLogout       *bool   `json:"singleLogout"`
 }
 
 func (s *Server) putOIDCSettings(w http.ResponseWriter, r *http.Request) {
@@ -162,6 +192,9 @@ func (s *Server) putOIDCSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if patch.AllowAutoProvision != nil {
 		row.allowAutoProvision = *patch.AllowAutoProvision
+	}
+	if patch.SingleLogout != nil {
+		row.singleLogout = *patch.SingleLogout
 	}
 	if patch.Enabled != nil {
 		row.enabled = *patch.Enabled

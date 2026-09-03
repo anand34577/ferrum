@@ -3,24 +3,30 @@ import {
   Background,
   BackgroundVariant,
   Controls,
+  getNodesBounds,
+  getViewportForBounds,
   Handle,
   MiniMap,
   Panel,
   Position,
   ReactFlow,
   useNodesState,
+  useReactFlow,
   type Edge,
   type Node,
   type NodeChange,
   type NodeProps,
 } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
-import { Boxes, Check, KeyRound, Lock, Pencil, Server, ServerCog, Waypoints } from "lucide-react"
+import { toSvg } from "html-to-image"
+import { Boxes, Check, Download, KeyRound, Lock, Magnet, Pencil, Server, ServerCog, Waypoints } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
+import { toast } from "sonner"
 import { api, type ClusterResource, type Connection, type ConnectionInventory } from "@/lib/api"
 import { useTheme } from "@/lib/theme"
 import { cn, formatBytes, formatPercentFine } from "@/lib/utils"
+import { Button } from "@/components/ui/button"
 import { ErrorState } from "@/components/ui/error-state"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusDot } from "@/components/ui/status-dot"
@@ -35,6 +41,8 @@ const STATUS_COLOR: Record<string, string> = {
 const DEFAULT_ROOT_NAME = "Proxmox Servers"
 const ROOT_NAME_KEY = "ferrum-topology-root-name"
 const POSITIONS_KEY = "ferrum-topology-positions"
+const SNAP_KEY = "ferrum-topology-snap"
+const SNAP_GRID: [number, number] = [16, 16] // matches the dot-grid background's `gap`, so a snapped card lands on a visible dot
 
 type PositionMap = Record<string, { x: number; y: number }>
 
@@ -266,6 +274,56 @@ const nodeTypes = { root: RootNode, connection: ConnectionNode, pveNode: PveNode
 
 type FlowNode = Node<Record<string, unknown>>
 
+/** Exports the current diagram as a standalone SVG, sized and framed to fit
+ * every node regardless of the on-screen pan/zoom — not a screenshot of
+ * whatever's currently in the viewport. Rendered via html-to-image's toSvg
+ * (embeds the node cards' real HTML/CSS as an SVG foreignObject), the
+ * approach React Flow's own docs use for image export, since a hand-rolled
+ * DOM→SVG serializer would just be reimplementing it worse. Must render as
+ * a child of <ReactFlow> — useReactFlow() only resolves inside that tree. */
+function ExportSvgButton() {
+  const { getNodes } = useReactFlow()
+
+  async function exportSvg() {
+    const nodes = getNodes()
+    if (nodes.length === 0) return
+    const viewportEl = document.querySelector<HTMLElement>(".react-flow__viewport")
+    if (!viewportEl) return
+
+    const bounds = getNodesBounds(nodes)
+    const padding = 60
+    const width = Math.ceil(bounds.width) + padding * 2
+    const height = Math.ceil(bounds.height) + padding * 2
+    const transform = getViewportForBounds(bounds, width, height, 0.1, 2, padding / Math.max(width, height))
+
+    const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#ffffff"
+    try {
+      const dataUrl = await toSvg(viewportEl, {
+        backgroundColor: bg,
+        width,
+        height,
+        style: {
+          width: `${width}px`,
+          height: `${height}px`,
+          transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.zoom})`,
+        },
+      })
+      const a = document.createElement("a")
+      a.href = dataUrl
+      a.download = `ferrum-topology-${new Date().toISOString().slice(0, 10)}.svg`
+      a.click()
+    } catch {
+      toast.error("Couldn't export the topology as SVG")
+    }
+  }
+
+  return (
+    <Button type="button" size="sm" variant="outline" onClick={() => void exportSvg()}>
+      <Download className="h-3.5 w-3.5" /> Export SVG
+    </Button>
+  )
+}
+
 /** MiniMap colors can't use CSS variables — @xyflow applies them as SVG
  * presentation attributes, where var() is invalid — so the live token values
  * are resolved once per theme instead of duplicating them as hardcoded
@@ -288,6 +346,7 @@ export function TopologyPage() {
   // Dragged positions, persisted across reloads. State (not a ref) so the
   // graph rebuild sees them and React's compiler can reason about renders.
   const [savedPositions, setSavedPositions] = useState<PositionMap>(() => loadPositions())
+  const [snapEnabled, setSnapEnabled] = useState(() => localStorage.getItem(SNAP_KEY) === "1")
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["inventory"],
@@ -366,6 +425,8 @@ export function TopologyPage() {
           fitView
           fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
           proOptions={{ hideAttribution: true }}
+          snapToGrid={snapEnabled}
+          snapGrid={SNAP_GRID}
           onNodeClick={(_, node) => {
             if (node.type === "pveNode" && node.data.connId && node.data.nodeName) {
               navigate(`/nodes/${node.data.connId}/${node.data.nodeName}`)
@@ -381,6 +442,26 @@ export function TopologyPage() {
             nodeColor={(n) => mmColors.node[(n.type as string) ?? ""] ?? mmColors.fallback}
             maskColor={mmColors.mask}
           />
+          <Panel position="top-right" className="!m-2 flex items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant={snapEnabled ? "default" : "outline"}
+              title={snapEnabled ? "Snap to grid: on" : "Snap to grid: off"}
+              onClick={() => {
+                const next = !snapEnabled
+                setSnapEnabled(next)
+                try {
+                  localStorage.setItem(SNAP_KEY, next ? "1" : "0")
+                } catch {
+                  // storage blocked — the toggle still works for this session
+                }
+              }}
+            >
+              <Magnet className="h-3.5 w-3.5" /> Snap
+            </Button>
+            <ExportSvgButton />
+          </Panel>
           {isError && (
             <Panel position="top-center">
               <ErrorState title="Couldn't load your fleet topology" onRetry={refetch} />

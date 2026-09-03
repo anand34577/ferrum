@@ -236,6 +236,9 @@ func (s *Server) Router() http.Handler {
 						r.Get("/storage/{storage}/content", s.storageContent)
 						r.Delete("/storage/{storage}/content/{volid}", s.deleteStorageContent)
 
+						r.Get("/disks", s.nodeDisks)
+						r.Get("/disks/smart", s.diskSMART)
+
 						r.Get("/apt/updates", s.aptUpdates)
 						r.Post("/apt/refresh", s.aptRefresh)
 						r.Post("/apt/upgrade", s.aptUpgrade)

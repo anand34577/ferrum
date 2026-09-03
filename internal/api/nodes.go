@@ -25,6 +25,39 @@ func (s *Server) nodeStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, status)
 }
 
+func (s *Server) nodeDisks(w http.ResponseWriter, r *http.Request) {
+	client, err := s.clientFor(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	disks, err := client.NodeDisks(r.Context(), chi.URLParam(r, "node"))
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, disks)
+}
+
+func (s *Server) diskSMART(w http.ResponseWriter, r *http.Request) {
+	devpath := r.URL.Query().Get("disk")
+	if devpath == "" {
+		writeErrorMsg(w, http.StatusBadRequest, "disk query parameter is required")
+		return
+	}
+	client, err := s.clientFor(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	smart, err := client.DiskSMART(r.Context(), chi.URLParam(r, "node"), devpath)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, smart)
+}
+
 func (s *Server) rebootNode(w http.ResponseWriter, r *http.Request) {
 	node := chi.URLParam(r, "node")
 	client, err := s.clientFor(r.Context(), chi.URLParam(r, "id"))

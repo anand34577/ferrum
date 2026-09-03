@@ -1,5 +1,6 @@
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
-import { formatRRDTick, formatRRDTooltip } from "@/lib/utils"
+import { byteUnitIndex, formatBytesAtUnit, formatRRDTick, formatRRDTooltip } from "@/lib/utils"
+import { computeNiceScale } from "@/lib/niceScale"
 
 export interface ChartSeries {
   key: string
@@ -18,15 +19,23 @@ interface ResourceAreaChartProps {
   /** Fixed pixel height, or "100%" to fill the parent's height (the parent
    * must have a definite height — e.g. a widget body). */
   height?: number | "100%"
-  /** Formats Y axis ticks — without it byte-valued axes render as 1.6e+10. */
+  /** Formats Y axis ticks — without it byte-valued axes render as 1.6e+10.
+   * Ignored when valueKind is set — see valueKind. */
   yTickFormatter?: (v: number) => string
-  /** Pin the Y range when the unit implies one, e.g. [0, 100] for percents. */
+  /** Pin the Y range when the unit implies one, e.g. [0, 100] for percents.
+   * Ignored when valueKind is set — see valueKind. */
   yDomain?: [number | "auto" | "dataMin", number | "auto" | "dataMax"]
   showLegend?: boolean
   /** Set the same syncId on several charts to align their hover crosshairs. */
   syncId?: string
   /** Force integer Y ticks for count-valued series (load average, guests). */
   allowDecimals?: boolean
+  /** "bytes" or "rate" (bytes/sec) computes a rounded axis scale (0/5/10/20
+   * GB, never 0/4.7/9.3/18.6 GB) and locks every tick — and the tooltip —
+   * to one consistent unit derived from the axis's own max, instead of
+   * each value picking its own unit independently. Supersedes
+   * yTickFormatter/yDomain. */
+  valueKind?: "bytes" | "rate"
 }
 
 function TooltipContent({
@@ -80,12 +89,40 @@ export function ResourceAreaChart({
   showLegend = false,
   syncId,
   allowDecimals = true,
+  valueKind,
 }: ResourceAreaChartProps) {
   // X tick granularity follows the visible span: minutes for an hour view,
   // day-hours for a week, dates for a year.
   const times = data.map((d) => d.time as number).filter((t) => typeof t === "number" && t > 0)
   const span = times.length > 1 ? times[times.length - 1] - times[0] : 0
   const tickFormatter = (t: number) => formatRRDTick(t, span)
+
+  // valueKind computes a rounded scale from the data's own max (including
+  // the cf=MAX band's upper bound, when present) and locks every tick to
+  // one unit derived from that rounded max — not each tick's own magnitude,
+  // which is what produced "4.7 GB" next to "9.3 GB" next to "1.1 TB".
+  let effectiveTickFormatter = yTickFormatter
+  let effectiveDomain = yDomain
+  let niceTicksList: number[] | undefined
+  if (valueKind) {
+    let dataMax = 0
+    for (const row of data) {
+      for (const s of series) {
+        const v = row[s.key]
+        if (typeof v === "number" && v > dataMax) dataMax = v
+        const band = row[`${s.key}Band`]
+        if (Array.isArray(band)) {
+          const [, bandMax] = band as [number, number]
+          if (typeof bandMax === "number" && bandMax > dataMax) dataMax = bandMax
+        }
+      }
+    }
+    const scale = computeNiceScale(dataMax)
+    const unitIndex = byteUnitIndex(scale.max)
+    effectiveTickFormatter = (v: number) => (valueKind === "rate" ? `${formatBytesAtUnit(v, unitIndex)}/s` : formatBytesAtUnit(v, unitIndex))
+    effectiveDomain = [scale.min, scale.max]
+    niceTicksList = scale.ticks
+  }
 
   return (
     <div className={height === "100%" ? "flex h-full min-h-0 flex-col" : undefined}>
@@ -121,11 +158,12 @@ export function ResourceAreaChart({
             axisLine={false}
             tickLine={false}
             width={56}
-            tickFormatter={yTickFormatter}
-            domain={yDomain}
+            tickFormatter={effectiveTickFormatter}
+            domain={effectiveDomain}
+            ticks={niceTicksList}
             allowDecimals={allowDecimals}
           />
-          <Tooltip content={<TooltipContent series={series} fallbackFormatter={yTickFormatter} />} cursor={{ stroke: "var(--border-strong)", strokeDasharray: "3 3" }} />
+          <Tooltip content={<TooltipContent series={series} fallbackFormatter={effectiveTickFormatter} />} cursor={{ stroke: "var(--border-strong)", strokeDasharray: "3 3" }} />
           {/* Peak envelopes first so the average line and its gradient sit on top. */}
           {series
             .filter((s) => s.band)
