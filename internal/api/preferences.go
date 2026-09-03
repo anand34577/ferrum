@@ -39,6 +39,9 @@ var validLooks = map[string]bool{
 	"glassFlightDeck": true,
 	"midnight":        true,
 	"paper":           true,
+	"glassmorphism":   true,
+	"neumorphism":     true,
+	"brutalist":       true,
 }
 
 func (s *Server) currentPreferences(r *http.Request, userID string) (userPreferences, error) {
@@ -104,7 +107,7 @@ func (s *Server) putPreferences(w http.ResponseWriter, r *http.Request) {
 	}
 	if patch.Look != nil {
 		if !validLooks[*patch.Look] {
-			writeErrorMsg(w, http.StatusBadRequest, "look must be one of: enterprise, proxmox, terminal, glassFlightDeck, midnight, paper")
+			writeErrorMsg(w, http.StatusBadRequest, "look must be one of: enterprise, proxmox, terminal, glassFlightDeck, midnight, paper, glassmorphism, neumorphism, brutalist")
 			return
 		}
 		current.Look = *patch.Look

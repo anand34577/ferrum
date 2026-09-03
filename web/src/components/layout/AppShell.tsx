@@ -144,12 +144,16 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       {/* Desktop sidebar — fixed dark instrument rail */}
       <aside
-        className={cn(
-          "hidden shrink-0 flex-col bg-[var(--sidebar-bg)] transition-[width] duration-200 md:flex",
-          collapsed ? "md:w-16" : "md:w-60",
-        )}
+        className="sidebar-shell hidden shrink-0 flex-col bg-[var(--sidebar-bg)] transition-[width] duration-200 md:flex"
+        style={{
+          width: collapsed ? "var(--sidebar-width-collapsed)" : "var(--sidebar-width)",
+          borderRight: "var(--sidebar-border-width) solid var(--sidebar-border)",
+        }}
       >
-        <div className={cn("flex h-14 shrink-0 items-center gap-2.5 border-b border-[var(--sidebar-border)]", collapsed ? "justify-center px-2" : "px-4")}>
+        <div
+          className={cn("flex shrink-0 items-center gap-2.5 border-b border-[var(--sidebar-border)]", collapsed ? "justify-center px-2" : "px-4")}
+          style={{ height: "var(--header-height)" }}
+        >
           <BrandMark />
           {!collapsed && (
             <div className="min-w-0">
@@ -175,7 +179,10 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <MasterCautionBar />
-        <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-[var(--border)] bg-[var(--bg-surface)]/80 px-4 backdrop-blur-xl">
+        <header
+          className="app-header sticky top-0 z-30 flex shrink-0 items-center justify-between gap-2 border-b border-[var(--border)] bg-[var(--bg-surface)]/80 px-4 [backdrop-filter:var(--header-blur)]"
+          style={{ height: "var(--header-height)" }}
+        >
           <div className="flex min-w-0 items-center gap-2">
             <button
               onClick={() => setMobileOpen(true)}

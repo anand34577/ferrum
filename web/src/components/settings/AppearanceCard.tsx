@@ -54,6 +54,9 @@ const LOOKS: { value: Look; label: string; hint: string }[] = [
   { value: "glassFlightDeck", label: "Glass Flight Deck", hint: "Aviation instrument panel — caution colors, condensed caps, corner brackets" },
   { value: "midnight", label: "Midnight", hint: "Modern dev-tool dark — cool slate ground, soft glow, comfortable rounded" },
   { value: "paper", label: "Paper", hint: "Ultra-minimal and warm — off-white ground, zero shadow, hairline borders" },
+  { value: "glassmorphism", label: "Glassmorphism", hint: "Frosted layered panels — translucent surfaces, blur, soft gradient glow" },
+  { value: "neumorphism", label: "Neumorphism", hint: "Soft extruded surfaces — tactile dual shadows, no hard borders" },
+  { value: "brutalist", label: "Brutalist", hint: "Raw and high-contrast — thick borders, hard offset shadows, zero radius" },
 ]
 
 /** A real, live mockup, not a static illustration: scoping [data-look] to

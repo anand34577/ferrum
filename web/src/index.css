@@ -141,6 +141,10 @@
   --elev-md: 0 2px 4px rgb(16 20 26 / 0.05), 0 4px 12px rgb(16 20 26 / 0.08);
   --elev-lg: 0 4px 8px rgb(16 20 26 / 0.06), 0 12px 32px rgb(16 20 26 / 0.12);
   --elev-card: 0 1px 3px rgb(16 20 26 / 0.05);
+  /* Card hover state as its own token (not just shadow-md) so a look can
+     give hover a completely different treatment (glow, lift, none) instead
+     of only scaling the same shadow up. */
+  --card-shadow-hover: var(--elev-md);
 
   /* A small categorical palette for charts with more than one series,
      kept separate from the semantic status colors above. */
@@ -164,6 +168,17 @@
   /* Body-background texture, off by default (plain flat --bg) — only the
      Glass Flight Deck look below turns this into a blueprint grid. */
   --page-grid: none;
+
+  /* Structural knobs — AppShell reads these via inline style (not Tailwind
+     classes) so a look can genuinely change the chrome's proportions, not
+     just its colors. Values below match the pre-existing hardcoded classes
+     (w-60/w-16/h-14) so "enterprise" (the baseline) is pixel-identical to
+     before this existed. */
+  --sidebar-width: 15rem;
+  --sidebar-width-collapsed: 4rem;
+  --header-height: 3.5rem;
+  --sidebar-border-width: 0px;
+  --header-blur: blur(12px);
 }
 
 .dark {
@@ -192,7 +207,8 @@
   --elev-sm: 0 1px 2px rgb(0 0 0 / 0.45), 0 1px 3px rgb(0 0 0 / 0.35);
   --elev-md: 0 2px 4px rgb(0 0 0 / 0.4), 0 4px 12px rgb(0 0 0 / 0.45);
   --elev-lg: 0 4px 8px rgb(0 0 0 / 0.4), 0 12px 32px rgb(0 0 0 / 0.55);
-  --elev-card: 0 1px 3px rgb(0 0 0 / 0.4);
+  --elev-card: inset 0 1px 0 0 rgb(255 255 255 / 0.05), 0 1px 3px rgb(0 0 0 / 0.4);
+  --card-shadow-hover: inset 0 1px 0 0 rgb(255 255 255 / 0.08), 0 8px 24px rgb(0 0 0 / 0.6);
 
   --chart-1: #d97a49;
   --chart-2: #3fa19e;
@@ -263,7 +279,7 @@
  * it never needs a component-level conditional, with two narrow, disclosed
  * exceptions: MasterCautionBar's persistent-vs-reactive behavior, and the
  * .panel-label / .corner-frame utilities' look-gated visual payload just
- * below the six blocks. "enterprise" needs no block: it's the :root/.dark
+ * below the nine blocks. "enterprise" needs no block: it's the :root/.dark
  * baseline above, so it can never drift when a new look is added.
  * ========================================================================== */
 
@@ -287,6 +303,7 @@
   --elev-lg: none;
   --elev-card: none;
   --page-grid: none;
+  --sidebar-border-width: 1px;
 }
 [data-look="proxmox"]:not(.dark) {
   --bg: #dde1e6;
@@ -325,6 +342,8 @@
   --elev-lg: none;
   --elev-card: none;
   --page-grid: none;
+  --sidebar-border-width: 1px;
+  --header-blur: none;
 }
 [data-look="terminal"]:not(.dark) {
   --bg: #f3f4f6;
@@ -350,7 +369,7 @@
    ground, a strict amber/red/green/cyan caution hierarchy, condensed Oswald
    caps for every label, targeting-reticle corner brackets on instrument
    tiles, and a persistent master-caution nameplate (see the JS-level
-   exception in MasterCautionBar.tsx). The most maximalist of the six —
+   exception in MasterCautionBar.tsx). The most maximalist of the nine —
    opt-in, not a leftover baseline. */
 [data-look="glassFlightDeck"] {
   --font-display: "Oswald", "Arial Narrow", sans-serif;
@@ -494,6 +513,230 @@
   --text-muted: #ac9f89;
   --text-faint: #ac9f89;
   --track: #362f24;
+}
+
+/* Glassmorphism — frosted, layered, airy: soft blurred color blobs behind
+   translucent panels (repurposing --page-grid, normally a hard blueprint
+   grid, as a gradient wash instead — same hook, opposite payload). Cards and
+   the sidebar itself pick up backdrop-filter blur via .card-surface /
+   .sidebar-shell, so "glass" isn't just a color, it visibly blurs whatever
+   scrolls underneath. */
+[data-look="glassmorphism"] {
+  --font-display: "Space Grotesk", "Inter", sans-serif;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1.125rem;
+  --radius-xl: 1.5rem;
+  --header-blur: blur(20px);
+  --sidebar-border-width: 1px;
+}
+[data-look="glassmorphism"]:not(.dark) {
+  --bg: #eef1fb;
+  --bg-surface: #ffffff;
+  --bg-surface-hover: #f4f6fd;
+  --bg-elevated: #ffffff;
+  --bg-muted: #e6eaf7;
+  --border: color-mix(in oklab, #ffffff 55%, #b9c2e6);
+  --border-strong: color-mix(in oklab, #ffffff 25%, #a6b0dc);
+  --sidebar-bg: color-mix(in oklab, #dfe4f8 55%, transparent);
+  --sidebar-border: color-mix(in oklab, #ffffff 50%, #b9c2e6);
+  --page-grid: radial-gradient(circle at 12% 8%, color-mix(in oklab, var(--color-brand-400) 30%, transparent), transparent 42%),
+    radial-gradient(circle at 88% 18%, color-mix(in oklab, #7aa2ff 32%, transparent), transparent 45%),
+    radial-gradient(circle at 30% 92%, color-mix(in oklab, #b98af0 28%, transparent), transparent 45%);
+  --elev-xs: 0 1px 2px rgb(60 70 120 / 0.06);
+  --elev-sm: 0 1px 3px rgb(60 70 120 / 0.08), 0 1px 2px rgb(60 70 120 / 0.06);
+  --elev-md: 0 8px 24px rgb(60 70 120 / 0.12);
+  --elev-lg: 0 16px 40px rgb(60 70 120 / 0.16);
+  --elev-card: 0 1px 0 0 rgb(255 255 255 / 0.6) inset, 0 8px 24px rgb(60 70 120 / 0.1);
+  --card-shadow-hover: 0 1px 0 0 rgb(255 255 255 / 0.7) inset, 0 16px 40px rgb(60 70 120 / 0.16);
+}
+[data-look="glassmorphism"].dark {
+  --bg: #0c0f1c;
+  --bg-surface: #141a2e;
+  --bg-surface-hover: #1a2138;
+  --bg-elevated: #171d33;
+  --bg-muted: #161c30;
+  --border: color-mix(in oklab, #6d7ecf 30%, transparent);
+  --border-strong: color-mix(in oklab, #6d7ecf 45%, transparent);
+  --text: #eef0fb;
+  --text-muted: #9aa3cc;
+  --text-faint: #9aa3cc;
+  --track: #262e4d;
+  --sidebar-bg: color-mix(in oklab, #171d33 60%, transparent);
+  --sidebar-border: color-mix(in oklab, #6d7ecf 25%, transparent);
+  --page-grid: radial-gradient(circle at 10% 10%, color-mix(in oklab, var(--color-brand-500) 22%, transparent), transparent 42%),
+    radial-gradient(circle at 90% 15%, color-mix(in oklab, #5468d6 26%, transparent), transparent 45%),
+    radial-gradient(circle at 25% 95%, color-mix(in oklab, #8f5fd6 20%, transparent), transparent 45%);
+  --elev-card: 0 1px 0 0 rgb(255 255 255 / 0.05) inset, 0 8px 28px rgb(0 0 10 / 0.55);
+  --card-shadow-hover: 0 1px 0 0 rgb(255 255 255 / 0.08) inset, 0 16px 44px rgb(0 0 10 / 0.65);
+}
+
+/* Neumorphism — soft, tactile, monochrome: surfaces are the *same* color as
+   the ground and separate purely through light/dark shadow pairs, never a
+   border. Cards, and the sidebar (via .card-surface / .sidebar-shell), drop
+   their border entirely — --border below matches --bg-surface so any
+   hairline that does render (inputs, dividers) stays nearly invisible
+   rather than fighting the shadow-only language. */
+[data-look="neumorphism"] {
+  --font-display: "Inter", sans-serif;
+  --radius-sm: 0.625rem;
+  --radius-md: 0.875rem;
+  --radius-lg: 1.25rem;
+  --radius-xl: 1.75rem;
+  --page-grid: none;
+}
+[data-look="neumorphism"]:not(.dark) {
+  --bg: #e6e9ef;
+  --bg-surface: #e6e9ef;
+  --bg-surface-hover: #eaedf3;
+  --bg-elevated: #e6e9ef;
+  --bg-muted: #dde1e9;
+  --border: #e6e9ef;
+  --border-strong: #cfd4de;
+  --sidebar-bg: #e6e9ef;
+  --sidebar-border: #e6e9ef;
+  --sidebar-text: #33384a;
+  --sidebar-text-muted: #6b7284;
+  --sidebar-active-bg: #dde1e9;
+  --sidebar-active-text: #14171c;
+  --track: #d3d8e1;
+  --elev-xs: 2px 2px 5px rgb(163 172 196 / 0.35), -2px -2px 5px rgb(255 255 255 / 0.75);
+  --elev-sm: 3px 3px 8px rgb(163 172 196 / 0.4), -3px -3px 8px rgb(255 255 255 / 0.8);
+  --elev-md: 6px 6px 14px rgb(163 172 196 / 0.45), -6px -6px 14px rgb(255 255 255 / 0.85);
+  --elev-lg: 9px 9px 22px rgb(163 172 196 / 0.5), -9px -9px 22px rgb(255 255 255 / 0.9);
+  --elev-card: 6px 6px 14px rgb(163 172 196 / 0.4), -6px -6px 14px rgb(255 255 255 / 0.85);
+  --card-shadow-hover: 8px 8px 18px rgb(163 172 196 / 0.45), -8px -8px 18px rgb(255 255 255 / 0.9);
+}
+[data-look="neumorphism"].dark {
+  --bg: #262a33;
+  --bg-surface: #262a33;
+  --bg-surface-hover: #2b2f39;
+  --bg-elevated: #262a33;
+  --bg-muted: #21252d;
+  --border: #262a33;
+  --border-strong: #363c48;
+  --text: #e9ebf0;
+  --text-muted: #9297a3;
+  --text-faint: #9297a3;
+  --sidebar-bg: #262a33;
+  --sidebar-border: #262a33;
+  --sidebar-text: #e9ebf0;
+  --sidebar-text-muted: #9297a3;
+  --sidebar-active-bg: #2b2f39;
+  --sidebar-active-text: #ffffff;
+  --track: #1f232a;
+  --elev-xs: 2px 2px 5px rgb(0 0 0 / 0.45), -2px -2px 5px rgb(255 255 255 / 0.04);
+  --elev-sm: 3px 3px 8px rgb(0 0 0 / 0.5), -3px -3px 8px rgb(255 255 255 / 0.05);
+  --elev-md: 6px 6px 14px rgb(0 0 0 / 0.55), -6px -6px 14px rgb(255 255 255 / 0.05);
+  --elev-lg: 9px 9px 22px rgb(0 0 0 / 0.6), -9px -9px 22px rgb(255 255 255 / 0.06);
+  --elev-card: 6px 6px 14px rgb(0 0 0 / 0.5), -6px -6px 14px rgb(255 255 255 / 0.05);
+  --card-shadow-hover: 8px 8px 18px rgb(0 0 0 / 0.55), -8px -8px 18px rgb(255 255 255 / 0.06);
+}
+
+/* Brutalist — raw and high-contrast: pure black hairlines everywhere (thick,
+   not subtle), zero radius, hard offset shadows with no blur at all (a flat
+   drop, not a soft glow), no backdrop blur on the header. The one look
+   that's deliberately loud rather than quiet. */
+[data-look="brutalist"] {
+  --font-display: "Space Grotesk", "Inter", sans-serif;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --header-blur: none;
+  --sidebar-border-width: 3px;
+  --page-grid: none;
+}
+[data-look="brutalist"]:not(.dark) {
+  --bg: #f2f1ec;
+  --bg-surface: #ffffff;
+  --bg-surface-hover: #ececE4;
+  --bg-elevated: #ffffff;
+  --bg-muted: #e6e4da;
+  --border: #14171c;
+  --border-strong: #000000;
+  --text: #0a0a0a;
+  --text-muted: #33342f;
+  --text-faint: #46473f;
+  --track: #d8d6c9;
+  --status-ok: #0f7a2e;
+  --status-warn: #a85b00;
+  --status-error: #b3121f;
+  --status-info: #164a9c;
+  --sidebar-bg: #0a0a0a;
+  --sidebar-border: #000000;
+  --elev-xs: 2px 2px 0 0 #14171c;
+  --elev-sm: 3px 3px 0 0 #14171c;
+  --elev-md: 5px 5px 0 0 #14171c;
+  --elev-lg: 8px 8px 0 0 #14171c;
+  --elev-card: 4px 4px 0 0 #14171c;
+  --card-shadow-hover: 6px 6px 0 0 #14171c;
+}
+[data-look="brutalist"].dark {
+  --bg: #121212;
+  --bg-surface: #1a1a1a;
+  --bg-surface-hover: #212121;
+  --bg-elevated: #1a1a1a;
+  --bg-muted: #1f1f1f;
+  --border: #f2f1ec;
+  --border-strong: #ffffff;
+  --text: #f7f6f0;
+  --text-muted: #c9c8bf;
+  --text-faint: #b3b2a8;
+  --track: #2c2c2c;
+  --status-ok: #4fdc7e;
+  --status-warn: #ffb020;
+  --status-error: #ff4d4d;
+  --status-info: #5aa6ff;
+  --sidebar-bg: #000000;
+  --sidebar-border: #f2f1ec;
+  --elev-xs: 2px 2px 0 0 #f2f1ec;
+  --elev-sm: 3px 3px 0 0 #f2f1ec;
+  --elev-md: 5px 5px 0 0 #f2f1ec;
+  --elev-lg: 8px 8px 0 0 #f2f1ec;
+  --elev-card: 4px 4px 0 0 #f2f1ec;
+  --card-shadow-hover: 6px 6px 0 0 #f2f1ec;
+}
+
+/* Glassmorphism's actual "glass": cards and the sidebar are the only two
+   surfaces given translucency + blur — everywhere else (inputs, dropdowns,
+   dense tables) stays opaque on purpose, so frosted panels never fight
+   legibility. */
+[data-look="glassmorphism"] .card-surface {
+  background: color-mix(in oklab, var(--bg-surface) 70%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+[data-look="glassmorphism"] .sidebar-shell {
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+/* Brutalist's cards get a visibly thick hairline, not just a dark one — a
+   1px border reads as "restrained" no matter the color. */
+[data-look="brutalist"] .card-surface {
+  border-width: 2px;
+}
+
+/* The active/hover sidebar nav pill: a hard 1px box border is Enterprise's
+   signature, not universal. Glass and neumorphic surfaces never draw boxes
+   around anything — they separate with translucency or shadow instead — so
+   both drop the border and pick up a look-native indicator. Brutalist goes
+   the other way and thickens it, since a box is exactly its idiom. */
+[data-look="glassmorphism"] .nav-item-active {
+  border-color: transparent;
+  background: color-mix(in oklab, var(--color-brand-400) 22%, transparent);
+  backdrop-filter: blur(6px);
+}
+[data-look="neumorphism"] .nav-item-active {
+  border-color: transparent;
+  box-shadow: inset 2px 2px 5px rgb(0 0 0 / 0.35), inset -2px -2px 5px rgb(255 255 255 / 0.06);
+}
+[data-look="neumorphism"]:not(.dark) .nav-item-active {
+  box-shadow: inset 2px 2px 5px rgb(0 0 0 / 0.45), inset -2px -2px 5px rgb(255 255 255 / 0.08);
+}
+[data-look="brutalist"] .nav-item-active {
+  border-width: 2px;
 }
 
 * {

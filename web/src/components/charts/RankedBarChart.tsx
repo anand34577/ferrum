@@ -1,6 +1,6 @@
 import { useId } from "react"
 import { Bar, BarChart, Cell, LabelList, Rectangle, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
-import type { BarShapeProps } from "recharts"
+import type { BarShapeProps, LabelProps } from "recharts"
 import { chartTooltip } from "@/components/charts/tooltipTheme"
 
 export interface RankedBarRow {
@@ -39,9 +39,32 @@ export function RankedBarChart<T extends RankedBarRow>({
 }: RankedBarChartProps<T>) {
   const gradId = `ranked-bar-${useId().replace(/:/g, "")}`
 
+  // Recharts' built-in LabelList text wraps onto a second line once the
+  // space between the bar's end and the chart edge gets tight — exactly the
+  // case for the longest bar (it's the whole point of a ranked chart that
+  // one row runs closest to full width). A plain <text> here is never
+  // width-constrained, so it always stays on one line; the generous right
+  // margin below is what keeps it from being clipped instead.
+  const valueLabel = (props: LabelProps) => {
+    const { x, y, width, height, value } = props
+    if (x == null || y == null || width == null || height == null || value == null) return null
+    return (
+      <text
+        x={Number(x) + Number(width) + 6}
+        y={Number(y) + Number(height) / 2}
+        dy={4}
+        fontSize={11}
+        fill="var(--text-muted)"
+        textAnchor="start"
+      >
+        {labelFormatter(Number(value))}
+      </text>
+    )
+  }
+
   return (
     <ResponsiveContainer width="100%" height={Math.max(100, data.length * rowHeight)}>
-      <BarChart data={data} layout="vertical" margin={{ top: 0, right: 40, left: 0, bottom: 0 }}>
+      <BarChart data={data} layout="vertical" margin={{ top: 0, right: 56, left: 0, bottom: 0 }}>
         <defs>
           <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="0">
             <stop offset="0%" stopColor="var(--color-brand-400)" />
@@ -89,7 +112,7 @@ export function RankedBarChart<T extends RankedBarRow>({
           {data.map((row, i) => (
             <Cell key={row.name + i} fill={colorFor?.(row) ?? `url(#${gradId})`} />
           ))}
-          <LabelList dataKey="value" position="right" formatter={(v) => labelFormatter(Number(v))} style={{ fill: "var(--text-muted)", fontSize: 11 }} />
+          <LabelList dataKey="value" content={valueLabel} />
         </Bar>
       </BarChart>
     </ResponsiveContainer>

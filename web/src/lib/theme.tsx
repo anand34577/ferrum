@@ -17,9 +17,28 @@ export type Theme = "light" | "dark"
 export type Accent = "oxide" | "azure" | "verdant" | "violet" | "slate"
 /** Whole-app visual register, orthogonal to light/dark and accent — see the
  * "Look-and-feel presets" block in index.css for what each one repaints. */
-export type Look = "enterprise" | "proxmox" | "terminal" | "glassFlightDeck" | "midnight" | "paper"
+export type Look =
+  | "enterprise"
+  | "proxmox"
+  | "terminal"
+  | "glassFlightDeck"
+  | "midnight"
+  | "paper"
+  | "glassmorphism"
+  | "neumorphism"
+  | "brutalist"
 
-const KNOWN_LOOKS: Look[] = ["enterprise", "proxmox", "terminal", "glassFlightDeck", "midnight", "paper"]
+const KNOWN_LOOKS: Look[] = [
+  "enterprise",
+  "proxmox",
+  "terminal",
+  "glassFlightDeck",
+  "midnight",
+  "paper",
+  "glassmorphism",
+  "neumorphism",
+  "brutalist",
+]
 
 const THEME_KEY = "ferrum-theme"
 const ACCENT_KEY = "ferrum-accent"
