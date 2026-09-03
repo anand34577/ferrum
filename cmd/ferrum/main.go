@@ -136,23 +136,31 @@ func runServer(ctx context.Context, cfg config.Config) {
 		BehindProxy:   cfg.Server.BehindProxy,
 	})
 
-	if cfg.OIDC.Enabled {
-		srv.SetOIDC(auth.NewOIDCClient(auth.OIDCConfig{
-			DisplayName:  cfg.OIDC.DisplayName,
-			IssuerURL:    cfg.OIDC.IssuerURL,
-			ClientID:     cfg.OIDC.ClientID,
-			ClientSecret: cfg.OIDC.ClientSecret,
-			RedirectURL:  cfg.OIDC.RedirectURL,
-		}))
-		slog.Info("SSO enabled", "issuer", cfg.OIDC.IssuerURL)
+	// OIDC and notification (Gotify/SMTP) settings are admin-editable from
+	// the Settings UI and live in the database from here on; config.yaml's
+	// oidc.* block is only ever used to seed that database row on the very
+	// first boot after upgrading, so an existing config.yaml-based deployment
+	// keeps working unchanged.
+	evaluator := poller.NewAlertEvaluator(db, connections.New(db, secretBox))
+	srv.SetAlertEvaluator(evaluator)
+	if err := srv.BootstrapSettings(ctx, cfg.OIDC.Enabled, auth.OIDCConfig{
+		DisplayName:  cfg.OIDC.DisplayName,
+		IssuerURL:    cfg.OIDC.IssuerURL,
+		ClientID:     cfg.OIDC.ClientID,
+		ClientSecret: cfg.OIDC.ClientSecret,
+		RedirectURL:  cfg.OIDC.RedirectURL,
+	}); err != nil {
+		slog.Error("loading OIDC/notification settings", "error", err)
+		os.Exit(1)
 	}
+	evaluator.SetNotifier(srv.Notifier())
 
 	// ctx governs shutdown (process signals normally; the Windows SCM's stop
 	// request when running as a service). The poller derives from it so it
 	// stops — rather than polling through — the graceful-shutdown window.
 	pollerCtx, stopPoller := context.WithCancel(ctx)
 	defer stopPoller()
-	go poller.NewAlertEvaluator(db, connections.New(db, secretBox)).Run(pollerCtx, 60*time.Second)
+	go evaluator.Run(pollerCtx, 60*time.Second)
 
 	distFS, err := web.DistFS()
 	if err != nil {

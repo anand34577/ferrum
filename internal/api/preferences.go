@@ -20,6 +20,13 @@ type userPreferences struct {
 	Accent            string `json:"accent"`
 	Look              string `json:"look"`
 	ActiveDashboardID string `json:"activeDashboardId"`
+	// NotifyEmail opts this account into alert-trigger emails at its own
+	// address (users.email), in addition to whatever the admin's global SMTP
+	// "to" list already sends to — see internal/notify and poller/alerts.go.
+	NotifyEmail bool `json:"notifyEmail"`
+	// LandingPage is the route this user opens on after login; empty means
+	// "use the org-wide default" (default_preferences.landing_page).
+	LandingPage string `json:"landingPage"`
 }
 
 var validThemes = map[string]bool{"light": true, "dark": true, "system": true}
@@ -44,15 +51,43 @@ var validLooks = map[string]bool{
 	"brutalist":       true,
 }
 
+// validLandingPages whitelists the routes a user (or the org-wide default)
+// may land on after login — every top-level nav destination the sidebar
+// itself links to (see web/src/components/layout/AppShell.tsx's navGroups).
+var validLandingPages = map[string]bool{
+	"/": true, "/dashboard": true, "/inventory": true, "/topology": true,
+	"/storage": true, "/pools": true, "/ha": true,
+	"/backups": true, "/firewall": true, "/alerts": true, "/tasks": true,
+}
+
+// currentPreferences reads this user's saved row, falling back to the
+// admin-configured org-wide defaults (default_preferences) for any field
+// they've never set — a brand-new account starts on the org's chosen
+// look/theme/accent/landing page instead of a hardcoded one.
 func (s *Server) currentPreferences(r *http.Request, userID string) (userPreferences, error) {
-	prefs := userPreferences{Theme: "system", Accent: "oxide", Look: "enterprise"}
+	defaults, err := s.loadDefaultPreferencesRow(r.Context())
+	if err != nil {
+		return userPreferences{}, err
+	}
+	prefs := userPreferences{Theme: defaults.theme, Accent: defaults.accent, Look: defaults.look, LandingPage: defaults.landingPage}
+
 	var activeDashboardID sql.NullString
-	err := s.db.QueryRowContext(r.Context(), `SELECT theme, accent, look, active_dashboard_id FROM user_preferences WHERE user_id = ?`, userID).
-		Scan(&prefs.Theme, &prefs.Accent, &prefs.Look, &activeDashboardID)
+	var landingPage sql.NullString
+	var notifyEmail int
+	err = s.db.QueryRowContext(r.Context(),
+		`SELECT theme, accent, look, active_dashboard_id, notify_email, landing_page FROM user_preferences WHERE user_id = ?`, userID).
+		Scan(&prefs.Theme, &prefs.Accent, &prefs.Look, &activeDashboardID, &notifyEmail, &landingPage)
 	if err != nil && err != sql.ErrNoRows {
 		return userPreferences{}, err
 	}
+	if err == sql.ErrNoRows {
+		return prefs, nil // no saved row yet — org defaults (set above) stand as-is
+	}
 	prefs.ActiveDashboardID = activeDashboardID.String
+	prefs.NotifyEmail = notifyEmail == 1
+	if landingPage.Valid && landingPage.String != "" {
+		prefs.LandingPage = landingPage.String
+	}
 	return prefs, nil
 }
 
@@ -75,6 +110,10 @@ type preferencesPatch struct {
 	Accent            *string `json:"accent"`
 	Look              *string `json:"look"`
 	ActiveDashboardID *string `json:"activeDashboardId"`
+	NotifyEmail       *bool   `json:"notifyEmail"`
+	// LandingPage: "" explicitly clears the override (falls back to the org
+	// default), same convention as ActiveDashboardID.
+	LandingPage *string `json:"landingPage"`
 }
 
 func (s *Server) putPreferences(w http.ResponseWriter, r *http.Request) {
@@ -127,14 +166,29 @@ func (s *Server) putPreferences(w http.ResponseWriter, r *http.Request) {
 		}
 		current.ActiveDashboardID = *patch.ActiveDashboardID
 	}
+	if patch.NotifyEmail != nil {
+		current.NotifyEmail = *patch.NotifyEmail
+	}
+	if patch.LandingPage != nil {
+		if *patch.LandingPage != "" && !validLandingPages[*patch.LandingPage] {
+			writeErrorMsg(w, http.StatusBadRequest, "unrecognized landing page")
+			return
+		}
+		current.LandingPage = *patch.LandingPage
+	}
 
 	var activeDashboardID any
 	if current.ActiveDashboardID != "" {
 		activeDashboardID = current.ActiveDashboardID
 	}
-	if _, err := s.db.ExecContext(r.Context(), `INSERT INTO user_preferences (user_id, theme, accent, look, active_dashboard_id, updated_at) VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT (user_id) DO UPDATE SET theme = excluded.theme, accent = excluded.accent, look = excluded.look, active_dashboard_id = excluded.active_dashboard_id, updated_at = excluded.updated_at`,
-		u.ID, current.Theme, current.Accent, current.Look, activeDashboardID, time.Now().UTC().Format(time.RFC3339)); err != nil {
+	var landingPage any
+	if current.LandingPage != "" {
+		landingPage = current.LandingPage
+	}
+	if _, err := s.db.ExecContext(r.Context(), `INSERT INTO user_preferences (user_id, theme, accent, look, active_dashboard_id, notify_email, landing_page, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (user_id) DO UPDATE SET theme = excluded.theme, accent = excluded.accent, look = excluded.look, active_dashboard_id = excluded.active_dashboard_id,
+			notify_email = excluded.notify_email, landing_page = excluded.landing_page, updated_at = excluded.updated_at`,
+		u.ID, current.Theme, current.Accent, current.Look, activeDashboardID, boolToInt(current.NotifyEmail), landingPage, time.Now().UTC().Format(time.RFC3339)); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
 	}

@@ -60,20 +60,22 @@ func randomHex(n int) string {
 // exposing any secret — the login page needs this before the user has
 // authenticated, so it's intentionally not behind requireAuth.
 func (s *Server) oidcConfig(w http.ResponseWriter, r *http.Request) {
-	if s.oidc == nil {
+	oidc := s.getOIDC()
+	if oidc == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "displayName": s.oidc.DisplayName()})
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "displayName": oidc.DisplayName()})
 }
 
 func (s *Server) oidcLogin(w http.ResponseWriter, r *http.Request) {
-	if s.oidc == nil {
+	oidc := s.getOIDC()
+	if oidc == nil {
 		writeErrorMsg(w, http.StatusNotFound, "SSO is not configured")
 		return
 	}
 	state, nonce := newOIDCState()
-	authURL, err := s.oidc.AuthURL(state, nonce)
+	authURL, err := oidc.AuthURL(state, nonce)
 	if err != nil {
 		slog.Error("building OIDC auth URL", "error", err)
 		writeErrorMsg(w, http.StatusBadGateway, "could not reach the SSO provider")
@@ -86,7 +88,8 @@ func (s *Server) oidcLogin(w http.ResponseWriter, r *http.Request) {
 // verify the ID token, provision/link the local user, and start a normal
 // Ferrum session exactly as password login would.
 func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
-	if s.oidc == nil {
+	oidc := s.getOIDC()
+	if oidc == nil {
 		writeErrorMsg(w, http.StatusNotFound, "SSO is not configured")
 		return
 	}
@@ -105,7 +108,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	code := r.URL.Query().Get("code")
-	claims, err := s.oidc.Exchange(code, nonce)
+	claims, err := oidc.Exchange(code, nonce)
 	if err != nil {
 		slog.Error("OIDC token exchange/verification failed", "error", err)
 		http.Redirect(w, r, "/login?sso_error=1", http.StatusFound)
@@ -126,6 +129,6 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("login succeeded (sso)", "username", user.Username)
-	auth.SetSessionCookie(w, token, s.cookieSecure(r))
+	auth.SetSessionCookie(w, token, s.cookieSecure(r), s.auth.SessionTTL())
 	http.Redirect(w, r, "/", http.StatusFound)
 }

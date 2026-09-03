@@ -12,7 +12,13 @@ import { ConfirmProvider } from "@/components/ui/confirm-dialog"
 import { TooltipProvider } from "@/components/ui/tooltip"
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
+  // Realtime-by-default: every query polls unless it opts out (pass
+  // `refetchInterval: false`) or sets its own tighter interval — fleet state
+  // changes on its own schedule, not the viewer's, so a screen left open
+  // must never just go stale. Refetch-on-focus catches the common case (the
+  // tab was backgrounded past its interval) immediately on return instead of
+  // waiting out the rest of the interval.
+  defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: true, refetchInterval: 20_000 } },
 })
 
 createRoot(document.getElementById("root")!).render(

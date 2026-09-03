@@ -1,8 +1,12 @@
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  /** Machine-readable error code (e.g. "totp_required") — set only for the
+   * handful of errors the UI needs to branch on, not every 4xx. */
+  code?: string
+  constructor(status: number, message: string, code?: string) {
     super(message)
     this.status = status
+    this.code = code
   }
 }
 
@@ -15,6 +19,18 @@ const unauthorizedHandlers = new Set<UnauthorizedHandler>()
 export function onUnauthorized(handler: UnauthorizedHandler): () => void {
   unauthorizedHandlers.add(handler)
   return () => unauthorizedHandlers.delete(handler)
+}
+
+// Handlers registered via onErrorCode fire for any API error that carries a
+// `code` field — used for errors the UI must react to structurally (e.g.
+// "totp_required" redirecting to the enrollment page), where matching the
+// human-readable message would be fragile.
+type ErrorCodeHandler = (code: string) => void
+const errorCodeHandlers = new Set<ErrorCodeHandler>()
+
+export function onErrorCode(handler: ErrorCodeHandler): () => void {
+  errorCodeHandlers.add(handler)
+  return () => errorCodeHandlers.delete(handler)
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -36,7 +52,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (res.status === 401) {
       for (const handler of unauthorizedHandlers) handler()
     }
-    throw new ApiError(res.status, data?.error ?? res.statusText)
+    if (data?.code) {
+      for (const handler of errorCodeHandlers) handler(data.code)
+    }
+    throw new ApiError(res.status, data?.error ?? res.statusText, data?.code)
   }
   return data as T
 }

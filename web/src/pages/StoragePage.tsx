@@ -75,12 +75,31 @@ export function StoragePage() {
       .map((r) => ({ ...r, connName: c.name })),
   )
 
-  const capacityByPool = useMemo(() => {
+  // Local storage (dir/lvm/zfspool/...) is genuinely separate capacity per
+  // node — a fleet total that sums every node's "local-lvm" is correct.
+  // Shared storage (nfs/cifs/pbs/cephfs/iscsi/...) is the opposite: PVE's
+  // cluster/resources reports the *same* pool once per node it's mounted
+  // on, so naively summing it the same way multiplied its capacity by the
+  // node count (an 8-node cluster made a 2TB NFS share read as 16TB). It's
+  // deduped below to one entry per (connection, pool name) before any
+  // total is computed.
+  const localPools = storagePools.filter((p) => !p.shared)
+  const sharedPools = useMemo(() => {
+    const seen = new Map<string, ClusterResource & { connName: string }>()
+    for (const p of storagePools) {
+      if (!p.shared) continue
+      const key = `${p.connName}|${p.storage ?? p.name}`
+      if (!seen.has(key)) seen.set(key, p)
+    }
+    return Array.from(seen.values())
+  }, [storagePools])
+
+  function rollUp(pools: (ClusterResource & { connName: string })[]) {
     // Roll every storage up by pool NAME across connections — both its total
     // capacity and its current usage, so the legend can show used/total and
     // the share of the whole fleet per pool.
     const byName = new Map<string, { total: number; used: number }>()
-    for (const p of storagePools) {
+    for (const p of pools) {
       const key = p.storage ?? "unknown"
       const cur = byName.get(key) ?? { total: 0, used: 0 }
       cur.total += p.maxdisk ?? 0
@@ -99,17 +118,24 @@ export function StoragePage() {
     const slices: DonutSlice[] = top.map((r, i) => ({ name: r.name, value: r.total, color: TYPE_COLORS[i % TYPE_COLORS.length] }))
     if (restTotal > 0) slices.push({ name: `other (${rows.length - 7})`, value: restTotal, color: "var(--text-faint)" })
     return { rows, slices, grandTotal, grandUsed }
-  }, [storagePools])
+  }
 
-  const usageByPool = useMemo(
-    () =>
-      storagePools
-        .filter((p) => (p.maxdisk ?? 0) > 0)
-        .map((p) => ({ name: p.storage ?? p.name ?? "unknown", pct: Math.min(100, ((p.disk ?? 0) / (p.maxdisk ?? 1)) * 100) }))
-        .sort((a, b) => b.pct - a.pct)
-        .slice(0, 8),
-    [storagePools],
-  )
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const localCapacity = useMemo(() => rollUp(localPools), [localPools])
+  const sharedCapacity = useMemo(() => rollUp(sharedPools), [sharedPools])
+
+  function usageBars(pools: (ClusterResource & { connName: string })[]) {
+    return pools
+      .filter((p) => (p.maxdisk ?? 0) > 0)
+      .map((p) => ({ name: p.storage ?? p.name ?? "unknown", pct: Math.min(100, ((p.disk ?? 0) / (p.maxdisk ?? 1)) * 100) }))
+      .sort((a, b) => b.pct - a.pct)
+      .slice(0, 8)
+  }
+  // Local pools stay one bar per node (each is genuinely separate capacity);
+  // shared pools use the deduped list so a pool mounted on every node in the
+  // cluster shows up once, not once per node at an identical percentage.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const usageByPool = useMemo(() => usageBars([...localPools, ...sharedPools]), [localPools, sharedPools])
 
   const columns = useMemo<ColumnDef<ClusterResource & { connName: string }>[]>(
     () => [
@@ -175,61 +201,15 @@ export function StoragePage() {
         />
       ) : (
         <>
-      {capacityByPool.rows.length > 0 && (
+      {(localCapacity.rows.length > 0 || sharedCapacity.rows.length > 0) && (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <Card>
-            <CardHeader>
-              <CardTitle>Capacity by pool</CardTitle>
-              <p className="text-xs text-[var(--text-muted)] tabular">
-                {formatBytes(capacityByPool.grandUsed)} used of {formatBytes(capacityByPool.grandTotal)} across {capacityByPool.rows.length} pool{capacityByPool.rows.length === 1 ? "" : "s"}
-              </p>
-            </CardHeader>
-            {/* Fixed-size donut beside a real legend — the old centered flex
-                column let ResponsiveContainer collapse to min-content, which
-                wrapped the center label vertically ("1.1"/"TB"/"total"/…). */}
-            <CardContent className="flex flex-col items-center gap-5 sm:flex-row">
-              <div className="w-44 shrink-0 self-center">
-                <DonutChart
-                  data={capacityByPool.slices}
-                  height={168}
-                  centerValue={formatBytes(capacityByPool.grandTotal)}
-                  centerLabel="total"
-                  formatValue={formatBytes}
-                />
-              </div>
-              <ul className="min-w-0 flex-1 space-y-2.5">
-                {capacityByPool.rows.slice(0, 7).map((r, i) => {
-                  const color = TYPE_COLORS[i % TYPE_COLORS.length]
-                  const share = capacityByPool.grandTotal > 0 ? (r.total / capacityByPool.grandTotal) * 100 : 0
-                  return (
-                    <li key={r.name} className="grid grid-cols-[auto_1fr_auto] items-center gap-2 text-xs">
-                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} aria-hidden />
-                      <div className="min-w-0">
-                        <p className="flex items-baseline justify-between gap-2">
-                          <span className="truncate font-medium" title={r.name}>{r.name}</span>
-                          <span className="shrink-0 text-[var(--text-muted)] tabular">{share.toFixed(0)}%</span>
-                        </p>
-                        <div className="mt-1 h-1 w-full overflow-hidden rounded-sm bg-[var(--track)]">
-                          <div className="h-full rounded-sm" style={{ width: `${share}%`, background: color }} />
-                        </div>
-                      </div>
-                      <div className="shrink-0 text-right tabular">
-                        <p className="font-medium">{formatBytes(r.total)}</p>
-                        <p className="text-[10px] text-[var(--text-muted)]">{formatBytes(r.used)} used</p>
-                      </div>
-                    </li>
-                  )
-                })}
-                {capacityByPool.rows.length > 7 && (
-                  <li className="pt-0.5 text-[10px] text-[var(--text-faint)]">+{capacityByPool.rows.length - 7} smaller pool{capacityByPool.rows.length - 7 === 1 ? "" : "s"} in “other”</li>
-                )}
-              </ul>
-            </CardContent>
-          </Card>
+          {localCapacity.rows.length > 0 && <CapacityCard title="Local storage capacity" capacity={localCapacity} />}
+          {sharedCapacity.rows.length > 0 && <CapacityCard title="Shared / external storage capacity" capacity={sharedCapacity} />}
 
-          <Card>
+          <Card className={localCapacity.rows.length > 0 && sharedCapacity.rows.length > 0 ? "lg:col-span-2" : undefined}>
             <CardHeader>
               <CardTitle>Fullest pools</CardTitle>
+              <p className="text-xs text-[var(--text-muted)]">Local and shared, combined — each shared pool counted once regardless of how many nodes mount it.</p>
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={Math.max(160, usageByPool.length * 28)}>
@@ -279,11 +259,24 @@ export function StoragePage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <HardDrive className="h-4 w-4" /> Storage Pools
+            <HardDrive className="h-4 w-4" /> Local Storage
           </CardTitle>
+          <p className="text-xs text-[var(--text-muted)]">Physically attached to one node — dir, LVM, ZFS, and similar. Not shared across the cluster.</p>
         </CardHeader>
         <CardContent>
-          <DataTable columns={columns} data={storagePools} searchPlaceholder="Search storage pools..." emptyMessage="No storage pools found." />
+          <DataTable columns={columns} data={localPools} searchPlaceholder="Search local storage..." emptyMessage="No local storage found." />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Database className="h-4 w-4" /> Shared / External Storage
+          </CardTitle>
+          <p className="text-xs text-[var(--text-muted)]">NFS, CIFS, PBS, Ceph, iSCSI, and similar — reachable from (and reported by) every node it's mounted on.</p>
+        </CardHeader>
+        <CardContent>
+          <DataTable columns={columns} data={sharedPools} searchPlaceholder="Search shared storage..." emptyMessage="No shared storage found." />
         </CardContent>
       </Card>
 
@@ -388,5 +381,61 @@ export function StoragePage() {
         </>
       )}
     </div>
+  )
+}
+
+interface CapacityRollup {
+  rows: { name: string; total: number; used: number }[]
+  slices: DonutSlice[]
+  grandTotal: number
+  grandUsed: number
+}
+
+/* Fixed-size donut beside a real legend — a centered flex column lets
+   ResponsiveContainer collapse to min-content, which wraps the center label
+   vertically ("1.1"/"TB"/"total"/…). Shared between the local and shared/
+   external capacity cards so the two never drift into different layouts. */
+function CapacityCard({ title, capacity }: { title: string; capacity: CapacityRollup }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        <p className="text-xs text-[var(--text-muted)] tabular">
+          {formatBytes(capacity.grandUsed)} used of {formatBytes(capacity.grandTotal)} across {capacity.rows.length} pool{capacity.rows.length === 1 ? "" : "s"}
+        </p>
+      </CardHeader>
+      <CardContent className="flex flex-col items-center gap-5 sm:flex-row">
+        <div className="w-44 shrink-0 self-center">
+          <DonutChart data={capacity.slices} height={168} centerValue={formatBytes(capacity.grandTotal)} centerLabel="total" formatValue={formatBytes} />
+        </div>
+        <ul className="min-w-0 flex-1 space-y-2.5">
+          {capacity.rows.slice(0, 7).map((r, i) => {
+            const color = TYPE_COLORS[i % TYPE_COLORS.length]
+            const share = capacity.grandTotal > 0 ? (r.total / capacity.grandTotal) * 100 : 0
+            return (
+              <li key={r.name} className="grid grid-cols-[auto_1fr_auto] items-center gap-2 text-xs">
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} aria-hidden />
+                <div className="min-w-0">
+                  <p className="flex items-baseline justify-between gap-2">
+                    <span className="truncate font-medium" title={r.name}>{r.name}</span>
+                    <span className="shrink-0 text-[var(--text-muted)] tabular">{share.toFixed(0)}%</span>
+                  </p>
+                  <div className="mt-1 h-1 w-full overflow-hidden rounded-sm bg-[var(--track)]">
+                    <div className="h-full rounded-sm" style={{ width: `${share}%`, background: color }} />
+                  </div>
+                </div>
+                <div className="shrink-0 text-right tabular">
+                  <p className="font-medium">{formatBytes(r.total)}</p>
+                  <p className="text-[10px] text-[var(--text-muted)]">{formatBytes(r.used)} used</p>
+                </div>
+              </li>
+            )
+          })}
+          {capacity.rows.length > 7 && (
+            <li className="pt-0.5 text-[10px] text-[var(--text-faint)]">+{capacity.rows.length - 7} smaller pool{capacity.rows.length - 7 === 1 ? "" : "s"} in “other”</li>
+          )}
+        </ul>
+      </CardContent>
+    </Card>
   )
 }

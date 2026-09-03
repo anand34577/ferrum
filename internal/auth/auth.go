@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,7 +21,9 @@ import (
 
 const (
 	SessionCookieName = "ferrum_session"
-	sessionTTL        = 30 * 24 * time.Hour
+	// defaultSessionTTL seeds Service.sessionTTL until (and unless) an admin
+	// overrides it from the Settings UI — see SetSessionTTL.
+	defaultSessionTTL = 30 * 24 * time.Hour
 )
 
 var (
@@ -38,10 +41,34 @@ type User struct {
 
 type Service struct {
 	db *store.DB
+
+	sessionTTLMu sync.RWMutex
+	sessionTTL   time.Duration
 }
 
 func NewService(db *store.DB) *Service {
-	return &Service{db: db}
+	return &Service{db: db, sessionTTL: defaultSessionTTL}
+}
+
+// SetSessionTTL changes how long newly-created sessions live — applies to
+// logins from this point on; sessions already issued keep whatever TTL was
+// in effect when they were created (their expiry is stored, not recomputed).
+func (s *Service) SetSessionTTL(d time.Duration) {
+	s.sessionTTLMu.Lock()
+	s.sessionTTL = d
+	s.sessionTTLMu.Unlock()
+}
+
+func (s *Service) getSessionTTL() time.Duration {
+	s.sessionTTLMu.RLock()
+	defer s.sessionTTLMu.RUnlock()
+	return s.sessionTTL
+}
+
+// SessionTTL exposes the current TTL for SetSessionCookie callers, which
+// need to hand the browser a matching cookie lifetime.
+func (s *Service) SessionTTL() time.Duration {
+	return s.getSessionTTL()
 }
 
 // NeedsSetup reports whether no user exists yet, meaning the frontend should
@@ -226,7 +253,7 @@ func (s *Service) CreateSession(ctx context.Context, userID string) (string, err
 	now := time.Now().UTC()
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO sessions (id, user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
-		uuid.NewString(), userID, hashToken(token), now.Format(time.RFC3339), now.Add(sessionTTL).Format(time.RFC3339),
+		uuid.NewString(), userID, hashToken(token), now.Format(time.RFC3339), now.Add(s.getSessionTTL()).Format(time.RFC3339),
 	); err != nil {
 		return "", err
 	}
@@ -285,8 +312,9 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-// SetSessionCookie writes the session cookie on the response.
-func SetSessionCookie(w http.ResponseWriter, token string, secure bool) {
+// SetSessionCookie writes the session cookie on the response. ttl should
+// match whatever TTL the session was actually created with (Service.SessionTTL()).
+func SetSessionCookie(w http.ResponseWriter, token string, secure bool, ttl time.Duration) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    token,
@@ -294,7 +322,7 @@ func SetSessionCookie(w http.ResponseWriter, token string, secure bool) {
 		HttpOnly: true,
 		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
-		Expires:  time.Now().Add(sessionTTL),
+		Expires:  time.Now().Add(ttl),
 	})
 }
 

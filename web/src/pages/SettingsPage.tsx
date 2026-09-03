@@ -1,8 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ExternalLink, Settings as SettingsIcon } from "lucide-react"
+import { AlertTriangle, ChevronRight, ExternalLink, Settings as SettingsIcon } from "lucide-react"
 import { useEffect, useState } from "react"
+import { Link } from "react-router-dom"
 import { toast } from "sonner"
 import { AppearanceCard } from "@/components/settings/AppearanceCard"
+import { DefaultPreferencesCard } from "@/components/settings/DefaultPreferencesCard"
+import { NotificationsSettingsCard } from "@/components/settings/NotificationsSettingsCard"
+import { OIDCSettingsCard } from "@/components/settings/OIDCSettingsCard"
+import { SecuritySettingsCard } from "@/components/settings/SecuritySettingsCard"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -36,6 +41,25 @@ export function SettingsPage() {
       />
 
       <AppearanceCard />
+      <DefaultPreferencesCard />
+      <SecuritySettingsCard />
+      <NotificationsSettingsCard />
+
+      <Link
+        to="/alerts"
+        className="flex items-center justify-between gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-3 text-sm shadow-card transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-hover)]"
+      >
+        <span className="flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 text-[var(--text-muted)]" />
+          <span>
+            <span className="font-medium">Alert thresholds &amp; rules</span>
+            <span className="ml-2 text-[var(--text-muted)]">— create, edit, and delete threshold rules on the Alerts page</span>
+          </span>
+        </span>
+        <ChevronRight className="h-4 w-4 shrink-0 text-[var(--text-muted)]" />
+      </Link>
+
+      <OIDCSettingsCard />
 
       {isError ? (
         <ErrorState title="Couldn't load connections" onRetry={refetch} />
