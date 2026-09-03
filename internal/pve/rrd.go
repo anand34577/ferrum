@@ -62,10 +62,29 @@ var rrdKnownKeys = map[string]bool{
 	"pressurememorysome": true, "pressurememoryfull": true,
 }
 
+// nodeRRDAliases remaps node-only RRD column names onto the same typed
+// fields guest RRD already uses for the identical stat. PVE's node rrddata
+// uses a different schema than guest (qemu/lxc) rrddata: memtotal/memused
+// instead of maxmem/mem, swaptotal/swapused instead of maxswap/swap, and
+// roottotal/rootused (the root filesystem) instead of maxdisk/disk. Without
+// this remap every node-level memory/swap/disk chart silently decodes to
+// zero — the "mem"/"maxmem" columns it's looking for simply don't exist on
+// a node row, they only exist on guest rows.
+var nodeRRDAliases = map[string]string{
+	"memused":   "mem",
+	"memtotal":  "maxmem",
+	"swapused":  "swap",
+	"swaptotal": "maxswap",
+	"rootused":  "disk",
+	"roottotal": "maxdisk",
+}
+
 // decodeRRDPoints converts the generic per-sample maps PVE returns into
 // RRDPoints, splitting known columns from per-device/extra ones. Nulls
 // (RRD gaps for samples before a guest existed) decode as absent fields.
-func decodeRRDPoints(rows []map[string]any) []RRDPoint {
+// forNode selects the node RRD column aliases above; guest rows already
+// match the typed fields directly and need no remapping.
+func decodeRRDPoints(rows []map[string]any, forNode bool) []RRDPoint {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -77,6 +96,11 @@ func decodeRRDPoints(rows []map[string]any) []RRDPoint {
 			f, ok := toFloat(v)
 			if !ok {
 				continue
+			}
+			if forNode {
+				if alias, ok := nodeRRDAliases[k]; ok {
+					k = alias
+				}
 			}
 			switch k {
 			case "time":
@@ -178,7 +202,7 @@ func (c *Client) NodeRRDData(ctx context.Context, node string, timeframe RRDTime
 		}
 		return nil, err
 	}
-	return decodeRRDPoints(out.Data), nil
+	return decodeRRDPoints(out.Data, true), nil
 }
 
 func (c *Client) GuestRRDData(ctx context.Context, guestType, node string, vmid int, timeframe RRDTimeframe, cf RRDCF) ([]RRDPoint, error) {
@@ -192,7 +216,7 @@ func (c *Client) GuestRRDData(ctx context.Context, guestType, node string, vmid 
 		}
 		return nil, err
 	}
-	return decodeRRDPoints(out.Data), nil
+	return decodeRRDPoints(out.Data, false), nil
 }
 
 // rrdResolutionMismatch reports PVE's "got wrong time resolution (21600 !=
