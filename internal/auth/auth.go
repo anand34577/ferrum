@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -29,6 +30,11 @@ const (
 var (
 	ErrInvalidCredentials  = errors.New("invalid username or password")
 	ErrAlreadyBootstrapped = errors.New("an admin user already exists")
+	// ErrOIDCUserNotProvisioned is returned by FindOrCreateOIDCUser when no
+	// local account matches the SSO identity and auto-provisioning is
+	// disabled (OIDCConfig.AllowAutoProvision) — the admin wants SSO
+	// restricted to accounts that already exist.
+	ErrOIDCUserNotProvisioned = errors.New("no local account exists for this SSO identity, and auto-provisioning new accounts is disabled")
 )
 
 type User struct {
@@ -153,7 +159,7 @@ func (s *Service) VerifyPassword(ctx context.Context, username, password string)
 // used to link into (or name-collide with) an existing account, because a
 // hostile IdP account claiming someone else's address would otherwise take
 // that account over. Unverified users get a placeholder email instead.
-func (s *Service) FindOrCreateOIDCUser(ctx context.Context, subject, email, preferredUsername string, emailVerified bool) (*User, error) {
+func (s *Service) FindOrCreateOIDCUser(ctx context.Context, subject, email, preferredUsername string, emailVerified, allowAutoProvision bool) (*User, error) {
 	var (
 		id, uname, mail      string
 		isAdmin, totpEnabled int
@@ -182,6 +188,10 @@ func (s *Service) FindOrCreateOIDCUser(ctx context.Context, subject, email, pref
 		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE email = ?`, email).Scan(&exists); err == nil && exists > 0 {
 			return nil, fmt.Errorf("SSO account email is not verified by the provider and collides with an existing local account")
 		}
+	}
+
+	if !allowAutoProvision {
+		return nil, ErrOIDCUserNotProvisioned
 	}
 
 	username := preferredUsername
@@ -249,11 +259,26 @@ func (s *Service) Login(ctx context.Context, username, password string) (*User, 
 // CreateSession mints a new session for an already-authenticated user.
 // Opportunistically purges expired rows so the table doesn't grow forever.
 func (s *Service) CreateSession(ctx context.Context, userID string) (string, error) {
+	return s.createSession(ctx, userID, "")
+}
+
+// CreateOIDCSession is CreateSession plus the verified ID token from the SSO
+// login, kept so Logout can hand it back to the provider as id_token_hint
+// for RP-Initiated Logout (see OIDCClient.EndSessionURL).
+func (s *Service) CreateOIDCSession(ctx context.Context, userID, idToken string) (string, error) {
+	return s.createSession(ctx, userID, idToken)
+}
+
+func (s *Service) createSession(ctx context.Context, userID, oidcIDToken string) (string, error) {
 	token := randomToken()
 	now := time.Now().UTC()
+	var idTokenCol any
+	if oidcIDToken != "" {
+		idTokenCol = oidcIDToken
+	}
 	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO sessions (id, user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
-		uuid.NewString(), userID, hashToken(token), now.Format(time.RFC3339), now.Add(s.getSessionTTL()).Format(time.RFC3339),
+		`INSERT INTO sessions (id, user_id, token_hash, created_at, expires_at, oidc_id_token) VALUES (?, ?, ?, ?, ?, ?)`,
+		uuid.NewString(), userID, hashToken(token), now.Format(time.RFC3339), now.Add(s.getSessionTTL()).Format(time.RFC3339), idTokenCol,
 	); err != nil {
 		return "", err
 	}
@@ -289,9 +314,16 @@ func (s *Service) Authenticate(ctx context.Context, token string) (*User, error)
 }
 
 // Logout revokes the session associated with the given token.
-func (s *Service) Logout(ctx context.Context, token string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = ?`, hashToken(token))
-	return err
+// Logout revokes the session and reports the OIDC ID token it was created
+// with, if any — the caller (the /auth/logout handler) uses that as
+// id_token_hint to also end the session at the identity provider.
+func (s *Service) Logout(ctx context.Context, token string) (oidcIDToken string, err error) {
+	var idToken sql.NullString
+	// Read-then-delete rather than DELETE...RETURNING: sqlite added RETURNING
+	// only in 3.35+, and this isn't hot-path enough to matter.
+	_ = s.db.QueryRowContext(ctx, `SELECT oidc_id_token FROM sessions WHERE token_hash = ?`, hashToken(token)).Scan(&idToken)
+	_, err = s.db.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = ?`, hashToken(token))
+	return idToken.String, err
 }
 
 func randomToken() string {

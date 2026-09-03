@@ -81,7 +81,7 @@ func TestLoginRoundTrip(t *testing.T) {
 		t.Fatalf("Authenticate returned user %q, want %q", authed.ID, user.ID)
 	}
 
-	if err := svc.Logout(ctx, token); err != nil {
+	if _, err := svc.Logout(ctx, token); err != nil {
 		t.Fatalf("Logout: %v", err)
 	}
 	if _, err := svc.Authenticate(ctx, token); err != ErrInvalidCredentials {

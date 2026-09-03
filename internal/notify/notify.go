@@ -146,18 +146,35 @@ func sendSMTP(cfg SMTPConfig, subject, body string) error {
 	}
 
 	// Port 465 is implicit TLS (the connection is TLS from the first byte,
-	// no STARTTLS negotiation) — net/smtp.SendMail only speaks STARTTLS, so
-	// that case is dialed by hand. Every other port (587 submission, 25)
-	// goes through SendMail, which upgrades via STARTTLS itself whenever the
-	// server advertises it — cfg.UseTLS gates whether we require that
-	// upgrade to have happened before authenticating.
+	// no STARTTLS negotiation) — dialed by hand below. For everything else,
+	// cfg.UseTLS picks the transport explicitly rather than going through
+	// net/smtp.SendMail: SendMail opportunistically attempts STARTTLS
+	// whenever the server *advertises* the extension, regardless of what
+	// the caller asked for — so an admin who deliberately unchecked "Use
+	// STARTTLS" (an internal relay with a self-signed or expired cert that
+	// still advertises STARTTLS) got the send fail on a TLS handshake they
+	// never asked for. sendPlain below never attempts TLS at all; only the
+	// UseTLS branch does, and only then.
 	if cfg.Port == 465 {
 		return sendImplicitTLS(addr, cfg.Host, auth, cfg.From, to, msg)
 	}
 	if cfg.UseTLS {
 		return sendStartTLS(addr, cfg.Host, auth, cfg.From, to, msg)
 	}
-	return smtp.SendMail(addr, auth, cfg.From, to, msg)
+	return sendPlain(addr, auth, cfg.From, to, msg)
+}
+
+// sendPlain sends over a bare, never-upgraded connection — no STARTTLS
+// attempt regardless of what the server advertises, honoring an explicit
+// "don't use TLS" choice instead of net/smtp.SendMail's opportunistic
+// upgrade.
+func sendPlain(addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		return fmt.Errorf("dialing: %w", err)
+	}
+	defer c.Close()
+	return sendViaClient(c, auth, from, to, msg)
 }
 
 func sendImplicitTLS(addr, host string, auth smtp.Auth, from string, to []string, msg []byte) error {

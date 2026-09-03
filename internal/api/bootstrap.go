@@ -27,6 +27,7 @@ func (s *Server) BootstrapSettings(ctx context.Context, seedEnabled bool, seedOI
 		if err := s.saveOIDCRow(ctx, oidcRow{
 			enabled: seedEnabled, displayName: seedOIDC.DisplayName, issuerURL: seedOIDC.IssuerURL,
 			clientID: seedOIDC.ClientID, clientSecretEnc: enc, redirectURL: seedOIDC.RedirectURL,
+			allowAutoProvision: true, // matches the pre-existing always-on behavior config.yaml-only deployments already had
 		}); err != nil {
 			return err
 		}

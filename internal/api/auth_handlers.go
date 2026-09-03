@@ -156,14 +156,29 @@ func (s *Server) authLoginTOTP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, user)
 }
 
+// authLogout revokes the Ferrum session and, when it was an SSO login and
+// the provider supports RP-Initiated Logout, tells the frontend where to
+// send the browser next to also end the session at the identity provider
+// (SLO) — a plain sign-out otherwise leaves the user still logged in at the
+// IdP, so signing back in skips straight past its login page.
 func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
+	var idToken string
 	if cookie, err := r.Cookie(auth.SessionCookieName); err == nil {
-		_ = s.auth.Logout(r.Context(), cookie.Value)
+		idToken, _ = s.auth.Logout(r.Context(), cookie.Value)
 	}
 	if u := userFromContext(r); u != nil {
 		slog.Info("logout", "username", u.Username)
 	}
 	auth.ClearSessionCookie(w, s.cookieSecure(r))
+
+	if idToken != "" {
+		if oidc := s.getOIDC(); oidc != nil {
+			if endSessionURL, ok := oidc.EndSessionURL(idToken); ok {
+				writeJSON(w, http.StatusOK, map[string]string{"logoutUrl": endSessionURL})
+				return
+			}
+		}
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

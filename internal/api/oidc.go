@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -115,14 +116,19 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := s.auth.FindOrCreateOIDCUser(r.Context(), claims.Subject, claims.Email, claims.PreferredUsername, claims.EmailVerified)
+	user, err := s.auth.FindOrCreateOIDCUser(r.Context(), claims.Subject, claims.Email, claims.PreferredUsername, claims.EmailVerified, oidc.AllowAutoProvision())
+	if errors.Is(err, auth.ErrOIDCUserNotProvisioned) {
+		slog.Warn("OIDC login refused: no matching local account and auto-provisioning is disabled", "subject", claims.Subject, "email", claims.Email)
+		http.Redirect(w, r, "/login?sso_error=no_account", http.StatusFound)
+		return
+	}
 	if err != nil {
 		slog.Error("provisioning OIDC user", "error", err)
 		http.Redirect(w, r, "/login?sso_error=1", http.StatusFound)
 		return
 	}
 
-	token, err := s.auth.CreateSession(r.Context(), user.ID)
+	token, err := s.auth.CreateOIDCSession(r.Context(), user.ID, claims.RawIDToken)
 	if err != nil {
 		slog.Error("creating session for OIDC user", "error", err)
 		http.Redirect(w, r, "/login?sso_error=1", http.StatusFound)

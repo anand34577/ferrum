@@ -22,34 +22,39 @@ type oidcRow struct {
 	clientID        string
 	clientSecretEnc string
 	redirectURL     string
+	// allowAutoProvision: whether a first-time SSO login may create a new
+	// local account, or must be refused because no matching account already
+	// exists. Defaults to true (the historical always-on behavior).
+	allowAutoProvision bool
 }
 
 func (s *Server) loadOIDCRow(ctx context.Context) (oidcRow, error) {
-	var row oidcRow
-	var enabled int
+	row := oidcRow{allowAutoProvision: true}
+	var enabled, allowAutoProvision int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT enabled, display_name, issuer_url, client_id, client_secret, redirect_url FROM oidc_settings WHERE id = 1`).
-		Scan(&enabled, &row.displayName, &row.issuerURL, &row.clientID, &row.clientSecretEnc, &row.redirectURL)
+		`SELECT enabled, display_name, issuer_url, client_id, client_secret, redirect_url, allow_auto_provision FROM oidc_settings WHERE id = 1`).
+		Scan(&enabled, &row.displayName, &row.issuerURL, &row.clientID, &row.clientSecretEnc, &row.redirectURL, &allowAutoProvision)
 	if err == sql.ErrNoRows {
-		return oidcRow{}, nil // no row yet — every field at its zero value, same as a freshly disabled config
+		return oidcRow{allowAutoProvision: true}, nil // no row yet — every field at its zero value, same as a freshly disabled config
 	}
 	if err != nil {
 		return oidcRow{}, err
 	}
 	row.enabled = enabled == 1
+	row.allowAutoProvision = allowAutoProvision == 1
 	return row, nil
 }
 
 func (s *Server) saveOIDCRow(ctx context.Context, row oidcRow) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO oidc_settings (id, enabled, display_name, issuer_url, client_id, client_secret, redirect_url, updated_at)
-		VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO oidc_settings (id, enabled, display_name, issuer_url, client_id, client_secret, redirect_url, allow_auto_provision, updated_at)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			enabled = excluded.enabled, display_name = excluded.display_name, issuer_url = excluded.issuer_url,
 			client_id = excluded.client_id, client_secret = excluded.client_secret, redirect_url = excluded.redirect_url,
-			updated_at = excluded.updated_at`,
+			allow_auto_provision = excluded.allow_auto_provision, updated_at = excluded.updated_at`,
 		boolToInt(row.enabled), row.displayName, row.issuerURL, row.clientID, row.clientSecretEnc, row.redirectURL,
-		time.Now().UTC().Format(time.RFC3339))
+		boolToInt(row.allowAutoProvision), time.Now().UTC().Format(time.RFC3339))
 	return err
 }
 
@@ -69,21 +74,23 @@ func (s *Server) applyOIDCRow(row oidcRow) {
 		return
 	}
 	s.SetOIDC(auth.NewOIDCClient(auth.OIDCConfig{
-		DisplayName:  row.displayName,
-		IssuerURL:    row.issuerURL,
-		ClientID:     row.clientID,
-		ClientSecret: secret,
-		RedirectURL:  row.redirectURL,
+		DisplayName:        row.displayName,
+		IssuerURL:          row.issuerURL,
+		ClientID:           row.clientID,
+		ClientSecret:       secret,
+		RedirectURL:        row.redirectURL,
+		AllowAutoProvision: row.allowAutoProvision,
 	}))
 	slog.Info("SSO enabled", "issuer", row.issuerURL)
 }
 
 type oidcSettingsResponse struct {
-	Enabled     bool   `json:"enabled"`
-	DisplayName string `json:"displayName"`
-	IssuerURL   string `json:"issuerUrl"`
-	ClientID    string `json:"clientId"`
-	RedirectURL string `json:"redirectUrl"`
+	Enabled            bool   `json:"enabled"`
+	DisplayName        string `json:"displayName"`
+	IssuerURL          string `json:"issuerUrl"`
+	ClientID           string `json:"clientId"`
+	RedirectURL        string `json:"redirectUrl"`
+	AllowAutoProvision bool   `json:"allowAutoProvision"`
 	// HasSecret tells the UI a secret is already stored, without ever
 	// sending the secret itself back down to the browser.
 	HasSecret bool `json:"hasSecret"`
@@ -92,7 +99,8 @@ type oidcSettingsResponse struct {
 func toOIDCSettingsResponse(row oidcRow) oidcSettingsResponse {
 	return oidcSettingsResponse{
 		Enabled: row.enabled, DisplayName: row.displayName, IssuerURL: row.issuerURL,
-		ClientID: row.clientID, RedirectURL: row.redirectURL, HasSecret: row.clientSecretEnc != "",
+		ClientID: row.clientID, RedirectURL: row.redirectURL, AllowAutoProvision: row.allowAutoProvision,
+		HasSecret: row.clientSecretEnc != "",
 	}
 }
 
@@ -110,12 +118,13 @@ func (s *Server) getOIDCSettings(w http.ResponseWriter, r *http.Request) {
 // when non-empty — an omitted/blank secret means "keep what's stored",
 // since the UI never has the real value to send back.
 type oidcSettingsPatch struct {
-	Enabled      *bool   `json:"enabled"`
-	DisplayName  *string `json:"displayName"`
-	IssuerURL    *string `json:"issuerUrl"`
-	ClientID     *string `json:"clientId"`
-	ClientSecret *string `json:"clientSecret"`
-	RedirectURL  *string `json:"redirectUrl"`
+	Enabled            *bool   `json:"enabled"`
+	DisplayName        *string `json:"displayName"`
+	IssuerURL          *string `json:"issuerUrl"`
+	ClientID           *string `json:"clientId"`
+	ClientSecret       *string `json:"clientSecret"`
+	RedirectURL        *string `json:"redirectUrl"`
+	AllowAutoProvision *bool   `json:"allowAutoProvision"`
 }
 
 func (s *Server) putOIDCSettings(w http.ResponseWriter, r *http.Request) {
@@ -150,6 +159,9 @@ func (s *Server) putOIDCSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		row.clientSecretEnc = enc
+	}
+	if patch.AllowAutoProvision != nil {
+		row.allowAutoProvision = *patch.AllowAutoProvision
 	}
 	if patch.Enabled != nil {
 		row.enabled = *patch.Enabled
