@@ -53,7 +53,7 @@ export function SidebarContent({
               // chrome that visibly reflects the accent choice on every page,
               // since the sidebar itself stays a fixed dark rail.
               const linkClass = cn(
-                "group relative flex items-center gap-2.5 rounded-sm px-2.5 py-1.5 font-display text-[15px] font-medium tracking-wide transition-all duration-150 select-none",
+                "group relative flex items-center gap-2.5 rounded-sm px-2.5 py-1.5 font-display text-sm font-medium transition-all duration-150 select-none",
                 collapsed && "justify-center px-2",
                 active
                   ? "border border-brand-700/50 bg-[var(--sidebar-active-bg)] text-[var(--sidebar-active-text)]"

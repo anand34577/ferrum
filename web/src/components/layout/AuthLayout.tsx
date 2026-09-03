@@ -7,15 +7,13 @@ import { BrandMark } from "@/components/layout/BrandMark"
 export function AuthLayout({ title, subtitle, children }: { title: string; subtitle?: ReactNode; children: ReactNode }) {
   return (
     <div className="relative flex min-h-full items-center justify-center overflow-hidden p-6">
-      {/* Faint instrument-panel blueprint grid, not a soft brand glow. */}
+      {/* The active look's own page-grid texture (none, unless Glass Flight
+          Deck) — same --page-grid token the app body paints, so the front
+          door never shows a texture the rest of the app doesn't. */}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0"
-        style={{
-          backgroundImage:
-            "linear-gradient(color-mix(in oklab, var(--border-strong) 35%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in oklab, var(--border-strong) 35%, transparent) 1px, transparent 1px)",
-          backgroundSize: "32px 32px",
-        }}
+        style={{ backgroundImage: "var(--page-grid)", backgroundSize: "32px 32px" }}
       />
       <div className="relative w-full max-w-sm">
         <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] p-8 shadow-xl dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_20px_50px_rgba(0,0,0,0.7)]">

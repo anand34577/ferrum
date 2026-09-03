@@ -30,7 +30,7 @@ export function PageHeader({ title, description, actions, icon: Icon, back, clas
             <span aria-hidden className="text-[var(--text-faint)]">←</span> {back.label}
           </Link>
         )}
-        <h1 className="panel-label flex items-center gap-3 text-[2.25rem] leading-none tracking-[0.02em] text-[var(--text)]">
+        <h1 className="panel-label flex items-center gap-3 text-2xl leading-tight tracking-tight text-[var(--text)]">
           {Icon && (
             <div className="corner-frame flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-brand-700 bg-[color-mix(in_oklab,var(--color-brand-500)_12%,transparent)] text-brand-500">
               <Icon className="h-5 w-5" aria-hidden />

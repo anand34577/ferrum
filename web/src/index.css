@@ -27,10 +27,8 @@
   font-display: swap;
   src: url("/fonts/jetbrains-mono-variable.woff2") format("woff2");
 }
-/* The panel-label face: a genuinely condensed grotesk (not Inter with
-   tracking bolted on) for every page title, nav label, badge, tab, and
-   panel heading — the one typographic move that makes this world read as
-   itself rather than as a re-skinned default admin theme. */
+/* Used only by the Glass Flight Deck look's panel-label register — declared
+   here so it loads once regardless of which look is active. */
 @font-face {
   font-family: "Oswald";
   font-style: normal;
@@ -41,7 +39,7 @@
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Oswald", "Arial Narrow", sans-serif;
+  --font-display: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
 
   /* Ferrum's default brand color is oxide — the color of weathered iron, and
@@ -61,13 +59,15 @@
   --color-brand-700: var(--accent-700);
   --color-brand-800: var(--accent-800);
 
-  /* Glass Flight Deck radius hierarchy: instrument-panel bezels are cut, not
-     rounded — 2px chips, 3px controls, 4px panels, 6px dialogs is the whole
-     range. Nothing on this surface reads as a rounded-card SaaS panel. */
-  --radius-sm: 0.125rem;
-  --radius-md: 0.1875rem;
-  --radius-lg: 0.25rem;
-  --radius-xl: 0.375rem;
+  /* Slightly tighter than the generic "bubbly SaaS" 8/12/16px scale —
+     reads more like a technical instrument panel than a consumer app. Every
+     [data-look] block below overrides this radius scale (and --elev-*,
+     --font-*, --bg/--border/--text) as a whole, so switching looks never
+     needs a component-level conditional. */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.625rem;
 
   /* Elevation utilities reference runtime tokens (defined in :root/.dark
      below) so dark mode can swap to darker, tighter shadows — Tailwind v4
@@ -79,20 +79,29 @@
   --shadow-card: var(--elev-card);
 }
 
+/* ==========================================================================
+ * Enterprise SaaS — the default look. Restrained neutrals, one accent,
+ * Inter + Space Grotesk, moderate radius, soft shadows: the clean B2B
+ * dashboard register (Linear/Vercel/Stripe-adjacent). Every other look
+ * (see the "Look-and-feel presets" section further down) overrides this
+ * :root/.dark baseline — this block is never itself gated by [data-look],
+ * so it can never again silently inherit another look's leftovers.
+ * ========================================================================== */
 :root {
   color-scheme: light;
 
-  /* Cool slate neutrals with high legibility and soft contrast */
-  --bg: #f8fafc;
+  /* Cool steel neutrals, not the warm-cream default — this is a fleet of
+     iron and silicon, not a stationery brand. */
+  --bg: #eef0f3;
   --bg-surface: #ffffff;
-  --bg-surface-hover: #f1f5f9;
+  --bg-surface-hover: #f4f6f8;
   --bg-elevated: #ffffff;
-  --bg-muted: #eef2f6;
-  --border: #e2e8f0;
-  --border-strong: #cbd5e1;
-  --text: #0f172a;
-  --text-muted: #475569;
-  --text-faint: #64748b; /* WCAG AA for small labels */
+  --bg-muted: #e4e7ec;
+  --border: #d7dbe2;
+  --border-strong: #c2c8d2;
+  --text: #14171c;
+  --text-muted: #5b6270;
+  --text-faint: #6e7480; /* 4.6:1 on white — WCAG AA for the 10-11px text that uses it */
   --ring: var(--accent-600);
 
   /* Default accent ramp — oxide, the color of weathered iron (see the brand
@@ -110,85 +119,94 @@
   --accent-700: #7c3a19;
   --accent-800: #5e2c13;
 
-  /* Caution hierarchy, read like an EICAS/annunciator panel: ok is nominal
-     green (~150°), warn is amber (~42°) reserved for genuine cautions, error
-     is master-caution red (~4°) and stays the rarest color on screen, info
-     is live-data cyan (~190°) — never blue, so "this is telemetry updating
-     right now" never gets mistaken for a link or the brand oxide (~18°). */
-  --status-ok: #15883f;
-  --status-warn: #b45f06;
-  --status-error: #c22525;
-  --status-info: #0e7f95;
+  /* Status hues are deliberately spaced away from the brand oxide (~18°)
+     so "this needs attention" never gets mistaken for "this is Ferrum's
+     accent": ok is green (~150°), warn is gold (~42°), error is crimson
+     (~4°). */
+  --status-ok: #1f8a4c;
+  --status-warn: #8a6208; /* 5.1:1 on white */
+  --status-error: #c62828;
+  --status-info: #3667b6;
 
-  /* Chart/gauge/bar "remaining capacity" tracks. */
-  --track: #e2e8f0;
+  /* Chart/gauge/bar "remaining capacity" tracks. --bg-muted fails here in
+     dark mode: #20242a on the #1a1d22 surface reads as transparent, which
+     made unfilled donuts and bars look broken. This sits between border and
+     muted so it reads on every surface token in its theme. */
+  --track: #d5dae1;
 
-  /* Elevation tokens — layered ambient diffusion + crisp boundary */
-  --elev-xs: 0 1px 2px 0 rgb(15 23 42 / 0.04);
-  --elev-sm: 0 1px 3px 0 rgb(15 23 42 / 0.06), 0 1px 2px -1px rgb(15 23 42 / 0.06);
-  --elev-md: 0 4px 6px -1px rgb(15 23 42 / 0.07), 0 2px 4px -2px rgb(15 23 42 / 0.05);
-  --elev-lg: 0 10px 25px -5px rgb(15 23 42 / 0.08), 0 8px 10px -6px rgb(15 23 42 / 0.04);
-  --elev-card: 0 1px 3px 0 rgb(15 23 42 / 0.05), 0 1px 2px -1px rgb(15 23 42 / 0.03);
+  /* Elevation. Kept as runtime tokens so dark mode can swap to darker,
+     tighter shadows (shadow color reads differently on near-black surfaces). */
+  --elev-xs: 0 1px 2px rgb(16 20 26 / 0.05);
+  --elev-sm: 0 1px 2px rgb(16 20 26 / 0.06), 0 1px 3px rgb(16 20 26 / 0.05);
+  --elev-md: 0 2px 4px rgb(16 20 26 / 0.05), 0 4px 12px rgb(16 20 26 / 0.08);
+  --elev-lg: 0 4px 8px rgb(16 20 26 / 0.06), 0 12px 32px rgb(16 20 26 / 0.12);
+  --elev-card: 0 1px 3px rgb(16 20 26 / 0.05);
 
-  /* A small categorical palette for charts with more than one series */
+  /* A small categorical palette for charts with more than one series,
+     kept separate from the semantic status colors above. */
   --chart-1: #bd5a2c;
-  --chart-2: #0d9488;
-  --chart-3: #6366f1;
-  --chart-4: #eab308;
-  --chart-5: #ec4899;
-  --chart-6: #22c55e;
+  --chart-2: #1f7a78;
+  --chart-3: #5b6cad;
+  --chart-4: #8a7226;
+  --chart-5: #a14f74;
+  --chart-6: #4f7a5a;
 
-  /* Sidebar control panel tokens */
-  --sidebar-bg: #090b0e;
-  --sidebar-border: #1a1e26;
-  --sidebar-text: #f1f5f9;
-  --sidebar-text-muted: #828a99;
-  --sidebar-active-bg: #151921;
+  /* The sidebar is a fixed dark "control panel" regardless of the content
+     theme — like an instrument rail bolted onto whichever room it's in,
+     rather than a surface that repaints itself with the rest of the app. */
+  --sidebar-bg: #15171b;
+  --sidebar-border: #262930;
+  --sidebar-text: #e7e9ec;
+  --sidebar-text-muted: #8b919c;
+  --sidebar-active-bg: #21242b;
   --sidebar-active-text: #ffffff;
+
+  /* Body-background texture, off by default (plain flat --bg) — only the
+     Glass Flight Deck look below turns this into a blueprint grid. */
+  --page-grid: none;
 }
 
 .dark {
   color-scheme: dark;
 
-  --bg: #090b0e;
-  --bg-surface: #12151b;
-  --bg-surface-hover: #181c24;
-  --bg-elevated: #161a22;
-  --bg-muted: #1a1e28;
-  --border: #202632;
-  --border-strong: #313a4b;
-  --text: #f1f5f9;
-  --text-muted: #94a3b8;
-  --text-faint: #64748b;
+  --bg: #121417;
+  --bg-surface: #1a1d22;
+  --bg-surface-hover: #20242a;
+  --bg-elevated: #1f2329;
+  --bg-muted: #20242a;
+  --border: #2b3038;
+  --border-strong: #3a414c;
+  --text: #e7e9ec;
+  --text-muted: #969ea9;
+  --text-faint: #9aa3b0; /* 5.5:1 on the dark surface */
   --ring: var(--accent-400);
 
-  --status-ok: #2fbf62;
-  --status-warn: #f0a020;
-  --status-error: #ff4d4d;
-  --status-info: #22c1dd;
-  --caution-glow-warn: 0 0 10px rgb(240 160 32 / 0.35);
-  --caution-glow-error: 0 0 12px rgb(255 77 77 / 0.4);
+  --status-ok: #3ecb7d;
+  --status-warn: #dfab3c;
+  --status-error: #ef5b52;
+  --status-info: #6d9ee8;
 
-  --track: #1e2430;
+  --track: #3a414c;
 
   --elev-xs: 0 1px 2px rgb(0 0 0 / 0.4);
-  --elev-sm: 0 2px 4px rgb(0 0 0 / 0.35), 0 1px 2px rgb(0 0 0 / 0.25);
-  --elev-md: 0 4px 14px rgb(0 0 0 / 0.45), 0 2px 4px rgb(0 0 0 / 0.3);
-  --elev-lg: 0 16px 36px rgb(0 0 0 / 0.6), 0 4px 10px rgb(0 0 0 / 0.35);
-  --elev-card: 0 1px 3px rgb(0 0 0 / 0.5), inset 0 1px 0 0 rgb(255 255 255 / 0.05);
+  --elev-sm: 0 1px 2px rgb(0 0 0 / 0.45), 0 1px 3px rgb(0 0 0 / 0.35);
+  --elev-md: 0 2px 4px rgb(0 0 0 / 0.4), 0 4px 12px rgb(0 0 0 / 0.45);
+  --elev-lg: 0 4px 8px rgb(0 0 0 / 0.4), 0 12px 32px rgb(0 0 0 / 0.55);
+  --elev-card: 0 1px 3px rgb(0 0 0 / 0.4);
 
-  --chart-1: #e07238;
-  --chart-2: #2dd4bf;
-  --chart-3: #818cf8;
-  --chart-4: #facc15;
-  --chart-5: #f472b6;
-  --chart-6: #4ade80;
+  --chart-1: #d97a49;
+  --chart-2: #3fa19e;
+  --chart-3: #8b98d6;
+  --chart-4: #c2a544;
+  --chart-5: #c97ba0;
+  --chart-6: #7aa885;
 }
 
 /* Accent presets — same 9-step ramp shape as the default oxide, just hue-
    shifted, so contrast and the light/dark split stay correct for every
    choice. Applied via [data-accent] on <html> alongside the .dark class;
-   "oxide" needs no rule since it's already :root's default. */
+   "oxide" needs no rule since it's already :root's default. Every look
+   above and below shares this same accent system. */
 [data-accent="azure"] {
   --accent-50: #eaf1fb;
   --accent-100: #cfe0f6;
@@ -237,19 +255,17 @@
   --accent-800: #2e3844;
 }
 
-/* ------------------------------------------------------------------------
- * Look-and-feel presets — a whole-app register switch, orthogonal to the
+/* ==========================================================================
+ * Look-and-feel presets — a whole-app visual register, orthogonal to the
  * light/dark toggle and the accent color. Applied as [data-look] on <html>
- * (lib/theme.tsx), same runtime-token mechanism as [data-accent] above:
- * every component already reads --radius-*, --elev-*, --font-*, and the
- * --bg/--border/--text ramp, so a look never needs a component-level
- * conditional — it only ever repaints tokens. "enterprise" is the default
- * and needs no block: it's simply :root/.dark above.
- * ---------------------------------------------------------------------- */
-
-/* Enterprise SaaS (default) — restrained neutrals, one accent, Inter +
-   Space Grotesk, moderate radius, soft shadows. No override block: this
-   *is* the :root/.dark baseline: every other look is the one that departs. */
+ * (lib/theme.tsx). Every component reads --radius-*, --elev-*, --font-*,
+ * and the --bg/--border/--text ramp, so a look is a token repaint only —
+ * it never needs a component-level conditional, with two narrow, disclosed
+ * exceptions: MasterCautionBar's persistent-vs-reactive behavior, and the
+ * .panel-label / .corner-frame utilities' look-gated visual payload just
+ * below the six blocks. "enterprise" needs no block: it's the :root/.dark
+ * baseline above, so it can never drift when a new look is added.
+ * ========================================================================== */
 
 /* Proxmox-native — utilitarian and dense, closer to traditional sysadmin
    tools (Proxmox's own UI, PRTG, pfSense): plain system font at a smaller
@@ -269,6 +285,8 @@
   --elev-sm: none;
   --elev-md: none;
   --elev-lg: none;
+  --elev-card: none;
+  --page-grid: none;
 }
 [data-look="proxmox"]:not(.dark) {
   --bg: #dde1e6;
@@ -290,11 +308,10 @@
   --border-strong: #4a5058;
 }
 
-/* Terminal — still dark-first and technical, but quiet: the *entire* UI
-   (not just data) sets in monospace, no display face at all, flat
-   near-zero-radius panels, no shadows. Precision over metaphor, no
-   instrument-panel theatrics — the unmistakable signature is the face
-   itself, not caution stripes or condensed caps. */
+/* Terminal — still technical, but quiet: the *entire* UI (not just data)
+   sets in monospace, no display face at all, flat near-zero-radius panels,
+   no shadows. Precision over metaphor — the unmistakable signature is the
+   face itself, not caution stripes or condensed caps. */
 [data-look="terminal"] {
   --font-sans: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
   --font-display: var(--font-sans);
@@ -306,6 +323,8 @@
   --elev-sm: none;
   --elev-md: none;
   --elev-lg: none;
+  --elev-card: none;
+  --page-grid: none;
 }
 [data-look="terminal"]:not(.dark) {
   --bg: #f3f4f6;
@@ -327,6 +346,156 @@
   --status-info: #22c1dd;
 }
 
+/* Glass Flight Deck — an aviation cockpit/EICAS instrument panel: near-black
+   ground, a strict amber/red/green/cyan caution hierarchy, condensed Oswald
+   caps for every label, targeting-reticle corner brackets on instrument
+   tiles, and a persistent master-caution nameplate (see the JS-level
+   exception in MasterCautionBar.tsx). The most maximalist of the six —
+   opt-in, not a leftover baseline. */
+[data-look="glassFlightDeck"] {
+  --font-display: "Oswald", "Arial Narrow", sans-serif;
+  --radius-sm: 0.125rem;
+  --radius-md: 0.1875rem;
+  --radius-lg: 0.25rem;
+  --radius-xl: 0.375rem;
+  --elev-xs: none;
+  --elev-sm: none;
+  --elev-md: none;
+  --elev-lg: none;
+  --elev-card: none;
+  --page-grid:
+    linear-gradient(color-mix(in oklab, var(--border-strong) 30%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in oklab, var(--border-strong) 30%, transparent) 1px, transparent 1px),
+    linear-gradient(color-mix(in oklab, var(--border-strong) 45%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in oklab, var(--border-strong) 45%, transparent) 1px, transparent 1px);
+}
+[data-look="glassFlightDeck"]:not(.dark) {
+  --bg: #eef0f3;
+  --bg-surface: #ffffff;
+  --bg-elevated: #ffffff;
+  --status-ok: #15883f;
+  --status-warn: #b45f06;
+  --status-error: #c22525;
+  --status-info: #0e7f95;
+}
+[data-look="glassFlightDeck"].dark {
+  --bg: #090b0e;
+  --bg-surface: #12151b;
+  --bg-surface-hover: #181c24;
+  --bg-elevated: #161a22;
+  --bg-muted: #1a1e28;
+  --border: #202632;
+  --border-strong: #313a4b;
+  --text: #f1f5f9;
+  --text-muted: #94a3b8;
+  --status-ok: #2fbf62;
+  --status-warn: #f0a020;
+  --status-error: #ff4d4d;
+  --status-info: #22c1dd;
+  --caution-glow-warn: 0 0 10px rgb(240 160 32 / 0.35);
+  --caution-glow-error: 0 0 12px rgb(255 77 77 / 0.4);
+  --track: #1e2430;
+  --sidebar-bg: #090b0e;
+  --sidebar-border: #1a1e26;
+}
+
+/* Midnight — a modern dev-tool dark register (Nord/GitHub-dark-adjacent):
+   cool blue-slate ground, comfortable rounded surfaces, a soft glow instead
+   of a hard shadow. Meant to be lived in dark; the light variant below
+   keeps it coherent without pretending to be its own thing. */
+[data-look="midnight"] {
+  --font-display: "Space Grotesk", "Inter", sans-serif;
+  --radius-sm: 0.3125rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+}
+[data-look="midnight"]:not(.dark) {
+  --bg: #eef1f6;
+  --bg-surface: #ffffff;
+  --bg-surface-hover: #f3f5f9;
+  --bg-elevated: #ffffff;
+  --bg-muted: #e6e9f0;
+  --border: #d7dce6;
+  --border-strong: #b9c1d0;
+  --elev-xs: 0 1px 2px rgb(30 41 70 / 0.05);
+  --elev-sm: 0 1px 2px rgb(30 41 70 / 0.06), 0 1px 3px rgb(30 41 70 / 0.06);
+  --elev-md: 0 2px 4px rgb(30 41 70 / 0.05), 0 6px 16px rgb(30 41 70 / 0.09);
+  --elev-lg: 0 4px 10px rgb(30 41 70 / 0.08), 0 14px 32px rgb(30 41 70 / 0.12);
+  --elev-card: 0 1px 3px rgb(30 41 70 / 0.06);
+}
+[data-look="midnight"].dark {
+  /* Distinctly blue-slate, not near-black-neutral like the other five dark
+     variants — the temperature shift is the point, so it has to read at a
+     glance, not just survive a color picker. */
+  --bg: #0a0e1a;
+  --bg-surface: #141b30;
+  --bg-surface-hover: #1a2340;
+  --bg-elevated: #1c2544;
+  --bg-muted: #171f38;
+  --border: #2c3860;
+  --border-strong: #3f4f80;
+  --text: #e8ecfb;
+  --text-muted: #93a0c4;
+  --text-faint: #93a0c4;
+  --status-ok: #4fd087;
+  --status-warn: #e8b048;
+  --status-error: #f16d68;
+  --status-info: #6fb2f5;
+  --track: #2c3860;
+  /* A visible cool glow, not a hairline — every card gets a faint blue
+     rim-light plus a soft ambient bloom underneath it. */
+  --elev-xs: 0 0 0 1px rgb(90 130 255 / 0.12), 0 1px 3px rgb(0 0 15 / 0.5);
+  --elev-sm: 0 0 0 1px rgb(90 130 255 / 0.14), 0 2px 12px rgb(50 90 255 / 0.16), 0 2px 8px rgb(0 0 15 / 0.5);
+  --elev-md: 0 0 0 1px rgb(90 130 255 / 0.16), 0 4px 24px rgb(50 90 255 / 0.2), 0 6px 20px rgb(0 0 15 / 0.55);
+  --elev-lg: 0 0 0 1px rgb(90 130 255 / 0.18), 0 8px 40px rgb(50 90 255 / 0.24), 0 16px 40px rgb(0 0 15 / 0.65);
+  --elev-card: 0 0 0 1px rgb(90 130 255 / 0.14), 0 2px 16px rgb(50 90 255 / 0.14), 0 2px 10px rgb(0 0 15 / 0.45);
+}
+
+/* Paper — ultra-minimal, warm and quiet (Notion/plain-docs-adjacent): warm
+   off-white ground, no display face at all, zero shadow, hairline borders
+   doing all the separating. Its dark variant stays warm (charcoal, not
+   blue-black) — every other dark look here leans cool, so Paper is the one
+   genuine warm-toned dark surface in the set. */
+[data-look="paper"] {
+  --font-display: var(--font-sans);
+  --radius-sm: 0.1875rem;
+  --radius-md: 0.25rem;
+  --radius-lg: 0.375rem;
+  --radius-xl: 0.5rem;
+  --elev-xs: none;
+  --elev-sm: none;
+  --elev-md: none;
+  --elev-lg: none;
+  --elev-card: none;
+}
+[data-look="paper"]:not(.dark) {
+  --bg: #f6f4ef;
+  --bg-surface: #fffefb;
+  --bg-surface-hover: #f0ede5;
+  --bg-elevated: #fffefb;
+  --bg-muted: #ece8de;
+  --border: #e3ddce;
+  --border-strong: #cfc7b0;
+  --text: #221f19;
+  --text-muted: #6b6455;
+  --text-faint: #7a7364;
+  --track: #e3ddce;
+}
+[data-look="paper"].dark {
+  --bg: #18140f;
+  --bg-surface: #211c15;
+  --bg-surface-hover: #27221a;
+  --bg-elevated: #27221a;
+  --bg-muted: #241f18;
+  --border: #362f24;
+  --border-strong: #4a4131;
+  --text: #f1ece1;
+  --text-muted: #ac9f89;
+  --text-faint: #ac9f89;
+  --track: #362f24;
+}
+
 * {
   border-color: var(--border);
 }
@@ -340,14 +509,7 @@ body,
 body {
   margin: 0;
   background-color: var(--bg);
-  /* Blueprint grid, not a dot pattern: a fine 8px rule and a bolder 32px rule
-     layered together — the instrument-panel ground reads as a real technical
-     drawing surface rather than a decorative texture. */
-  background-image:
-    linear-gradient(color-mix(in oklab, var(--border-strong) 30%, transparent) 1px, transparent 1px),
-    linear-gradient(90deg, color-mix(in oklab, var(--border-strong) 30%, transparent) 1px, transparent 1px),
-    linear-gradient(color-mix(in oklab, var(--border-strong) 45%, transparent) 1px, transparent 1px),
-    linear-gradient(90deg, color-mix(in oklab, var(--border-strong) 45%, transparent) 1px, transparent 1px);
+  background-image: var(--page-grid);
   background-size:
     8px 8px,
     8px 8px,
@@ -382,7 +544,7 @@ body {
   }
 }
 
-/* Modern thin scrollbars for panes and tables */
+/* thin, unobtrusive scrollbars for the dense inventory/log panes */
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--border-strong) transparent;
@@ -459,20 +621,25 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* Engraved panel-label register: every nav label, section heading, and
-   annunciator chip in the Glass Flight Deck world reads this way — tracked
-   caps, never a soft casual label. */
+/* The panel-label register: every page title, nav label, badge, tab, and
+   panel heading picks up the active look's display face and a little extra
+   weight. Tracked ALL-CAPS is Glass Flight Deck's signature specifically
+   (an engraved instrument placard), not a universal default — every other
+   look renders this in plain mixed case, so switching away from Glass
+   Flight Deck can never leave a shouty-caps residue behind. */
 @utility panel-label {
   font-family: var(--font-display);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
   font-weight: 600;
 }
+[data-look="glassFlightDeck"] .panel-label {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
 
-/* Targeting-reticle corner brackets — the one recurring signature frame in
-   this world, used sparingly on instrument readouts (KPI tiles, the page
-   nameplate), never as blanket card decoration. Two diagonal corners, not
-   four: restrained enough to read as a frame rather than a sticker. */
+/* Targeting-reticle corner brackets — Glass Flight Deck's one recurring
+   signature frame (instrument tiles, the page nameplate). The utility only
+   reserves the positioning; every other look leaves the pseudo-elements
+   borderless, so it costs nothing and paints nothing outside that look. */
 @utility corner-frame {
   position: relative;
   &::before,
@@ -483,24 +650,25 @@ body {
     height: 9px;
     pointer-events: none;
   }
-  &::before {
-    top: -1px;
-    left: -1px;
-    border-top: 2px solid var(--border-strong);
-    border-left: 2px solid var(--border-strong);
-  }
-  &::after {
-    bottom: -1px;
-    right: -1px;
-    border-bottom: 2px solid var(--border-strong);
-    border-right: 2px solid var(--border-strong);
-  }
+}
+[data-look="glassFlightDeck"] .corner-frame::before {
+  top: -1px;
+  left: -1px;
+  border-top: 2px solid var(--border-strong);
+  border-left: 2px solid var(--border-strong);
+}
+[data-look="glassFlightDeck"] .corner-frame::after {
+  bottom: -1px;
+  right: -1px;
+  border-bottom: 2px solid var(--border-strong);
+  border-right: 2px solid var(--border-strong);
 }
 
-/* The master-caution bar (AppShell) — quiet and collapsed when nothing needs
-   attention, a banded amber/red strip when it does. Bands run at a shallow
-   angle like hazard tape, not a flat fill, so the caution state reads as a
-   physical strip rather than a colored toast. */
+/* The master-caution bar (AppShell, Glass Flight Deck only — see the
+   look-aware branch in MasterCautionBar.tsx) — quiet and collapsed when
+   nothing needs attention, a banded amber/red strip when it does. Bands run
+   at a shallow angle like hazard tape, not a flat fill, so the caution
+   state reads as a physical strip rather than a colored toast. */
 @utility caution-band {
   background-image: repeating-linear-gradient(
     -45deg,

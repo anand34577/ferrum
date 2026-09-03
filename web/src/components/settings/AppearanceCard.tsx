@@ -23,11 +23,11 @@ function ThemePreview({ variant, active }: { variant: ThemePreference; active: b
       aria-hidden
       className={cn(
         "pointer-events-none h-16 w-full overflow-hidden rounded-sm border text-[7px]",
-        dark ? "border-[#202632] bg-[#090b0e]" : "border-[#d7dbe2] bg-[#eef0f3]",
+        dark ? "border-[#2b3038] bg-[#121417]" : "border-[#d7dbe2] bg-[#eef0f3]",
         active && "ring-2 ring-[var(--ring)] ring-offset-2 ring-offset-[var(--bg-surface)]",
       )}
     >
-      <div className={cn("flex h-2.5 items-center gap-0.5 border-b px-1", dark ? "border-[#202632] bg-[#12151b]" : "border-[#d7dbe2] bg-white")}>
+      <div className={cn("flex h-2.5 items-center gap-0.5 border-b px-1", dark ? "border-[#2b3038] bg-[#1a1d22]" : "border-[#d7dbe2] bg-white")}>
         <span className="h-1 w-1 rounded-full bg-[var(--status-ok)]" />
         <span className={cn("h-1 w-4 rounded-full", dark ? "bg-[#3a414c]" : "bg-[#d7dbe2]")} />
       </div>
@@ -50,7 +50,10 @@ function ThemePreview({ variant, active }: { variant: ThemePreference; active: b
 const LOOKS: { value: Look; label: string; hint: string }[] = [
   { value: "enterprise", label: "Enterprise", hint: "Clean SaaS dashboard — restrained neutrals, soft shadows, one accent" },
   { value: "proxmox", label: "Proxmox-native", hint: "Utilitarian and dense — plain system font, flat bordered panels" },
-  { value: "terminal", label: "Terminal", hint: "Quiet and dark — no display face, precision over metaphor" },
+  { value: "terminal", label: "Terminal", hint: "Quiet and dark — the whole UI in monospace, no display face" },
+  { value: "glassFlightDeck", label: "Glass Flight Deck", hint: "Aviation instrument panel — caution colors, condensed caps, corner brackets" },
+  { value: "midnight", label: "Midnight", hint: "Modern dev-tool dark — cool slate ground, soft glow, comfortable rounded" },
+  { value: "paper", label: "Paper", hint: "Ultra-minimal and warm — off-white ground, zero shadow, hairline borders" },
 ]
 
 /** A real, live mockup, not a static illustration: scoping [data-look] to

@@ -32,7 +32,14 @@ var validAccents = map[string]bool{"oxide": true, "azure": true, "verdant": true
 // Look is a named whole-app visual register (typography, radius, elevation,
 // surface tone) — same whitelist reasoning as accent: index.css owns the
 // actual token values behind each name.
-var validLooks = map[string]bool{"enterprise": true, "proxmox": true, "terminal": true}
+var validLooks = map[string]bool{
+	"enterprise":      true,
+	"proxmox":         true,
+	"terminal":        true,
+	"glassFlightDeck": true,
+	"midnight":        true,
+	"paper":           true,
+}
 
 func (s *Server) currentPreferences(r *http.Request, userID string) (userPreferences, error) {
 	prefs := userPreferences{Theme: "system", Accent: "oxide", Look: "enterprise"}
@@ -97,7 +104,7 @@ func (s *Server) putPreferences(w http.ResponseWriter, r *http.Request) {
 	}
 	if patch.Look != nil {
 		if !validLooks[*patch.Look] {
-			writeErrorMsg(w, http.StatusBadRequest, "look must be one of: enterprise, proxmox, terminal")
+			writeErrorMsg(w, http.StatusBadRequest, "look must be one of: enterprise, proxmox, terminal, glassFlightDeck, midnight, paper")
 			return
 		}
 		current.Look = *patch.Look

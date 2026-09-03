@@ -7,9 +7,10 @@
     var dark = stored === "dark" || (stored !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
     if (dark) document.documentElement.classList.add("dark");
     var look = localStorage.getItem("ferrum-look");
-    if (look === "proxmox" || look === "terminal") document.documentElement.dataset.look = look;
+    var knownLooks = ["proxmox", "terminal", "glassFlightDeck", "midnight", "paper"];
+    if (knownLooks.indexOf(look) !== -1) document.documentElement.dataset.look = look;
     var meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute("content", dark ? "#090b0e" : "#ffffff");
+    if (meta) meta.setAttribute("content", dark ? "#121417" : "#ffffff");
   } catch {
     /* no storage / no matchMedia — default light theme applies */
   }
