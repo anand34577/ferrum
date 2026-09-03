@@ -140,11 +140,6 @@ func sendSMTP(cfg SMTPConfig, subject, body string) error {
 	to := splitRecipients(cfg.To)
 	msg := buildMessage(cfg.From, to, subject, body)
 
-	var auth smtp.Auth
-	if cfg.Username != "" {
-		auth = smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.Host)
-	}
-
 	// Port 465 is implicit TLS (the connection is TLS from the first byte,
 	// no STARTTLS negotiation) — dialed by hand below. For everything else,
 	// cfg.UseTLS picks the transport explicitly rather than going through
@@ -156,25 +151,60 @@ func sendSMTP(cfg SMTPConfig, subject, body string) error {
 	// never asked for. sendPlain below never attempts TLS at all; only the
 	// UseTLS branch does, and only then.
 	if cfg.Port == 465 {
-		return sendImplicitTLS(addr, cfg.Host, auth, cfg.From, to, msg)
+		return sendImplicitTLS(addr, cfg.Host, tlsAuth(cfg), cfg.From, to, msg)
 	}
 	if cfg.UseTLS {
-		return sendStartTLS(addr, cfg.Host, auth, cfg.From, to, msg)
+		return sendStartTLS(addr, cfg.Host, tlsAuth(cfg), cfg.From, to, msg)
 	}
-	return sendPlain(addr, auth, cfg.From, to, msg)
+	return sendPlain(addr, cfg, to, msg)
+}
+
+// tlsAuth is smtp.PlainAuth for the two TLS-protected send paths — its
+// stdlib TLS-required guard is exactly what should apply there.
+func tlsAuth(cfg SMTPConfig) smtp.Auth {
+	if cfg.Username == "" {
+		return nil
+	}
+	return smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.Host)
 }
 
 // sendPlain sends over a bare, never-upgraded connection — no STARTTLS
 // attempt regardless of what the server advertises, honoring an explicit
 // "don't use TLS" choice instead of net/smtp.SendMail's opportunistic
-// upgrade.
-func sendPlain(addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
+// upgrade. Authenticates via unencryptedPlainAuth rather than
+// smtp.PlainAuth: the stdlib version refuses to send credentials over any
+// connection that isn't TLS or literally localhost, which would otherwise
+// make "no TLS" and "have a username" mutually exclusive — the admin
+// choosing both explicitly (a trusted internal network) is not for Ferrum
+// to second-guess.
+func sendPlain(addr string, cfg SMTPConfig, to []string, msg []byte) error {
 	c, err := smtp.Dial(addr)
 	if err != nil {
 		return fmt.Errorf("dialing: %w", err)
 	}
 	defer c.Close()
-	return sendViaClient(c, auth, from, to, msg)
+	var auth smtp.Auth
+	if cfg.Username != "" {
+		auth = &unencryptedPlainAuth{username: cfg.Username, password: cfg.Password}
+	}
+	return sendViaClient(c, auth, cfg.From, to, msg)
+}
+
+// unencryptedPlainAuth is net/smtp's PLAIN mechanism without the
+// TLS-or-localhost requirement smtp.PlainAuth enforces — see sendPlain.
+type unencryptedPlainAuth struct {
+	username, password string
+}
+
+func (a *unencryptedPlainAuth) Start(_ *smtp.ServerInfo) (string, []byte, error) {
+	return "PLAIN", []byte("\x00" + a.username + "\x00" + a.password), nil
+}
+
+func (a *unencryptedPlainAuth) Next(_ []byte, more bool) ([]byte, error) {
+	if more {
+		return nil, errors.New("smtp: unexpected server challenge for PLAIN auth")
+	}
+	return nil, nil
 }
 
 func sendImplicitTLS(addr, host string, auth smtp.Auth, from string, to []string, msg []byte) error {
