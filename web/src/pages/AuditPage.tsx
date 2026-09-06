@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
-import { ClipboardList } from "lucide-react"
+import { Bot, CheckCircle2, ClipboardList, XCircle } from "lucide-react"
 import { useMemo, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
@@ -8,7 +8,8 @@ import { DataTable } from "@/components/ui/data-table"
 import { ErrorState } from "@/components/ui/error-state"
 import { MultiSelect } from "@/components/ui/multi-select"
 import { PageHeader } from "@/components/ui/page-header"
-import { api } from "@/lib/api"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { api, type ToolCallRecord } from "@/lib/api"
 
 interface AuditEntry {
   id: string
@@ -27,6 +28,22 @@ const categoryVariant: Record<string, "ok" | "warn" | "error" | "default"> = {
 }
 
 export function AuditPage() {
+  return (
+    <div className="space-y-4">
+      <PageHeader title="Audit Log" description="Every action taken through this Ferrum instance." icon={ClipboardList} />
+      <Tabs defaultValue="audit">
+        <TabsList>
+          <TabsTrigger value="audit">General audit log</TabsTrigger>
+          <TabsTrigger value="ai">AI &amp; MCP activity</TabsTrigger>
+        </TabsList>
+        <TabsContent value="audit"><GeneralAuditLog /></TabsContent>
+        <TabsContent value="ai"><AIActivityLog /></TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+
+function GeneralAuditLog() {
   const { data, isLoading, isError, refetch } = useQuery({ queryKey: ["audit"], queryFn: () => api.get<AuditEntry[]>("/audit") })
   const [category, setCategory] = useState<string[]>([])
 
@@ -60,39 +77,86 @@ export function AuditPage() {
     [],
   )
 
-  return (
-    <div className="space-y-4">
-      <PageHeader
-        title="Audit Log"
-        description="Every action taken through this Ferrum instance."
-        icon={ClipboardList}
-        actions={
-          <MultiSelect
-            options={categories.map((c) => ({ value: c, label: c }))}
-            selected={category}
-            onChange={setCategory}
-            allLabel="All categories"
-            label="Filter by category"
-            className="w-44"
-          />
-        }
-      />
+  if (isError) return <ErrorState title="Couldn't load the audit log" onRetry={refetch} />
 
-      {isError ? (
-        <ErrorState title="Couldn't load the audit log" onRetry={refetch} />
-      ) : (
-        <Card>
-          <CardContent className="pt-4">
-            <DataTable
-              columns={columns}
-              data={filtered}
-              loading={isLoading}
-              searchPlaceholder="Search audit log..."
-              emptyMessage="No activity recorded yet."
+  return (
+    <Card>
+      <CardContent className="pt-4">
+        <DataTable
+          columns={columns}
+          data={filtered}
+          loading={isLoading}
+          searchPlaceholder="Search audit log..."
+          emptyMessage="No activity recorded yet."
+          toolbar={
+            <MultiSelect
+              options={categories.map((c) => ({ value: c, label: c }))}
+              selected={category}
+              onChange={setCategory}
+              allLabel="All categories"
+              label="Filter by category"
+              className="w-44"
             />
-          </CardContent>
-        </Card>
-      )}
-    </div>
+          }
+        />
+      </CardContent>
+    </Card>
+  )
+}
+
+/** Every tool call any user's AI Assistant session or MCP client has made,
+ * across the whole instance — what state-changing REST actions look like in
+ * the general audit log above, this is for the read+write agentic surface:
+ * "who let an LLM do what, and did it succeed." */
+function AIActivityLog() {
+  const { data, isLoading, isError, refetch } = useQuery({ queryKey: ["admin", "ai", "activity"], queryFn: () => api.get<ToolCallRecord[]>("/admin/ai/activity") })
+
+  const columns = useMemo<ColumnDef<ToolCallRecord>[]>(
+    () => [
+      {
+        accessorKey: "createdAt",
+        header: "Time",
+        cell: (c) => <span className="text-xs text-[var(--text-muted)] tabular">{new Date(c.getValue<string>()).toLocaleString()}</span>,
+      },
+      { accessorKey: "username", header: "User" },
+      {
+        accessorKey: "source",
+        header: "Source",
+        cell: (c) => <Badge variant={c.getValue<string>() === "mcp" ? "brand" : "outline"}>{c.getValue<string>() === "mcp" ? "MCP" : "Chat"}</Badge>,
+      },
+      { accessorKey: "tool", header: "Tool", cell: (c) => <span className="font-mono text-xs">{c.getValue<string>()}</span> },
+      {
+        accessorKey: "ok",
+        header: "Result",
+        cell: (c) =>
+          c.getValue<boolean>() ? (
+            <span className="inline-flex items-center gap-1 text-xs text-[var(--status-ok)]"><CheckCircle2 className="h-3.5 w-3.5" /> OK</span>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-xs text-[var(--status-error)]" title={c.row.original.error}><XCircle className="h-3.5 w-3.5" /> Failed</span>
+          ),
+      },
+    ],
+    [],
+  )
+
+  if (isError) return <ErrorState title="Couldn't load AI/MCP activity" onRetry={refetch} />
+
+  return (
+    <Card>
+      <CardContent className="pt-4">
+        <DataTable
+          columns={columns}
+          data={data ?? []}
+          loading={isLoading}
+          searchPlaceholder="Search tool calls..."
+          emptyMessage="No AI or MCP tool calls recorded yet."
+        />
+        {!isLoading && (data?.length ?? 0) === 0 && (
+          <p className="mt-3 flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
+            <Bot className="h-3.5 w-3.5" /> This fills in once someone uses the AI Assistant or connects an MCP client.
+          </p>
+        )}
+      </CardContent>
+    </Card>
   )
 }

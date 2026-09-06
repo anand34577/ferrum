@@ -1,17 +1,20 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Activity, Cpu, HardDrive, MemoryStick, Network, Power, RefreshCw, Server, Terminal, Thermometer, Upload } from "lucide-react"
+import { Activity, Cpu, HardDrive, MemoryStick, Network, Play, Power, RefreshCw, Server, SquareTerminal, Square, Terminal, Thermometer, Upload, Zap } from "lucide-react"
 import { useMemo, useState } from "react"
 import { useParams } from "react-router-dom"
 import { toast } from "sonner"
 import { KpiCard } from "@/components/charts/KpiCard"
 import { ResourceAreaChart } from "@/components/charts/ResourceAreaChart"
 import { DonutChart, DonutLegend } from "@/components/charts/DonutChart"
+import { NodeSystemPanel } from "@/components/system/NodeSystemPanel"
+import { ProvisionDiskDialog } from "@/components/system/ProvisionDiskDialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ErrorState } from "@/components/ui/error-state"
+import { Meter } from "@/components/ui/meter"
 import { PageHeader } from "@/components/ui/page-header"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -23,12 +26,13 @@ import {
   type AptUpdate,
   type Disk,
   type NetworkInterface,
+  type JournalEntry,
   type NodeStatus,
   type RRDPoint,
   type SmartData,
   type Storage,
-  type SyslogEntry,
 } from "@/lib/api"
+import { buildShellUrl } from "@/lib/console"
 import { FORMATTERS, NODE_SERIES, buildRRDRows, hasAnySeries, rowNum, type ChartRow, type SeriesSpec } from "@/lib/metrics"
 import { cn, formatBytes, formatPercentFine, formatRate, formatUptime } from "@/lib/utils"
 
@@ -84,6 +88,7 @@ export function NodeDetailPage() {
     (disksQuery.data ?? []).map((d, i) => [d.devpath, smartTemperatureC(diskTempQueries[i]?.data)]),
   )
   const [smartDisk, setSmartDisk] = useState<Disk | null>(null)
+  const [provisionDisk, setProvisionDisk] = useState<Disk | null>(null)
   const smartQuery = useQuery({
     queryKey: ["node-disk-smart", connId, node, smartDisk?.devpath],
     queryFn: () => api.get<SmartData>(`${base}/disks/smart?disk=${encodeURIComponent(smartDisk!.devpath)}`),
@@ -91,7 +96,7 @@ export function NodeDetailPage() {
   })
   const networkQuery = useQuery({ queryKey: ["node-network", connId, node], queryFn: () => api.get<NetworkInterface[]>(`${base}/network`) })
   const aptQuery = useQuery({ queryKey: ["node-apt", connId, node], queryFn: () => api.get<AptUpdate[]>(`${base}/apt/updates`) })
-  const syslogQuery = useQuery({ queryKey: ["node-syslog", connId, node], queryFn: () => api.get<SyslogEntry[]>(`${base}/syslog`) })
+  const journalQuery = useQuery({ queryKey: ["node-journal", connId, node], queryFn: () => api.get<JournalEntry[]>(`${base}/journal`) })
 
   const rebootMutation = useMutation({
     mutationFn: () => api.post(`${base}/reboot`),
@@ -111,6 +116,26 @@ export function NodeDetailPage() {
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Upgrade failed"),
   })
+  const wakeOnLanMutation = useMutation({
+    mutationFn: () => api.post(`${base}/wakeonlan`),
+    onSuccess: () => toast.success("Wake-on-LAN packet sent"),
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Wake-on-LAN failed"),
+  })
+  const startAllMutation = useMutation({
+    mutationFn: () => api.post(`${base}/startall`),
+    onSuccess: () => toast.success("Starting all guests on this node"),
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Bulk start failed"),
+  })
+  const stopAllMutation = useMutation({
+    mutationFn: () => api.post(`${base}/stopall`),
+    onSuccess: () => toast.success("Stopping all guests on this node"),
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Bulk stop failed"),
+  })
+  const openShellMutation = useMutation({
+    mutationFn: () => api.post<{ wsPath: string }>(`${base}/shell`),
+    onSuccess: ({ wsPath }) => window.open(buildShellUrl(connId, node, wsPath, node), "_blank", "width=900,height=600"),
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to open shell"),
+  })
 
   // Both node power actions take the whole host down — always confirm.
   async function rebootNode() {
@@ -128,6 +153,14 @@ export function NodeDetailPage() {
       confirmLabel: "Shut down",
     })
     if (ok) shutdownMutation.mutate()
+  }
+  async function stopAllGuests() {
+    const ok = await confirm({
+      title: `Stop all guests on ${node}?`,
+      description: "Every running VM and container on this node shuts down.",
+      confirmLabel: "Stop all",
+    })
+    if (ok) stopAllMutation.mutate()
   }
 
   const status = statusQuery.data
@@ -198,6 +231,18 @@ export function NodeDetailPage() {
         back={{ to: "/inventory", label: "Inventory" }}
         actions={
           <>
+            <Button variant="secondary" size="sm" onClick={() => openShellMutation.mutate()} loading={openShellMutation.isPending}>
+              {!openShellMutation.isPending && <SquareTerminal className="h-3.5 w-3.5" />} Shell
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => wakeOnLanMutation.mutate()} loading={wakeOnLanMutation.isPending}>
+              {!wakeOnLanMutation.isPending && <Zap className="h-3.5 w-3.5" />} Wake-on-LAN
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => startAllMutation.mutate()} loading={startAllMutation.isPending}>
+              {!startAllMutation.isPending && <Play className="h-3.5 w-3.5" />} Start all
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => stopAllGuests()} loading={stopAllMutation.isPending}>
+              {!stopAllMutation.isPending && <Square className="h-3.5 w-3.5" />} Stop all
+            </Button>
             <Button variant="secondary" size="sm" onClick={() => rebootNode()} loading={rebootMutation.isPending}>
               {!rebootMutation.isPending && <RefreshCw className="h-3.5 w-3.5" />} Reboot
             </Button>
@@ -357,39 +402,49 @@ export function NodeDetailPage() {
           <TabsTrigger value="disks">Disks {disksQuery.data?.length ? `(${disksQuery.data.length})` : ""}</TabsTrigger>
           <TabsTrigger value="network">Network</TabsTrigger>
           <TabsTrigger value="updates">Updates {aptQuery.data?.length ? `(${aptQuery.data.length})` : ""}</TabsTrigger>
-          <TabsTrigger value="syslog">Syslog</TabsTrigger>
+          <TabsTrigger value="syslog">Journal</TabsTrigger>
+          <TabsTrigger value="system">System</TabsTrigger>
         </TabsList>
 
         <TabsContent value="storage">
           <Card>
             <CardContent className="space-y-4 pt-4">
-              {typeSlices.length > 1 && (
-                <div className="flex flex-col items-center gap-2 sm:flex-row sm:gap-6">
-                  <div className="w-44 shrink-0 self-center">
-                    <DonutChart data={typeSlices} height={130} centerValue={formatBytes(typeSlices.reduce((s, t) => s + t.value, 0))} centerLabel="stored" formatValue={formatBytes} />
-                  </div>
-                  <DonutLegend data={typeSlices} formatValue={formatBytes} />
-                  <p className="text-center text-xs text-[var(--text-faint)] sm:hidden">Usage by storage type</p>
+              {storageQuery.isError ? (
+                <ErrorState title="Couldn't load storage" onRetry={storageQuery.refetch} />
+              ) : storageQuery.isLoading ? (
+                <div className="space-y-2" aria-busy>
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-8 w-full" />
                 </div>
-              )}
-              <div className="space-y-2">
-                {storageQuery.data?.map((s) => {
-                  const pct = s.total ? ((s.used ?? 0) / s.total) * 100 : 0
-                  return (
-                    <div key={s.storage} className="flex items-center gap-3 text-sm">
-                      <span className="w-32 truncate font-medium">{s.storage}</span>
-                      <Badge>{s.type}</Badge>
-                      {s.shared === 1 && <Badge variant="ok">Shared</Badge>}
-                      <Badge variant={s.active === 0 ? "error" : "default"}>{s.active === 0 ? "Inactive" : "Active"}</Badge>
-                      <div className="h-1.5 flex-1 overflow-hidden rounded-sm bg-[var(--track)]">
-                        <div className={pct > 85 ? "h-full bg-[var(--status-error)]" : "h-full bg-brand-500"} style={{ width: `${pct}%` }} />
+              ) : (
+                <>
+                  {typeSlices.length > 1 && (
+                    <div className="flex flex-col items-center gap-2 sm:flex-row sm:gap-6">
+                      <div className="w-44 shrink-0 self-center">
+                        <DonutChart data={typeSlices} height={130} centerValue={formatBytes(typeSlices.reduce((s, t) => s + t.value, 0))} centerLabel="stored" formatValue={formatBytes} />
                       </div>
-                      <span className="w-32 text-right text-xs text-[var(--text-muted)] tabular">{formatBytes(s.used ?? 0)} / {formatBytes(s.total ?? 0)}</span>
+                      <DonutLegend data={typeSlices} formatValue={formatBytes} />
+                      <p className="text-center text-xs text-[var(--text-faint)] sm:hidden">Usage by storage type</p>
                     </div>
-                  )
-                })}
-                {storageQuery.data?.length === 0 && <p className="text-sm text-[var(--text-muted)]">No storage found.</p>}
-              </div>
+                  )}
+                  <div className="space-y-2">
+                    {storageQuery.data?.map((s) => {
+                      const pct = s.total ? ((s.used ?? 0) / s.total) * 100 : 0
+                      return (
+                        <div key={s.storage} className="flex flex-wrap items-center gap-3 text-sm">
+                          <span className="w-32 truncate font-medium">{s.storage}</span>
+                          <Badge>{s.type}</Badge>
+                          {s.shared === 1 && <Badge variant="ok">Shared</Badge>}
+                          <Badge variant={s.active === 0 ? "error" : "default"}>{s.active === 0 ? "Inactive" : "Active"}</Badge>
+                          <Meter value={pct} label={`${s.storage} usage`} className="min-w-16 flex-1" />
+                          <span className="shrink-0 whitespace-nowrap text-right text-xs text-[var(--text-muted)] tabular">{formatBytes(s.used ?? 0)} / {formatBytes(s.total ?? 0)}</span>
+                        </div>
+                      )
+                    })}
+                    {storageQuery.data?.length === 0 && <p className="text-sm text-[var(--text-muted)]">No storage found.</p>}
+                  </div>
+                </>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -424,13 +479,20 @@ export function NodeDetailPage() {
                     </div>
                     {typeof d.wearout === "number" && (
                       <div className="flex w-28 shrink-0 items-center gap-1.5" title="Estimated life remaining">
-                        <div className="h-1.5 flex-1 overflow-hidden rounded-sm bg-[var(--track)]">
+                        <div
+                          className="h-1.5 flex-1 overflow-hidden rounded-none bg-[var(--track)]"
+                          role="progressbar"
+                          aria-valuenow={Math.round(d.wearout)}
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-label="Estimated life remaining"
+                        >
                           <div
                             className={d.wearout <= 10 ? "h-full bg-[var(--status-error)]" : d.wearout <= 25 ? "h-full bg-[var(--status-warn)]" : "h-full bg-brand-500"}
                             style={{ width: `${Math.max(0, Math.min(100, d.wearout))}%` }}
                           />
                         </div>
-                        <span className="w-8 text-right text-[10px] text-[var(--text-muted)] tabular">{d.wearout}%</span>
+                        <span className="w-8 shrink-0 whitespace-nowrap text-right text-[10px] text-[var(--text-muted)] tabular">{d.wearout}%</span>
                       </div>
                     )}
                     {(() => {
@@ -451,6 +513,9 @@ export function NodeDetailPage() {
                       )
                     })()}
                     <span className="shrink-0 text-xs text-[var(--text-muted)] tabular">{formatBytes(d.size)}</span>
+                    {!d.used && (
+                      <Button size="sm" variant="outline" onClick={() => setProvisionDisk(d)}>Provision</Button>
+                    )}
                     <Button size="sm" variant="outline" onClick={() => setSmartDisk(d)}>View SMART</Button>
                   </div>
                 ))
@@ -462,22 +527,33 @@ export function NodeDetailPage() {
         <TabsContent value="network">
           <Card>
             <CardContent className="space-y-2 pt-4">
-              {networkQuery.data?.map((n) => (
-                <div key={n.iface} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <span className="shrink-0 font-mono">{n.iface}</span>
-                    <Badge>{n.type}</Badge>
-                    {n.active === 1 && <Badge variant="ok">Active</Badge>}
-                    {n.autostart === 1 && <span className="shrink-0 text-xs text-[var(--text-muted)]">autostart</span>}
-                    {n.bridge_ports && <span className="break-all font-mono text-xs text-[var(--text-muted)]">ports: {n.bridge_ports}</span>}
-                  </div>
-                  <span className="shrink-0 font-mono text-xs text-[var(--text-muted)]">
-                    {n.address ? `${n.address}${n.netmask ? `/${n.netmask}` : ""}` : "no IP"}
-                    {n.gateway ? ` via ${n.gateway}` : ""}
-                  </span>
+              {networkQuery.isError ? (
+                <ErrorState title="Couldn't load network interfaces" onRetry={networkQuery.refetch} />
+              ) : networkQuery.isLoading ? (
+                <div className="space-y-2" aria-busy>
+                  <Skeleton className="h-12 w-full" />
+                  <Skeleton className="h-12 w-full" />
                 </div>
-              ))}
-              {networkQuery.data?.length === 0 && <p className="text-sm text-[var(--text-muted)]">No interfaces found.</p>}
+              ) : (
+                <>
+                  {networkQuery.data?.map((n) => (
+                    <div key={n.iface} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <span className="shrink-0 font-mono">{n.iface}</span>
+                        <Badge>{n.type}</Badge>
+                        {n.active === 1 && <Badge variant="ok">Active</Badge>}
+                        {n.autostart === 1 && <span className="shrink-0 text-xs text-[var(--text-muted)]">autostart</span>}
+                        {n.bridge_ports && <span className="break-all font-mono text-xs text-[var(--text-muted)]">ports: {n.bridge_ports}</span>}
+                      </div>
+                      <span className="shrink-0 font-mono text-xs text-[var(--text-muted)]">
+                        {n.address ? `${n.address}${n.netmask ? `/${n.netmask}` : ""}` : "no IP"}
+                        {n.gateway ? ` via ${n.gateway}` : ""}
+                      </span>
+                    </div>
+                  ))}
+                  {networkQuery.data?.length === 0 && <p className="text-sm text-[var(--text-muted)]">No interfaces found.</p>}
+                </>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -494,16 +570,27 @@ export function NodeDetailPage() {
               )}
             </CardHeader>
             <CardContent className="space-y-1.5">
-              {aptQuery.data?.map((u) => (
-                <div key={u.Package} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm">
-                  <span className="flex min-w-0 items-center gap-2">
-                    <span className="truncate font-mono text-xs">{u.Package}</span>
-                    {u.Priority && <Badge variant={u.Priority === "security" ? "error" : "default"}>{u.Priority}</Badge>}
-                  </span>
-                  <span className="shrink-0 truncate font-mono text-xs text-[var(--text-muted)]">{u.OldVersion} → {u.Version}</span>
+              {aptQuery.isError ? (
+                <ErrorState title="Couldn't load pending updates" onRetry={aptQuery.refetch} />
+              ) : aptQuery.isLoading ? (
+                <div className="space-y-1.5" aria-busy>
+                  <Skeleton className="h-6 w-full" />
+                  <Skeleton className="h-6 w-full" />
                 </div>
-              ))}
-              {aptQuery.data?.length === 0 && <p className="text-sm text-[var(--text-muted)]">System is up to date.</p>}
+              ) : (
+                <>
+                  {aptQuery.data?.map((u) => (
+                    <div key={u.Package} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="truncate font-mono text-xs">{u.Package}</span>
+                        {u.Priority && <Badge variant={u.Priority === "security" ? "error" : "default"}>{u.Priority}</Badge>}
+                      </span>
+                      <span className="shrink-0 truncate font-mono text-xs text-[var(--text-muted)]">{u.OldVersion} → {u.Version}</span>
+                    </div>
+                  ))}
+                  {aptQuery.data?.length === 0 && <p className="text-sm text-[var(--text-muted)]">System is up to date.</p>}
+                </>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -511,17 +598,31 @@ export function NodeDetailPage() {
         <TabsContent value="syslog">
           <Card>
             <CardContent className="pt-4">
-              <div className="max-h-96 space-y-0.5 overflow-y-auto rounded-md bg-[var(--bg-muted)] p-3 font-mono text-xs">
-                {syslogQuery.data?.map((entry) => (
-                  <div key={entry.n} className="flex gap-2">
-                    <Terminal className="mt-0.5 h-3 w-3 shrink-0 text-[var(--text-muted)]" />
-                    <span className="whitespace-pre-wrap">{entry.t}</span>
-                  </div>
-                ))}
-                {syslogQuery.data?.length === 0 && <p className="text-[var(--text-muted)]">No log entries.</p>}
-              </div>
+              {journalQuery.isError ? (
+                <ErrorState title="Couldn't load the journal" onRetry={journalQuery.refetch} />
+              ) : journalQuery.isLoading ? (
+                <Skeleton className="h-96 w-full" />
+              ) : (
+                <div className="max-h-96 space-y-0.5 overflow-y-auto rounded-md bg-[var(--bg-muted)] p-3 font-mono text-xs">
+                  {journalQuery.data?.map((entry, i) => (
+                    // index, not entry.n: some PVE versions return a line
+                    // with no line number at all (see JournalEntry's custom
+                    // UnmarshalJSON server-side), which would otherwise
+                    // collide every such line onto the same n:0 React key.
+                    <div key={i} className="flex gap-2">
+                      <Terminal className="mt-0.5 h-3 w-3 shrink-0 text-[var(--text-muted)]" />
+                      <span className="whitespace-pre-wrap">{entry.t}</span>
+                    </div>
+                  ))}
+                  {journalQuery.data?.length === 0 && <p className="text-[var(--text-muted)]">No log entries.</p>}
+                </div>
+              )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="system">
+          <NodeSystemPanel connId={connId} node={node} />
         </TabsContent>
       </Tabs>
 
@@ -538,13 +639,13 @@ export function NodeDetailPage() {
           ) : smartQuery.data?.attributes && smartQuery.data.attributes.length > 0 ? (
             <div className="max-h-[60vh] overflow-auto">
               <table className="w-full text-left text-xs">
-                <thead className="text-[var(--text-muted)]">
+                <thead className="font-mono text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
                   <tr>
-                    <th className="py-1 pr-2 font-medium">Attribute</th>
-                    <th className="py-1 pr-2 font-medium">Value</th>
-                    <th className="py-1 pr-2 font-medium">Worst</th>
-                    <th className="py-1 pr-2 font-medium">Threshold</th>
-                    <th className="py-1 font-medium">Raw</th>
+                    <th className="py-1 pr-2">Attribute</th>
+                    <th className="py-1 pr-2">Value</th>
+                    <th className="py-1 pr-2">Worst</th>
+                    <th className="py-1 pr-2">Threshold</th>
+                    <th className="py-1">Raw</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -567,6 +668,13 @@ export function NodeDetailPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      <ProvisionDiskDialog
+        connId={connId}
+        node={node}
+        disk={provisionDisk}
+        onOpenChange={(open) => !open && setProvisionDisk(null)}
+      />
     </div>
   )
 }

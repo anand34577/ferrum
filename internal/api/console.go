@@ -26,9 +26,9 @@ import (
 // browser's URL/query string.
 type consoleSession struct {
 	connectionID string
-	guestType    string
+	guestType    string // "qemu" | "lxc" | "" for a node-level shell
 	node         string
-	vmid         int
+	vmid         int // 0 for a node-level shell
 	port         string
 	ticket       string
 	expires      time.Time
@@ -87,27 +87,87 @@ func (s *Server) openGuestConsole(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("console proxy request failed", "connectionId", connID, "guestType", guestType, "node", node, "vmid", vmid, "error", err)
 		msg := strings.TrimSpace(err.Error())
 		if strings.HasSuffix(msg, "{\"data\":null}") {
-			msg = fmt.Sprintf("Proxmox refused to open a console for this %s — it may not expose a VNC console (containers in TTY console mode need Proxmox's own xterm.js console).", guestType)
+			msg = fmt.Sprintf("Proxmox refused to open a VNC console for this %s — try the Shell console instead (containers in TTY console mode need it).", guestType)
 		}
 		writeErrorMsg(w, http.StatusBadGateway, msg)
 		return
 	}
 
-	sessionID := uuid.NewString()
-	consoleSessionsMu.Lock()
-	sweepConsoleSessionsLocked(time.Now())
-	consoleSessions[sessionID] = consoleSession{
-		connectionID: connID, guestType: guestType, node: node, vmid: vmid,
-		port: proxy.Port, ticket: proxy.Ticket, expires: time.Now().Add(consoleSessionTTL),
-	}
-	consoleSessionsMu.Unlock()
-
+	sessionID := newConsoleSession(connID, guestType, node, vmid, proxy.Port, proxy.Ticket)
 	s.audit(r, "vm.console", "vm", fmt.Sprintf("%s/%s/%d", node, guestType, vmid))
 	// The PVE VNC ticket doubles as the VNC-level password — PVE challenges
 	// for it during the RFB handshake after the WebSocket is up, so the
 	// browser needs it to complete the connection. It's single-use and
 	// expires with the session, same trust window as wsPath.
 	writeJSON(w, http.StatusOK, map[string]string{"sessionId": sessionID, "wsPath": "/ws/console/" + sessionID, "password": proxy.Ticket})
+}
+
+// openGuestShell mints a termproxy (xterm.js shell) session, using the same
+// hand-off/websocket-proxy plumbing as openGuestConsole's VNC session — PVE
+// exposes both over the same vncwebsocket endpoint, keyed by whichever
+// ticket kind was requested.
+func (s *Server) openGuestShell(w http.ResponseWriter, r *http.Request) {
+	connID := chi.URLParam(r, "id")
+	guestType := chi.URLParam(r, "type")
+	node := chi.URLParam(r, "node")
+	vmid, err := vmidParam(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	client, err := s.clientFor(r.Context(), connID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	proxy, err := client.GuestTermProxy(r.Context(), guestType, node, vmid)
+	if err != nil {
+		slog.Warn("shell proxy request failed", "connectionId", connID, "guestType", guestType, "node", node, "vmid", vmid, "error", err)
+		writeErrorMsg(w, http.StatusBadGateway, strings.TrimSpace(err.Error()))
+		return
+	}
+
+	sessionID := newConsoleSession(connID, guestType, node, vmid, proxy.Port, proxy.Ticket)
+	s.audit(r, "vm.shell", "vm", fmt.Sprintf("%s/%s/%d", node, guestType, vmid))
+	writeJSON(w, http.StatusOK, map[string]string{"sessionId": sessionID, "wsPath": "/ws/console/" + sessionID})
+}
+
+// openNodeShell mints a termproxy session for the node's own host shell —
+// same flow as openGuestShell but with no guest to scope it to.
+func (s *Server) openNodeShell(w http.ResponseWriter, r *http.Request) {
+	connID := chi.URLParam(r, "id")
+	node := chi.URLParam(r, "node")
+
+	client, err := s.clientFor(r.Context(), connID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	proxy, err := client.NodeTermProxy(r.Context(), node)
+	if err != nil {
+		slog.Warn("node shell proxy request failed", "connectionId", connID, "node", node, "error", err)
+		writeErrorMsg(w, http.StatusBadGateway, strings.TrimSpace(err.Error()))
+		return
+	}
+
+	sessionID := newConsoleSession(connID, "", node, 0, proxy.Port, proxy.Ticket)
+	s.audit(r, "node.shell", "node", node)
+	writeJSON(w, http.StatusOK, map[string]string{"sessionId": sessionID, "wsPath": "/ws/console/" + sessionID})
+}
+
+// newConsoleSession records a short-lived hand-off entry and returns its id —
+// shared by the VNC, guest-shell, and node-shell "open a console" handlers.
+func newConsoleSession(connID, guestType, node string, vmid int, port, ticket string) string {
+	sessionID := uuid.NewString()
+	consoleSessionsMu.Lock()
+	sweepConsoleSessionsLocked(time.Now())
+	consoleSessions[sessionID] = consoleSession{
+		connectionID: connID, guestType: guestType, node: node, vmid: vmid,
+		port: port, ticket: ticket, expires: time.Now().Add(consoleSessionTTL),
+	}
+	consoleSessionsMu.Unlock()
+	return sessionID
 }
 
 var upgrader = websocket.Upgrader{
@@ -166,10 +226,17 @@ func (s *Server) consoleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer clientConn.Close()
 
+	// A guest (VNC or shell) session scopes the path to its qemu/lxc/vmid;
+	// a node-level shell session (guestType == "") has no guest segment —
+	// PVE serves both kinds of ticket through the same node-level endpoint.
+	guestSegment := ""
+	if sess.guestType != "" {
+		guestSegment = fmt.Sprintf("/%s/%d", sess.guestType, sess.vmid)
+	}
 	pveURL := url.URL{
 		Scheme:   "wss",
 		Host:     fmt.Sprintf("%s:%d", host, port),
-		Path:     fmt.Sprintf("/api2/json/nodes/%s/%s/%d/vncwebsocket", pve.PathEscape(sess.node), sess.guestType, sess.vmid),
+		Path:     fmt.Sprintf("/api2/json/nodes/%s%s/vncwebsocket", pve.PathEscape(sess.node), guestSegment),
 		RawQuery: url.Values{"port": {sess.port}, "vncticket": {sess.ticket}}.Encode(),
 	}
 

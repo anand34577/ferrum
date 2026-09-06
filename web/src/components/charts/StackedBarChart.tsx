@@ -1,6 +1,8 @@
 import { Bar, BarChart, Rectangle, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import type { BarShapeProps } from "recharts"
 import { chartTooltip } from "@/components/charts/tooltipTheme"
+import { chartBarRadius } from "@/lib/chartRadius"
+import { useTheme } from "@/lib/theme"
 
 export interface StackedSeries {
   key: string
@@ -21,12 +23,13 @@ function segmentRadius(
   series: StackedSeries[],
   seriesIndex: number,
   rowIndex: number,
+  r: number,
 ): [number, number, number, number] {
   const row = data[rowIndex]
   if (!row) return [0, 0, 0, 0]
   const isStart = series.slice(0, seriesIndex).every((s) => !row[s.key])
   const isEnd = series.slice(seriesIndex + 1).every((s) => !row[s.key])
-  return [isEnd ? 4 : 0, isEnd ? 4 : 0, isStart ? 4 : 0, isStart ? 4 : 0]
+  return [isEnd ? r : 0, isEnd ? r : 0, isStart ? r : 0, isStart ? r : 0]
 }
 
 interface StackedBarChartProps {
@@ -42,6 +45,8 @@ interface StackedBarChartProps {
 /** Horizontal stacked bars — composition across categories (e.g. guest mix
  * per node). Category names stay readable on the Y axis however long they are. */
 export function StackedBarChart({ data, series, height = 180, valueFormatter, showXAxis = false, showLegend = true }: StackedBarChartProps) {
+  const { look } = useTheme()
+  const r = chartBarRadius(look)
   if (data.length === 0) return null
 
   return (
@@ -76,7 +81,7 @@ export function StackedBarChart({ data, series, height = 180, valueFormatter, sh
                   width={p.width}
                   height={p.height}
                   fill={s.color}
-                  radius={segmentRadius(data, series, i, p.index)}
+                  radius={segmentRadius(data, series, i, p.index, r)}
                   stroke={outlined ? "var(--text-faint)" : "none"}
                   strokeWidth={1}
                 />

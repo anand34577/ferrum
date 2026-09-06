@@ -7,6 +7,7 @@ import { useScopedInventory } from "@/lib/fleet"
 import { api, type RRDPoint } from "@/lib/api"
 import { FORMATTERS, NODE_SERIES, rowNum, type ChartRow } from "@/lib/metrics"
 import { formatBytes } from "@/lib/utils"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 // Ferrum doesn't run its own time-series store — this widget gets a real
 // fleet-wide trend by pulling each node's native PVE RRD history and
@@ -15,7 +16,7 @@ import { formatBytes } from "@/lib/utils"
 // app targets (tens of nodes, not thousands).
 export function FleetTrendWidget({ settings }: { settings: WidgetSettings }) {
   const timeframe = settings.timeframe ?? "hour"
-  const { connections, isLoading: inventoryLoading } = useScopedInventory(settings)
+  const { connections, isLoading: inventoryLoading, isError: inventoryError } = useScopedInventory(settings)
 
   const nodePairs: Array<{ connId: string; node: string }> = useMemo(
     () =>
@@ -39,8 +40,10 @@ export function FleetTrendWidget({ settings }: { settings: WidgetSettings }) {
   const loading = nodePairs.length > 0 && rrdQueries.some((q) => q.isLoading)
 
   if (inventoryLoading) return <Loader2 className="h-4 w-4 animate-spin text-[var(--text-muted)]" />
+  if (inventoryError) return <WidgetError />
   if (nodePairs.length === 0) return <p className="text-sm text-[var(--text-muted)]">No nodes reporting yet.</p>
   if (loading) return <Loader2 className="h-4 w-4 animate-spin text-[var(--text-muted)]" />
+  if (rrdQueries.every((q) => q.isError)) return <WidgetError />
 
   // Bucket every node's points by minute so nodes with slightly different
   // sample timestamps still line up into one series. CPU averages across

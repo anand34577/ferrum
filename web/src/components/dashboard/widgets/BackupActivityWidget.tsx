@@ -4,10 +4,17 @@ import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { scopedConnection } from "@/lib/fleet"
 import { useClusterTasks } from "@/lib/useClusterTasks"
 import { chartTooltip } from "@/components/charts/tooltipTheme"
+import { chartBarRadius } from "@/lib/chartRadius"
+import { useTheme } from "@/lib/theme"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 export function BackupActivityWidget({ settings }: { settings: WidgetSettings }) {
-  const { tasks } = useClusterTasks(scopedConnection(settings))
+  const { tasks, isError } = useClusterTasks(scopedConnection(settings))
+  const { look } = useTheme()
+  const r = chartBarRadius(look)
   const backups = tasks.filter((t) => t.type === "vzdump")
+
+  if (isError) return <WidgetError />
 
   if (backups.length === 0) {
     return <p className="text-sm text-[var(--text-muted)]">No recent backup activity.</p>
@@ -48,7 +55,7 @@ export function BackupActivityWidget({ settings }: { settings: WidgetSettings })
                   width={p.width}
                   height={p.height}
                   fill="var(--status-ok)"
-                  radius={p.payload?.failed ? [4, 0, 0, 4] : [4, 4, 4, 4]}
+                  radius={p.payload?.failed ? [r, 0, 0, r] : [r, r, r, r]}
                 />
               ) : null
             }
@@ -60,7 +67,7 @@ export function BackupActivityWidget({ settings }: { settings: WidgetSettings })
                   width={p.width}
                   height={p.height}
                   fill="var(--status-ok)"
-                  radius={p.payload?.failed ? [4, 0, 0, 4] : [4, 4, 4, 4]}
+                  radius={p.payload?.failed ? [r, 0, 0, r] : [r, r, r, r]}
                   stroke="var(--text-faint)"
                   strokeWidth={1}
                 />
@@ -81,7 +88,7 @@ export function BackupActivityWidget({ settings }: { settings: WidgetSettings })
                   width={p.width}
                   height={p.height}
                   fill="var(--status-error)"
-                  radius={p.payload?.ok ? [0, 4, 4, 0] : [4, 4, 4, 4]}
+                  radius={p.payload?.ok ? [0, r, r, 0] : [r, r, r, r]}
                 />
               ) : null
             }
@@ -93,7 +100,7 @@ export function BackupActivityWidget({ settings }: { settings: WidgetSettings })
                   width={p.width}
                   height={p.height}
                   fill="var(--status-error)"
-                  radius={p.payload?.ok ? [0, 4, 4, 0] : [4, 4, 4, 4]}
+                  radius={p.payload?.ok ? [0, r, r, 0] : [r, r, r, r]}
                   stroke="var(--text-faint)"
                   strokeWidth={1}
                 />

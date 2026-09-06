@@ -1,9 +1,11 @@
 import { DonutChart, DonutLegend } from "@/components/charts/DonutChart"
 import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { useScopedInventory } from "@/lib/fleet"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 export function GuestStatusWidget({ settings }: { settings: WidgetSettings }) {
-  const { resources } = useScopedInventory(settings)
+  const { resources, isError } = useScopedInventory(settings)
+  if (isError) return <WidgetError />
 
   const guests = resources.filter((r) => r.type === "qemu" || r.type === "lxc")
   const running = guests.filter((g) => g.status === "running").length

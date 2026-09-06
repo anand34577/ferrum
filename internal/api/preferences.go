@@ -27,6 +27,8 @@ type userPreferences struct {
 	// LandingPage is the route this user opens on after login; empty means
 	// "use the org-wide default" (default_preferences.landing_page).
 	LandingPage string `json:"landingPage"`
+	// Density controls row/list padding across tables and lists app-wide.
+	Density string `json:"density"`
 }
 
 var validThemes = map[string]bool{"light": true, "dark": true, "system": true}
@@ -49,15 +51,23 @@ var validLooks = map[string]bool{
 	"glassmorphism":   true,
 	"neumorphism":     true,
 	"brutalist":       true,
+	"solarized":       true,
+	"highContrast":    true,
+	"aurora":          true,
 }
 
 // validLandingPages whitelists the routes a user (or the org-wide default)
 // may land on after login — every top-level nav destination the sidebar
 // itself links to (see web/src/components/layout/AppShell.tsx's navGroups).
+// validDensities whitelists the row/list padding modes — see index.css's
+// [data-density] rules for what each one actually repaints.
+var validDensities = map[string]bool{"comfortable": true, "compact": true}
+
 var validLandingPages = map[string]bool{
 	"/": true, "/dashboard": true, "/inventory": true, "/topology": true,
 	"/storage": true, "/pools": true, "/ha": true,
 	"/backups": true, "/firewall": true, "/alerts": true, "/tasks": true,
+	"/ai-assistant": true,
 }
 
 // currentPreferences reads this user's saved row, falling back to the
@@ -69,14 +79,15 @@ func (s *Server) currentPreferences(r *http.Request, userID string) (userPrefere
 	if err != nil {
 		return userPreferences{}, err
 	}
-	prefs := userPreferences{Theme: defaults.theme, Accent: defaults.accent, Look: defaults.look, LandingPage: defaults.landingPage}
+	prefs := userPreferences{Theme: defaults.theme, Accent: defaults.accent, Look: defaults.look, LandingPage: defaults.landingPage, Density: defaults.density}
 
 	var activeDashboardID sql.NullString
 	var landingPage sql.NullString
+	var density sql.NullString
 	var notifyEmail int
 	err = s.db.QueryRowContext(r.Context(),
-		`SELECT theme, accent, look, active_dashboard_id, notify_email, landing_page FROM user_preferences WHERE user_id = ?`, userID).
-		Scan(&prefs.Theme, &prefs.Accent, &prefs.Look, &activeDashboardID, &notifyEmail, &landingPage)
+		`SELECT theme, accent, look, active_dashboard_id, notify_email, landing_page, density FROM user_preferences WHERE user_id = ?`, userID).
+		Scan(&prefs.Theme, &prefs.Accent, &prefs.Look, &activeDashboardID, &notifyEmail, &landingPage, &density)
 	if err != nil && err != sql.ErrNoRows {
 		return userPreferences{}, err
 	}
@@ -87,6 +98,9 @@ func (s *Server) currentPreferences(r *http.Request, userID string) (userPrefere
 	prefs.NotifyEmail = notifyEmail == 1
 	if landingPage.Valid && landingPage.String != "" {
 		prefs.LandingPage = landingPage.String
+	}
+	if density.Valid && density.String != "" {
+		prefs.Density = density.String
 	}
 	return prefs, nil
 }
@@ -114,6 +128,7 @@ type preferencesPatch struct {
 	// LandingPage: "" explicitly clears the override (falls back to the org
 	// default), same convention as ActiveDashboardID.
 	LandingPage *string `json:"landingPage"`
+	Density     *string `json:"density"`
 }
 
 func (s *Server) putPreferences(w http.ResponseWriter, r *http.Request) {
@@ -146,7 +161,7 @@ func (s *Server) putPreferences(w http.ResponseWriter, r *http.Request) {
 	}
 	if patch.Look != nil {
 		if !validLooks[*patch.Look] {
-			writeErrorMsg(w, http.StatusBadRequest, "look must be one of: enterprise, proxmox, terminal, glassFlightDeck, midnight, paper, glassmorphism, neumorphism, brutalist")
+			writeErrorMsg(w, http.StatusBadRequest, "look must be one of: enterprise, proxmox, terminal, glassFlightDeck, midnight, paper, glassmorphism, neumorphism, brutalist, solarized, highContrast, aurora")
 			return
 		}
 		current.Look = *patch.Look
@@ -176,6 +191,13 @@ func (s *Server) putPreferences(w http.ResponseWriter, r *http.Request) {
 		}
 		current.LandingPage = *patch.LandingPage
 	}
+	if patch.Density != nil {
+		if !validDensities[*patch.Density] {
+			writeErrorMsg(w, http.StatusBadRequest, "density must be one of: comfortable, compact")
+			return
+		}
+		current.Density = *patch.Density
+	}
 
 	var activeDashboardID any
 	if current.ActiveDashboardID != "" {
@@ -185,10 +207,10 @@ func (s *Server) putPreferences(w http.ResponseWriter, r *http.Request) {
 	if current.LandingPage != "" {
 		landingPage = current.LandingPage
 	}
-	if _, err := s.db.ExecContext(r.Context(), `INSERT INTO user_preferences (user_id, theme, accent, look, active_dashboard_id, notify_email, landing_page, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	if _, err := s.db.ExecContext(r.Context(), `INSERT INTO user_preferences (user_id, theme, accent, look, active_dashboard_id, notify_email, landing_page, density, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (user_id) DO UPDATE SET theme = excluded.theme, accent = excluded.accent, look = excluded.look, active_dashboard_id = excluded.active_dashboard_id,
-			notify_email = excluded.notify_email, landing_page = excluded.landing_page, updated_at = excluded.updated_at`,
-		u.ID, current.Theme, current.Accent, current.Look, activeDashboardID, boolToInt(current.NotifyEmail), landingPage, time.Now().UTC().Format(time.RFC3339)); err != nil {
+			notify_email = excluded.notify_email, landing_page = excluded.landing_page, density = excluded.density, updated_at = excluded.updated_at`,
+		u.ID, current.Theme, current.Accent, current.Look, activeDashboardID, boolToInt(current.NotifyEmail), landingPage, current.Density, time.Now().UTC().Format(time.RFC3339)); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
 	}

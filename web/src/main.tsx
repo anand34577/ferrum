@@ -3,11 +3,11 @@ import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 import { BrowserRouter } from "react-router-dom"
 import { MotionConfig } from "framer-motion"
-import { Toaster } from "sonner"
 import App from "./App.tsx"
 import "./index.css"
 import { AuthProvider } from "./lib/auth"
 import { ThemeProvider } from "./lib/theme"
+import { AppToaster } from "@/components/layout/AppToaster"
 import { ConfirmProvider } from "@/components/ui/confirm-dialog"
 import { TooltipProvider } from "@/components/ui/tooltip"
 
@@ -36,7 +36,7 @@ createRoot(document.getElementById("root")!).render(
               </BrowserRouter>
             </TooltipProvider>
           </ConfirmProvider>
-          <Toaster richColors position="top-right" />
+          <AppToaster />
         </ThemeProvider>
       </AuthProvider>
     </QueryClientProvider>

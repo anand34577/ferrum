@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react"
 import { Sparkline } from "@/components/charts/Sparkline"
+import { Meter } from "@/components/ui/meter"
 import { cn } from "@/lib/utils"
 
 interface KpiCardProps {
@@ -85,34 +86,7 @@ export function KpiCard({
         {value}
         {sub && <span className="ml-2 font-sans text-xs font-normal normal-case tracking-normal text-[var(--text-muted)]">{sub}</span>}
       </p>
-      {progress !== undefined && (
-        <div
-          className="mt-3.5 h-1.5 overflow-hidden rounded-sm bg-[var(--track)] p-px"
-          role="progressbar"
-          aria-valuenow={Math.round(progress)}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-label={label}
-        >
-          <div
-            className={cn(
-              "h-full rounded-sm transition-all duration-500 ease-out",
-              progressInvert
-                ? progress >= 99
-                  ? "bg-brand-500"
-                  : progress >= 75
-                    ? "bg-[var(--status-warn)] shadow-[var(--caution-glow-warn)]"
-                    : "bg-[var(--status-error)] shadow-[var(--caution-glow-error)]"
-                : progress > 90
-                  ? "bg-[var(--status-error)] shadow-[var(--caution-glow-error)]"
-                  : progress > 75
-                    ? "bg-[var(--status-warn)] shadow-[var(--caution-glow-warn)]"
-                    : "bg-brand-500",
-            )}
-            style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
-          />
-        </div>
-      )}
+      {progress !== undefined && <Meter value={progress} size="sm" invert={progressInvert} label={label} className="mt-3.5" />}
       {spark && spark.length > 1 && (
         <div className="mt-2.5">
           <Sparkline data={spark} color={sparkColor ?? "var(--chart-1)"} variant={sparkVariant} height={26} />

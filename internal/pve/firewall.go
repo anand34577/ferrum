@@ -211,6 +211,59 @@ func (c *Client) DeleteFirewallIPSetEntry(ctx context.Context, setName, cidr str
 	return c.delete(ctx, "/cluster/firewall/ipset/"+url.PathEscape(setName)+"/"+url.PathEscape(cidr), nil, nil)
 }
 
+// FirewallSecurityGroup is a named, reusable set of firewall rules
+// (/cluster/firewall/groups) that a rule elsewhere can reference by name in
+// its "action" field instead of repeating the same rules on every guest.
+type FirewallSecurityGroup struct {
+	Group   string `json:"group"`
+	Comment string `json:"comment,omitempty"`
+}
+
+func (c *Client) FirewallSecurityGroups(ctx context.Context) ([]FirewallSecurityGroup, error) {
+	var out struct {
+		Data []FirewallSecurityGroup `json:"data"`
+	}
+	if err := c.get(ctx, "/cluster/firewall/groups", &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
+}
+
+func (c *Client) CreateFirewallSecurityGroup(ctx context.Context, name, comment string) error {
+	form := url.Values{"group": {name}}
+	if comment != "" {
+		form.Set("comment", comment)
+	}
+	return c.post(ctx, "/cluster/firewall/groups", form, nil)
+}
+
+func (c *Client) DeleteFirewallSecurityGroup(ctx context.Context, name string) error {
+	return c.delete(ctx, "/cluster/firewall/groups/"+url.PathEscape(name), nil, nil)
+}
+
+// SecurityGroupRules lists the rules inside one security group — the group
+// name doubles as the rule-set path, same shape as cluster/node/guest rules.
+func (c *Client) SecurityGroupRules(ctx context.Context, name string) ([]FirewallRule, error) {
+	var out struct {
+		Data []FirewallRule `json:"data"`
+	}
+	if err := c.get(ctx, "/cluster/firewall/groups/"+url.PathEscape(name), &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
+}
+
+// AddSecurityGroupRule adds a rule inside a security group. Unlike other
+// rule sets, a group rule's "action" is always ACCEPT/DROP/REJECT — it can't
+// itself reference another group.
+func (c *Client) AddSecurityGroupRule(ctx context.Context, name string, rule NewFirewallRule) error {
+	return c.post(ctx, "/cluster/firewall/groups/"+url.PathEscape(name), rule.form(), nil)
+}
+
+func (c *Client) DeleteSecurityGroupRule(ctx context.Context, name string, pos int) error {
+	return c.delete(ctx, "/cluster/firewall/groups/"+url.PathEscape(name)+"/"+strconv.Itoa(pos), nil, nil)
+}
+
 type FirewallOptions struct {
 	Enable int `json:"enable"`
 }
@@ -231,4 +284,24 @@ func (c *Client) ClusterFirewallOptions(ctx context.Context) (*FirewallOptions, 
 // confusion if it's not surfaced anywhere.
 func (c *Client) UpdateClusterFirewallOptions(ctx context.Context, enable bool) error {
 	return c.put(ctx, "/cluster/firewall/options", url.Values{"enable": {boolTo01(enable)}}, nil)
+}
+
+// GuestFirewallOptions reads a single guest's own firewall master switch —
+// separate from (and in addition to) the cluster-wide one. A guest's rules
+// (AddGuestFirewallRule) are inert until this is enabled, same trap as the
+// cluster switch above but per-guest and easy to miss.
+func (c *Client) GuestFirewallOptions(ctx context.Context, guestType, node string, vmid int) (*FirewallOptions, error) {
+	var out struct {
+		Data FirewallOptions `json:"data"`
+	}
+	if err := c.get(ctx, fmt.Sprintf("/nodes/%s/%s/%d/firewall/options", PathEscape(node), PathEscape(guestType), vmid), &out); err != nil {
+		return nil, err
+	}
+	return &out.Data, nil
+}
+
+// UpdateGuestFirewallOptions flips a guest's own firewall master switch.
+func (c *Client) UpdateGuestFirewallOptions(ctx context.Context, guestType, node string, vmid int, enable bool) error {
+	form := url.Values{"enable": {boolTo01(enable)}}
+	return c.put(ctx, fmt.Sprintf("/nodes/%s/%s/%d/firewall/options", PathEscape(node), PathEscape(guestType), vmid), form, nil)
 }

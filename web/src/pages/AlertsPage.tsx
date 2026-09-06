@@ -1,12 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
-import { AlertTriangle, BellOff, ChartPie, Plus, ShieldAlert, Trash2 } from "lucide-react"
+import { AlertTriangle, BellOff, ChartPie, Plus, ShieldAlert, Trash2, WifiOff } from "lucide-react"
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
 import { DonutChart } from "@/components/charts/DonutChart"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { StatusDot } from "@/components/ui/status-dot"
 import { DataTable } from "@/components/ui/data-table"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { ErrorState } from "@/components/ui/error-state"
@@ -14,9 +15,21 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { PageHeader } from "@/components/ui/page-header"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { TableSkeleton } from "@/components/ui/skeleton"
 import { Hint } from "@/components/ui/tooltip"
-import { api, ApiError, type AlertInstance, type AlertRule, type ConnectionInventory } from "@/lib/api"
+import { api, ApiError, type AlertInstance, type AlertRule, type ConnectionHealth, type ConnectionInventory } from "@/lib/api"
+
+/** How long ago `since` was, as a short "3h 12m" style duration — connection
+ * downtime is the one alert-adjacent number worth reading at a glance. */
+function ageFrom(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime()
+  if (ms < 0) return "0m"
+  const mins = Math.floor(ms / 60_000)
+  if (mins < 60) return `${mins}m`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h ${mins % 60}m`
+  const days = Math.floor(hours / 24)
+  return `${days}d ${hours % 24}h`
+}
 
 const METRIC_LABELS: Record<string, string> = {
   node_cpu: "Node CPU %",
@@ -44,6 +57,12 @@ export function AlertsPage() {
     refetchInterval: 30_000,
   })
   const rulesQuery = useQuery({ queryKey: ["alert-rules"], queryFn: () => api.get<AlertRule[]>("/alert-rules/") })
+  const healthQuery = useQuery({
+    queryKey: ["connection-health"],
+    queryFn: () => api.get<ConnectionHealth[]>("/connection-health"),
+    refetchInterval: 30_000,
+  })
+  const downConnections = (healthQuery.data ?? []).filter((h) => h.status === "down")
   const { data: inventory } = useQuery({ queryKey: ["inventory"], queryFn: () => api.get<ConnectionInventory[]>("/inventory/") })
 
   const silenceMutation = useMutation({
@@ -190,6 +209,32 @@ export function AlertsPage() {
         }
       />
 
+      {downConnections.length > 0 && (
+        <Card className="border-[var(--status-error)]/40 bg-[color-mix(in_oklab,var(--status-error)_6%,transparent)]">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-[var(--status-error)]">
+              <WifiOff className="h-4 w-4" /> {downConnections.length} connection{downConnections.length === 1 ? "" : "s"} unreachable
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <p className="text-xs text-[var(--text-muted)]">
+              Ferrum can't reach these Proxmox hosts at all — a notification was already sent to every configured channel.
+              This is tracked independently of threshold rules below, since there's no metric to evaluate when a host is fully offline.
+            </p>
+            {downConnections.map((h) => (
+              <div key={h.connectionId} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--status-error)]/30 bg-[var(--bg-surface)] px-3 py-2 text-sm">
+                <div className="flex min-w-0 items-center gap-2">
+                  <Badge variant="error">down</Badge>
+                  <span className="font-medium">{h.connectionName}</span>
+                  {h.lastError && <span className="truncate text-xs text-[var(--text-muted)]" title={h.lastError}>{h.lastError}</span>}
+                </div>
+                <span className="shrink-0 text-xs text-[var(--text-muted)] tabular">unreachable for {ageFrom(h.since)}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Card className="sm:col-span-1">
           <CardHeader>
@@ -208,8 +253,8 @@ export function AlertsPage() {
               <>
                 <DonutChart data={donutData} centerValue={String(totalActive)} centerLabel="active" height={150} />
                 <div className="flex gap-4 text-xs">
-                  <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-[var(--status-error)]" /> Critical: <span className="tabular">{summaryQuery.data?.critical ?? 0}</span></span>
-                  <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-[var(--status-warn)]" /> Warning: <span className="tabular">{summaryQuery.data?.warning ?? 0}</span></span>
+                  <span className="flex items-center gap-1.5"><StatusDot status="error" /> Critical: <span className="tabular">{summaryQuery.data?.critical ?? 0}</span></span>
+                  <span className="flex items-center gap-1.5"><StatusDot status="warn" /> Warning: <span className="tabular">{summaryQuery.data?.warning ?? 0}</span></span>
                 </div>
               </>
             )}
@@ -225,10 +270,15 @@ export function AlertsPage() {
           <CardContent>
             {activeAlertsQuery.isError ? (
               <ErrorState title="Couldn't load active alerts" onRetry={activeAlertsQuery.refetch} />
-            ) : activeAlertsQuery.isLoading ? (
-              <TableSkeleton rows={4} />
             ) : (
-              <DataTable columns={alertColumns} data={activeAlertsQuery.data ?? []} searchPlaceholder="Search alerts..." emptyMessage="No active alerts — everything's healthy." pageSize={5} />
+              <DataTable
+                columns={alertColumns}
+                data={activeAlertsQuery.data ?? []}
+                loading={activeAlertsQuery.isLoading}
+                searchPlaceholder="Search alerts..."
+                emptyMessage="No active alerts — everything's healthy."
+                pageSize={5}
+              />
             )}
           </CardContent>
         </Card>
@@ -299,10 +349,14 @@ export function AlertsPage() {
         <CardContent>
           {rulesQuery.isError ? (
             <ErrorState title="Couldn't load alert rules" onRetry={rulesQuery.refetch} />
-          ) : rulesQuery.isLoading ? (
-            <TableSkeleton rows={4} />
           ) : (
-            <DataTable columns={ruleColumns} data={rulesQuery.data ?? []} searchPlaceholder="Search rules..." emptyMessage="No alert rules configured — create one to start monitoring." />
+            <DataTable
+              columns={ruleColumns}
+              data={rulesQuery.data ?? []}
+              loading={rulesQuery.isLoading}
+              searchPlaceholder="Search rules..."
+              emptyMessage="No alert rules configured — create one to start monitoring."
+            />
           )}
         </CardContent>
       </Card>

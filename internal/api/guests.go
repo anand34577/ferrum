@@ -89,6 +89,8 @@ type cloneGuestRequest struct {
 	TargetNode  string `json:"targetNode,omitempty"`
 	Full        bool   `json:"full"`
 	Storage     string `json:"storage,omitempty"`
+	Format      string `json:"format,omitempty"`
+	Pool        string `json:"pool,omitempty"`
 	Description string `json:"description,omitempty"`
 }
 
@@ -116,7 +118,7 @@ func (s *Server) cloneGuest(w http.ResponseWriter, r *http.Request) {
 	}
 	upid, err := client.CloneGuest(r.Context(), guestType, node, vmid, pve.CloneOptions{
 		NewID: req.NewID, Name: req.Name, TargetNode: req.TargetNode,
-		Full: req.Full, Storage: req.Storage, Description: req.Description,
+		Full: req.Full, Storage: req.Storage, Format: req.Format, Pool: req.Pool, Description: req.Description,
 	})
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
@@ -128,8 +130,13 @@ func (s *Server) cloneGuest(w http.ResponseWriter, r *http.Request) {
 }
 
 type migrateGuestRequest struct {
-	TargetNode string `json:"targetNode"`
-	Online     bool   `json:"online"`
+	TargetNode     string `json:"targetNode"`
+	Online         bool   `json:"online"`
+	WithLocalDisks bool   `json:"withLocalDisks"`
+	TargetStorage  string `json:"targetStorage,omitempty"`
+	Bwlimit        int    `json:"bwlimit,omitempty"`
+	Restart        bool   `json:"restart,omitempty"` // lxc restart-migration for a running container
+	TimeoutSecs    int    `json:"timeoutSecs,omitempty"`
 }
 
 func (s *Server) migrateGuest(w http.ResponseWriter, r *http.Request) {
@@ -154,7 +161,15 @@ func (s *Server) migrateGuest(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	upid, err := client.MigrateGuest(r.Context(), guestType, node, vmid, req.TargetNode, req.Online)
+	upid, err := client.MigrateGuest(r.Context(), guestType, node, vmid, pve.MigrateOptions{
+		TargetNode:     req.TargetNode,
+		Online:         req.Online,
+		WithLocalDisks: req.WithLocalDisks,
+		TargetStorage:  req.TargetStorage,
+		Bwlimit:        req.Bwlimit,
+		Restart:        req.Restart,
+		TimeoutSecs:    req.TimeoutSecs,
+	})
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
@@ -162,6 +177,30 @@ func (s *Server) migrateGuest(w http.ResponseWriter, r *http.Request) {
 	s.audit(r, "vm.migrate", "vm", node+"/"+guestType+"/"+chi.URLParam(r, "vmid"))
 	slog.Info("guest migration started", "connectionId", connID, "vmid", vmid, "target", req.TargetNode, "online", req.Online)
 	writeJSON(w, http.StatusOK, map[string]string{"upid": upid})
+}
+
+// migratePrecondition surfaces PVE's pre-migration check (local disks,
+// incompatible target nodes) so the UI can warn before firing a migration
+// that PVE would otherwise reject outright. qemu only — PVE doesn't expose
+// this check for lxc.
+func (s *Server) migratePrecondition(w http.ResponseWriter, r *http.Request) {
+	connID, node := chi.URLParam(r, "id"), chi.URLParam(r, "node")
+	vmid, err := vmidParam(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	client, err := s.clientFor(r.Context(), connID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	result, err := client.MigratePrecondition(r.Context(), node, vmid)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) deleteGuest(w http.ResponseWriter, r *http.Request) {
@@ -176,7 +215,12 @@ func (s *Server) deleteGuest(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	upid, err := client.DeleteGuest(r.Context(), guestType, node, vmid, true)
+	// purge defaults to true (also remove the guest from backup/replication/HA
+	// jobs) — the common case for "delete this guest" — but callers that want
+	// to keep those job references (e.g. re-provisioning at the same vmid)
+	// can opt out with ?purge=false.
+	purge := r.URL.Query().Get("purge") != "false"
+	upid, err := client.DeleteGuest(r.Context(), guestType, node, vmid, purge)
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
@@ -245,11 +289,409 @@ func (s *Server) resizeGuestDisk(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	if err := client.ResizeDisk(r.Context(), guestType, node, vmid, req.Disk, req.Size); err != nil {
+	upid, err := client.ResizeDisk(r.Context(), guestType, node, vmid, req.Disk, req.Size)
+	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
 	}
 	s.audit(r, "vm.resize", "vm", node+"/"+guestType+"/"+chi.URLParam(r, "vmid"))
+	// upid is "" for storage backends that resize synchronously — the
+	// frontend only polls task status when it gets a non-empty one back.
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "upid": upid})
+}
+
+func (s *Server) moveGuestDisk(w http.ResponseWriter, r *http.Request) {
+	connID, guestType, node := chi.URLParam(r, "id"), chi.URLParam(r, "type"), chi.URLParam(r, "node")
+	vmid, err := vmidParam(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var req struct {
+		Disk    string `json:"disk"`
+		Storage string `json:"storage"`
+		Format  string `json:"format,omitempty"`
+		Delete  bool   `json:"delete,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Disk == "" || req.Storage == "" {
+		writeErrorMsg(w, http.StatusBadRequest, "disk and storage are required")
+		return
+	}
+	client, err := s.clientFor(r.Context(), connID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	upid, err := client.MoveDisk(r.Context(), guestType, node, vmid, req.Disk, req.Storage, req.Format, req.Delete)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "vm.disk.move", "vm", node+"/"+guestType+"/"+chi.URLParam(r, "vmid"))
+	writeJSON(w, http.StatusOK, map[string]string{"upid": upid})
+}
+
+// --- QEMU guest agent (exec, fsfreeze, shutdown, set-password) ---
+
+// guestSendKey sends a key combination (e.g. "ctrl-alt-delete") to a running
+// QEMU guest's virtual display — the console toolbar action for keys the
+// browser would otherwise swallow itself. QEMU only: LXC has no virtual
+// keyboard to inject into.
+func (s *Server) guestSendKey(w http.ResponseWriter, r *http.Request) {
+	connID, guestType, node := chi.URLParam(r, "id"), chi.URLParam(r, "type"), chi.URLParam(r, "node")
+	vmid, err := vmidParam(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if guestType != "qemu" {
+		writeErrorMsg(w, http.StatusBadRequest, "sending keys is only supported for QEMU VMs")
+		return
+	}
+	var req struct {
+		Key string `json:"key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Key == "" {
+		writeErrorMsg(w, http.StatusBadRequest, "key is required")
+		return
+	}
+	client, err := s.clientFor(r.Context(), connID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if err := client.SendKey(r.Context(), node, vmid, req.Key); err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "guest.sendkey", "guest", strconv.Itoa(vmid)+" ("+req.Key+")")
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) guestAgentPing(w http.ResponseWriter, r *http.Request) {
+	connID, node := chi.URLParam(r, "id"), chi.URLParam(r, "node")
+	vmid, err := vmidParam(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	client, err := s.clientFor(r.Context(), connID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if err := client.GuestAgentPing(r.Context(), node, vmid); err != nil {
+		writeErrorMsg(w, http.StatusBadGateway, "guest agent unavailable — install qemu-guest-agent and enable it in this VM's Options")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) guestAgentExec(w http.ResponseWriter, r *http.Request) {
+	connID, node := chi.URLParam(r, "id"), chi.URLParam(r, "node")
+	vmid, err := vmidParam(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var req struct {
+		Command []string `json:"command"`
+		Input   string   `json:"input,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if len(req.Command) == 0 {
+		writeErrorMsg(w, http.StatusBadRequest, "command is required")
+		return
+	}
+	client, err := s.clientFor(r.Context(), connID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	result, err := client.GuestAgentExec(r.Context(), node, vmid, req.Command, req.Input)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "vm.agent.exec", "vm", node+"/qemu/"+chi.URLParam(r, "vmid"))
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) guestAgentExecStatus(w http.ResponseWriter, r *http.Request) {
+	connID, node := chi.URLParam(r, "id"), chi.URLParam(r, "node")
+	vmid, err := vmidParam(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	pid, err := strconv.Atoi(r.URL.Query().Get("pid"))
+	if err != nil {
+		writeErrorMsg(w, http.StatusBadRequest, "pid query parameter is required")
+		return
+	}
+	client, err := s.clientFor(r.Context(), connID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	status, err := client.GuestAgentExecStatus(r.Context(), node, vmid, pid)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) guestAgentFsfreeze(w http.ResponseWriter, r *http.Request) {
+	connID, node := chi.URLParam(r, "id"), chi.URLParam(r, "node")
+	vmid, err := vmidParam(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	thaw := chi.URLParam(r, "action") == "thaw"
+	client, err := s.clientFor(r.Context(), connID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if err := client.GuestAgentFsfreeze(r.Context(), node, vmid, thaw); err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "vm.agent.fsfreeze", "vm", node+"/qemu/"+chi.URLParam(r, "vmid"))
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) guestAgentShutdown(w http.ResponseWriter, r *http.Request) {
+	connID, node := chi.URLParam(r, "id"), chi.URLParam(r, "node")
+	vmid, err := vmidParam(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	client, err := s.clientFor(r.Context(), connID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if err := client.GuestAgentShutdown(r.Context(), node, vmid); err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "vm.agent.shutdown", "vm", node+"/qemu/"+chi.URLParam(r, "vmid"))
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) guestAgentSetPassword(w http.ResponseWriter, r *http.Request) {
+	connID, node := chi.URLParam(r, "id"), chi.URLParam(r, "node")
+	vmid, err := vmidParam(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Crypted  bool   `json:"crypted,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Username == "" || req.Password == "" {
+		writeErrorMsg(w, http.StatusBadRequest, "username and password are required")
+		return
+	}
+	client, err := s.clientFor(r.Context(), connID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if err := client.GuestAgentSetUserPassword(r.Context(), node, vmid, req.Username, req.Password, req.Crypted); err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "vm.agent.setpassword", "vm", node+"/qemu/"+chi.URLParam(r, "vmid"))
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) guestAgentOSInfo(w http.ResponseWriter, r *http.Request) {
+	connID, node := chi.URLParam(r, "id"), chi.URLParam(r, "node")
+	vmid, err := vmidParam(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	client, err := s.clientFor(r.Context(), connID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	info, err := client.GuestAgentOSInfo(r.Context(), node, vmid)
+	if err != nil {
+		writeErrorMsg(w, http.StatusBadGateway, "guest agent unavailable — install qemu-guest-agent and enable it in this VM's Options")
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+func (s *Server) guestAgentFSInfo(w http.ResponseWriter, r *http.Request) {
+	connID, node := chi.URLParam(r, "id"), chi.URLParam(r, "node")
+	vmid, err := vmidParam(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	client, err := s.clientFor(r.Context(), connID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	info, err := client.GuestAgentFSInfo(r.Context(), node, vmid)
+	if err != nil {
+		writeErrorMsg(w, http.StatusBadGateway, "guest agent unavailable — install qemu-guest-agent and enable it in this VM's Options")
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+func (s *Server) guestAgentVCPUs(w http.ResponseWriter, r *http.Request) {
+	connID, node := chi.URLParam(r, "id"), chi.URLParam(r, "node")
+	vmid, err := vmidParam(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	client, err := s.clientFor(r.Context(), connID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	vcpus, err := client.GuestAgentVCPUs(r.Context(), node, vmid)
+	if err != nil {
+		writeErrorMsg(w, http.StatusBadGateway, "guest agent unavailable — install qemu-guest-agent and enable it in this VM's Options")
+		return
+	}
+	writeJSON(w, http.StatusOK, vcpus)
+}
+
+func (s *Server) guestAgentHostname(w http.ResponseWriter, r *http.Request) {
+	connID, node := chi.URLParam(r, "id"), chi.URLParam(r, "node")
+	vmid, err := vmidParam(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	client, err := s.clientFor(r.Context(), connID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	hostname, err := client.GuestAgentHostname(r.Context(), node, vmid)
+	if err != nil {
+		writeErrorMsg(w, http.StatusBadGateway, "guest agent unavailable — install qemu-guest-agent and enable it in this VM's Options")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"hostname": hostname})
+}
+
+func (s *Server) guestAgentTimezone(w http.ResponseWriter, r *http.Request) {
+	connID, node := chi.URLParam(r, "id"), chi.URLParam(r, "node")
+	vmid, err := vmidParam(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	client, err := s.clientFor(r.Context(), connID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	zone, err := client.GuestAgentTimezone(r.Context(), node, vmid)
+	if err != nil {
+		writeErrorMsg(w, http.StatusBadGateway, "guest agent unavailable — install qemu-guest-agent and enable it in this VM's Options")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"zone": zone})
+}
+
+// guestAgentFileRead and guestAgentFileWrite reach into the guest's
+// filesystem via the agent — sensitive like exec/shutdown/set-password, so
+// both are POST (gated by requireAdminForMutations on this route group)
+// rather than a plain GET, even for the read side.
+func (s *Server) guestAgentFileRead(w http.ResponseWriter, r *http.Request) {
+	connID, node := chi.URLParam(r, "id"), chi.URLParam(r, "node")
+	vmid, err := vmidParam(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Path == "" {
+		writeErrorMsg(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	client, err := s.clientFor(r.Context(), connID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	content, err := client.GuestAgentFileRead(r.Context(), node, vmid, req.Path)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "vm.agent.file-read", "vm", node+"/qemu/"+chi.URLParam(r, "vmid"))
+	writeJSON(w, http.StatusOK, map[string]string{"content": content})
+}
+
+func (s *Server) guestAgentFileWrite(w http.ResponseWriter, r *http.Request) {
+	connID, node := chi.URLParam(r, "id"), chi.URLParam(r, "node")
+	vmid, err := vmidParam(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var req struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Path == "" {
+		writeErrorMsg(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	client, err := s.clientFor(r.Context(), connID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if err := client.GuestAgentFileWrite(r.Context(), node, vmid, req.Path, req.Content); err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "vm.agent.file-write", "vm", node+"/qemu/"+chi.URLParam(r, "vmid"))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -472,6 +914,56 @@ func (s *Server) deleteGuestFirewallRule(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// guestFirewallOptions and updateGuestFirewallOptions expose the guest's own
+// firewall master switch — separate from the cluster-wide one. Rules added
+// via addGuestFirewallRule are inert until this is on.
+func (s *Server) guestFirewallOptions(w http.ResponseWriter, r *http.Request) {
+	connID, guestType, node := chi.URLParam(r, "id"), chi.URLParam(r, "type"), chi.URLParam(r, "node")
+	vmid, err := vmidParam(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	client, err := s.clientFor(r.Context(), connID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	opts, err := client.GuestFirewallOptions(r.Context(), guestType, node, vmid)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, opts)
+}
+
+func (s *Server) updateGuestFirewallOptions(w http.ResponseWriter, r *http.Request) {
+	connID, guestType, node := chi.URLParam(r, "id"), chi.URLParam(r, "type"), chi.URLParam(r, "node")
+	vmid, err := vmidParam(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var req struct {
+		Enable bool `json:"enable"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	client, err := s.clientFor(r.Context(), connID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if err := client.UpdateGuestFirewallOptions(r.Context(), guestType, node, vmid, req.Enable); err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "firewall.options.update", "vm", node+"/"+guestType+"/"+chi.URLParam(r, "vmid"))
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // guestBackups aggregates backup archives for one guest across every
 // storage on its node that's configured to hold backups — the caller
 // shouldn't need to already know which storage a backup landed on.
@@ -523,6 +1015,16 @@ type createVMRequest struct {
 	SSHPublicKey string `json:"sshPublicKey,omitempty"`
 	IPConfig     string `json:"ipConfig,omitempty"`
 	Nameserver   string `json:"nameserver,omitempty"`
+
+	// Archive restores from a vzdump backup volume instead of creating an
+	// empty VM — cores/memoryMb become optional overrides (PVE fills them
+	// in from the backup's saved config when omitted).
+	Archive string `json:"archive,omitempty"`
+	Force   bool   `json:"force,omitempty"`
+
+	// Extra holds additional disks/NICs/hardware as raw PVE config keys
+	// (e.g. {"scsi1": "local-lvm:32", "net1": "virtio,bridge=vmbr1"}).
+	Extra map[string]string `json:"extra,omitempty"`
 }
 
 func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
@@ -532,7 +1034,7 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if req.Node == "" || req.Cores <= 0 || req.MemoryMB <= 0 {
+	if req.Node == "" || (req.Archive == "" && (req.Cores <= 0 || req.MemoryMB <= 0)) {
 		writeErrorMsg(w, http.StatusBadRequest, "node, cores, and memoryMb are required")
 		return
 	}
@@ -554,6 +1056,7 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 		Storage: req.Storage, DiskGB: req.DiskGB, ISO: req.ISO, Bridge: req.Bridge,
 		CIUser: req.CIUser, CIPassword: req.CIPassword, SSHPublicKey: req.SSHPublicKey,
 		IPConfig: req.IPConfig, Nameserver: req.Nameserver,
+		Archive: req.Archive, Force: req.Force, Extra: req.Extra,
 	})
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
@@ -578,6 +1081,15 @@ type createLXCRequest struct {
 	SSHPublicKey string `json:"sshPublicKey,omitempty"`
 	IPConfig     string `json:"ipConfig,omitempty"`
 	Unprivileged bool   `json:"unprivileged"`
+
+	// Archive restores from a vzdump backup volume instead of unpacking
+	// Template — Template is not required when Archive is set.
+	Archive string `json:"archive,omitempty"`
+	Force   bool   `json:"force,omitempty"`
+
+	// Extra holds additional mount points/NICs/hardware as raw PVE config
+	// keys (e.g. {"mp0": "local-lvm:8,mp=/data", "net1": "name=eth1,bridge=vmbr1"}).
+	Extra map[string]string `json:"extra,omitempty"`
 }
 
 func (s *Server) createLXC(w http.ResponseWriter, r *http.Request) {
@@ -587,8 +1099,8 @@ func (s *Server) createLXC(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if req.Node == "" || req.Template == "" || req.Cores <= 0 || req.MemoryMB <= 0 {
-		writeErrorMsg(w, http.StatusBadRequest, "node, template, cores, and memoryMb are required")
+	if req.Node == "" || req.Cores <= 0 || req.MemoryMB <= 0 || (req.Archive == "" && req.Template == "") {
+		writeErrorMsg(w, http.StatusBadRequest, "node, cores, memoryMb, and template (or archive) are required")
 		return
 	}
 
@@ -608,6 +1120,7 @@ func (s *Server) createLXC(w http.ResponseWriter, r *http.Request) {
 		VMID: req.VMID, Hostname: req.Hostname, Node: req.Node, Cores: req.Cores, Memory: req.MemoryMB,
 		Storage: req.Storage, DiskGB: req.DiskGB, Template: req.Template, Bridge: req.Bridge,
 		Password: req.Password, SSHPublicKey: req.SSHPublicKey, IPConfig: req.IPConfig, Unprivileged: req.Unprivileged,
+		Archive: req.Archive, Force: req.Force, Extra: req.Extra,
 	})
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)

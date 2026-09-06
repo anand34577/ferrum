@@ -19,6 +19,14 @@ interface WidgetChromeProps {
   onMoveDown?: () => void
 }
 
+/** A failed query must never render identically to "no data yet" — a widget
+ * stuck on a broken connection would otherwise look calm forever. Every
+ * widget that can fail renders this instead of its normal empty state when
+ * `isError` is true. */
+export function WidgetError({ message = "Couldn't load this widget's data — check your connection." }: { message?: string }) {
+  return <p className="text-sm text-[var(--status-error)]">{message}</p>
+}
+
 export function WidgetChrome({ type, editing, onRemove, settings, onSettingsChange, children, onMoveUp, onMoveDown }: WidgetChromeProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const fields = WIDGET_CATALOG.find((w) => w.type === type)?.settingsFields
@@ -47,7 +55,7 @@ export function WidgetChrome({ type, editing, onRemove, settings, onSettingsChan
             <button
               onClick={onMoveUp}
               disabled={!onMoveUp}
-              className="flex h-6 w-6 items-center justify-center rounded text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-muted)] hover:text-[var(--text)] disabled:pointer-events-none disabled:opacity-30"
+              className="flex h-6 w-6 items-center justify-center rounded-sm text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-muted)] hover:text-[var(--text)] disabled:pointer-events-none disabled:opacity-30"
               aria-label={`Move ${widgetLabel(type)} widget earlier`}
             >
               <ChevronUp className="h-3.5 w-3.5" />
@@ -55,7 +63,7 @@ export function WidgetChrome({ type, editing, onRemove, settings, onSettingsChan
             <button
               onClick={onMoveDown}
               disabled={!onMoveDown}
-              className="flex h-6 w-6 items-center justify-center rounded text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-muted)] hover:text-[var(--text)] disabled:pointer-events-none disabled:opacity-30"
+              className="flex h-6 w-6 items-center justify-center rounded-sm text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-muted)] hover:text-[var(--text)] disabled:pointer-events-none disabled:opacity-30"
               aria-label={`Move ${widgetLabel(type)} widget later`}
             >
               <ChevronDown className="h-3.5 w-3.5" />
@@ -97,7 +105,7 @@ export function WidgetChrome({ type, editing, onRemove, settings, onSettingsChan
               <select
                 value={settings[f.key] ?? (f.dynamic === "connections" ? "all" : f.options[0]?.value)}
                 onChange={(e) => onSettingsChange({ ...settings, [f.key]: e.target.value })}
-                className="max-w-40 rounded border border-[var(--border)] bg-[var(--bg-surface)] px-1.5 py-0.5 text-xs"
+                className="max-w-40 rounded-sm border border-[var(--border)] bg-[var(--bg-surface)] px-1.5 py-0.5 text-xs"
               >
                 {optionsFor(f).map((o) => (
                   <option key={o.value} value={o.value}>{o.label}</option>

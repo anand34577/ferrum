@@ -54,6 +54,34 @@ func TestNodeStatusMHzStringOrNumber(t *testing.T) {
 	}
 }
 
+// Some PVE versions return a journal line as a bare string instead of the
+// documented {"n","t"} object — one such line must not 502 the whole
+// request (seen live: "cannot unmarshal string into Go struct field .data
+// of type pve.JournalEntry").
+func TestNodeJournalObjectOrBareString(t *testing.T) {
+	raw := `{"data":[{"n":1,"t":"Sep 06 12:00:00 host kernel: boot"},"Sep 06 12:00:01 host kernel: bare line"]}`
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(raw))
+	}))
+	defer srv.Close()
+
+	c := clientFor(srv, WithInsecureSkipVerify(true))
+	entries, err := c.NodeJournal(context.Background(), "pve1", 0)
+	if err != nil {
+		t.Fatalf("NodeJournal: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("got %d entries, want 2", len(entries))
+	}
+	if entries[0].N != 1 || entries[0].T != "Sep 06 12:00:00 host kernel: boot" {
+		t.Errorf("entries[0] = %+v", entries[0])
+	}
+	if entries[1].T != "Sep 06 12:00:01 host kernel: bare line" {
+		t.Errorf("entries[1] = %+v", entries[1])
+	}
+}
+
 // FlexString must round-trip through re-marshal as a plain JSON string so
 // API consumers (the web UI types it as `mhz?: string`) see the same shape.
 func TestFlexStringMarshal(t *testing.T) {
@@ -109,5 +137,36 @@ func TestCephUnavailableClassification(t *testing.T) {
 	c := clientFor(srv, WithInsecureSkipVerify(true))
 	if _, err := c.ClusterResources(context.Background()); err == nil || IsNotAvailable(err) {
 		t.Fatalf("non-ceph 500 should not classify as unavailable, got: %v", err)
+	}
+}
+
+// The list endpoints put a finished task's verdict in "status"; the
+// single-task status endpoint puts it in "exitstatus" and uses "status" for
+// the lifecycle state. Normalize must erase that difference, or every
+// "did it succeed?" check silently fails on the status endpoint.
+func TestTaskNormalize(t *testing.T) {
+	single := Task{Status: "stopped", ExitStatus: "OK"}
+	single.Normalize()
+	if single.Status != "OK" {
+		t.Fatalf("status endpoint: got %q, want OK", single.Status)
+	}
+
+	failed := Task{Status: "stopped", ExitStatus: "command failed with exit code 1"}
+	failed.Normalize()
+	if failed.Status == "OK" || failed.Status == "stopped" {
+		t.Fatalf("failed task should surface its error, got %q", failed.Status)
+	}
+
+	// A row from the list endpoint carries no exitstatus and must be untouched.
+	list := Task{Status: "OK"}
+	list.Normalize()
+	if list.Status != "OK" {
+		t.Fatalf("list row mutated: %q", list.Status)
+	}
+
+	running := Task{Status: "running"}
+	running.Normalize()
+	if running.Status != "running" {
+		t.Fatalf("running task mutated: %q", running.Status)
 	}
 }

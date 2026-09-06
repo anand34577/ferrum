@@ -57,6 +57,7 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("setup completed, first admin created", "username", user.Username)
+	s.auditEntry(r.Context(), user.ID, "auth.setup", "auth", user.Username, r.RemoteAddr)
 	auth.SetSessionCookie(w, token, s.cookieSecure(r), s.auth.SessionTTL())
 	writeJSON(w, http.StatusCreated, user)
 }
@@ -85,6 +86,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.logins.RecordFailure(limiterKey)
 		slog.Warn("login failed", "remote", r.RemoteAddr)
+		s.auditEntry(r.Context(), "", "auth.login.failed", "auth", req.Username, r.RemoteAddr)
 		writeErrorMsg(w, http.StatusUnauthorized, "invalid username or password")
 		return
 	}
@@ -102,6 +104,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("login succeeded", "username", user.Username)
+	s.auditEntry(r.Context(), user.ID, "auth.login", "auth", user.Username, r.RemoteAddr)
 	auth.SetSessionCookie(w, token, s.cookieSecure(r), s.auth.SessionTTL())
 	writeJSON(w, http.StatusOK, user)
 }
@@ -136,6 +139,7 @@ func (s *Server) authLoginTOTP(w http.ResponseWriter, r *http.Request) {
 	if err := s.auth.VerifyTOTPStep(r.Context(), userID, req.Code); err != nil {
 		s.logins.RecordFailure(totpKey)
 		slog.Warn("totp verification failed", "userId", userID, "remote", r.RemoteAddr)
+		s.auditEntry(r.Context(), userID, "auth.login.totp_failed", "auth", userID, r.RemoteAddr)
 		writeErrorMsg(w, http.StatusUnauthorized, "invalid authentication code")
 		return
 	}
@@ -152,6 +156,7 @@ func (s *Server) authLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("login succeeded (totp)", "username", user.Username)
+	s.auditEntry(r.Context(), user.ID, "auth.login", "auth", user.Username+" (totp)", r.RemoteAddr)
 	auth.SetSessionCookie(w, token, s.cookieSecure(r), s.auth.SessionTTL())
 	writeJSON(w, http.StatusOK, user)
 }
@@ -172,6 +177,7 @@ func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	if u := userFromContext(r); u != nil {
 		slog.Info("logout", "username", u.Username)
+		s.audit(r, "auth.logout", "auth", u.Username)
 	}
 	auth.ClearSessionCookie(w, s.cookieSecure(r))
 

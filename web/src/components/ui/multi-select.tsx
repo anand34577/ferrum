@@ -95,7 +95,7 @@ export function MultiSelect({ options, selected, onChange, allLabel, label, clas
             >
               <span
                 className={cn(
-                  "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border",
+                  "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border",
                   picked ? "border-brand-600 bg-brand-600 text-white" : "border-[var(--border-strong)]",
                 )}
                 aria-hidden

@@ -1,34 +1,20 @@
-import { ChevronRight } from "lucide-react"
+import { ChevronRight, Loader2 } from "lucide-react"
 import { Link } from "react-router-dom"
+import { Meter } from "@/components/ui/meter"
 import { StatusDot } from "@/components/ui/status-dot"
 import type { WidgetSettings } from "@/lib/dashboardTypes"
-import { summarizeFleet, useFleetOverview, utilizationTone } from "@/lib/fleet"
-import { cn, formatBytes } from "@/lib/utils"
-
-const toneClass = { ok: "text-[var(--status-ok)]", warn: "text-[var(--status-warn)]", error: "text-[var(--status-error)]" } as const
-
-function Bar({ pct }: { pct: number }) {
-  const tone = utilizationTone(pct)
-  return (
-    <div className="flex items-center justify-end gap-2">
-      <div className="h-1.5 w-full min-w-10 overflow-hidden rounded-sm bg-[var(--track)]">
-        <div
-          className={cn("h-full rounded-sm", tone === "error" ? "bg-[var(--status-error)]" : tone === "warn" ? "bg-[var(--status-warn)]" : "bg-brand-500")}
-          style={{ width: `${Math.min(100, pct)}%` }}
-        />
-      </div>
-      <span className={cn("w-9 shrink-0 text-right text-[11px] tabular", toneClass[tone])}>{pct.toFixed(0)}%</span>
-    </div>
-  )
-}
+import { summarizeFleet, useFleetOverview } from "@/lib/fleet"
+import { formatBytes } from "@/lib/utils"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 /** Side-by-side comparison of every Proxmox cluster/server: scale (nodes,
  * guests) next to load (CPU / memory / storage) — the multi-cluster
  * differentiator view, sortable by the widget setting. */
 export function ClusterComparisonWidget({ settings }: { settings: WidgetSettings }) {
   const sort = settings.sort ?? "cpu"
-  const { data: overview, isLoading } = useFleetOverview()
-  if (isLoading) return <p className="text-sm text-[var(--text-muted)]">Loading fleet…</p>
+  const { data: overview, isLoading, isError } = useFleetOverview()
+  if (isLoading) return <Loader2 className="h-4 w-4 animate-spin text-[var(--text-muted)]" />
+  if (isError) return <WidgetError />
 
   const rows = summarizeFleet(overview).connections
   if (rows.length === 0) return <p className="text-sm text-[var(--text-muted)]">No connections configured yet.</p>
@@ -53,13 +39,13 @@ export function ClusterComparisonWidget({ settings }: { settings: WidgetSettings
     <div className="h-full overflow-auto">
       <table className="w-full text-xs">
         <thead className="sticky top-0 bg-[var(--bg-surface)]">
-          <tr className="border-b border-[var(--border)] text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
-            <th className="py-1.5 pr-2 text-left font-medium">Connection</th>
-            <th className="px-2 py-1.5 text-right font-medium">Nodes</th>
-            <th className="px-2 py-1.5 text-right font-medium">Guests</th>
-            <th className="w-24 px-2 py-1.5 text-right font-medium">CPU</th>
-            <th className="w-24 px-2 py-1.5 text-right font-medium">Memory</th>
-            <th className="w-24 pl-2 py-1.5 text-right font-medium">Storage</th>
+          <tr className="border-b border-[var(--border)] font-mono text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+            <th className="py-1.5 pr-2 text-left">Connection</th>
+            <th className="px-2 py-1.5 text-right">Nodes</th>
+            <th className="px-2 py-1.5 text-right">Guests</th>
+            <th className="w-24 px-2 py-1.5 text-right">CPU</th>
+            <th className="w-24 px-2 py-1.5 text-right">Memory</th>
+            <th className="w-24 pl-2 py-1.5 text-right">Storage</th>
           </tr>
         </thead>
         <tbody>
@@ -83,9 +69,9 @@ export function ClusterComparisonWidget({ settings }: { settings: WidgetSettings
               </td>
               <td className="px-2 py-1.5 text-right tabular">{c.online ? `${c.nodes.online}/${c.nodes.total}` : "—"}</td>
               <td className="px-2 py-1.5 text-right tabular">{c.online ? c.vms.total + c.lxcs.total : "—"}</td>
-              <td className="px-2 py-1.5">{c.online ? <Bar pct={c.cpu.pct} /> : <span className="text-[var(--text-faint)]">—</span>}</td>
-              <td className="px-2 py-1.5">{c.online ? <Bar pct={c.memory.pct} /> : <span className="text-[var(--text-faint)]">—</span>}</td>
-              <td className="py-1.5 pl-2">{c.online ? <Bar pct={c.storage.pct} /> : <span className="text-[var(--text-faint)]">—</span>}</td>
+              <td className="px-2 py-1.5">{c.online ? <Meter value={c.cpu.pct} showLabel label="CPU" /> : <span className="text-[var(--text-faint)]">—</span>}</td>
+              <td className="px-2 py-1.5">{c.online ? <Meter value={c.memory.pct} showLabel label="Memory" /> : <span className="text-[var(--text-faint)]">—</span>}</td>
+              <td className="py-1.5 pl-2">{c.online ? <Meter value={c.storage.pct} showLabel label="Storage" /> : <span className="text-[var(--text-faint)]">—</span>}</td>
             </tr>
           ))}
         </tbody>

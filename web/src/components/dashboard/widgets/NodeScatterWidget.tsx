@@ -1,12 +1,14 @@
 import { CartesianGrid, Cell, ResponsiveContainer, ReferenceLine, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from "recharts"
 import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { useScopedInventory } from "@/lib/fleet"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 /** Node density bubble chart: X = CPU %, Y = memory %, bubble = guest count.
  * The top-right corner is where hosts are drowning — it exposes overloaded
  * and under-used nodes in one glance. */
 export function NodeScatterWidget({ settings }: { settings: WidgetSettings }) {
-  const { resources, connections } = useScopedInventory(settings)
+  const { resources, connections, isError } = useScopedInventory(settings)
+  if (isError) return <WidgetError />
 
   const connName = new Map(connections.map((c) => [c.connectionId, c.name]))
   const guestsByNode = new Map<string, number>()

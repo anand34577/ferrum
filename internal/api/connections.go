@@ -210,6 +210,9 @@ func (s *Server) updateConnection(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// Drop any cached ticket so edited credentials (or a demoted verify-TLS
+	// setting) take effect immediately instead of up to ticketTTL later.
+	s.connections.Invalidate(id)
 	s.audit(r, "connections.update", "connections", id)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -220,6 +223,9 @@ func (s *Server) deleteConnection(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// Deleting a connection is meant to revoke access to it now — drop the
+	// cached client so a stale ticket can't keep authenticating afterward.
+	s.connections.Invalidate(id)
 	s.audit(r, "connections.delete", "connections", id)
 	slog.Info("connection deleted", "id", id)
 	w.WriteHeader(http.StatusNoContent)

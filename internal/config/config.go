@@ -31,6 +31,13 @@ type ServerConfig struct {
 	// client IPs are taken from X-Forwarded-For and the session cookie is
 	// marked Secure when the proxy reports an https request.
 	BehindProxy bool `yaml:"behindProxy"`
+	// TLSCertFile/TLSKeyFile let Ferrum terminate TLS itself for standalone
+	// deployments with no reverse proxy in front of it. Both empty (the
+	// default) means plain HTTP — the overwhelmingly common case, since
+	// most deployments put a reverse proxy (which already handles TLS) in
+	// front of Ferrum; set both to serve HTTPS directly instead.
+	TLSCertFile string `yaml:"tlsCertFile"`
+	TLSKeyFile  string `yaml:"tlsKeyFile"`
 }
 
 // OIDCConfig configures single sign-on against an external identity
@@ -51,6 +58,13 @@ type Config struct {
 	DB     DBConfig     `yaml:"db"`
 	Secret string       `yaml:"secret"`
 	OIDC   OIDCConfig   `yaml:"oidc"`
+	// NeedleBinPath locates the optional Needle 2 CLI binary (see
+	// internal/needle) that backs the built-in, no-API-key AI provider.
+	// Bootstrap-level like the rest of this struct: it names a file on disk
+	// Ferrum needs before it can do anything with it. Left blank (the
+	// default) means the built-in provider is simply unavailable — nothing
+	// else depends on it.
+	NeedleBinPath string `yaml:"needleBinPath"`
 }
 
 func defaults() Config {
@@ -93,6 +107,9 @@ func Load(path string) (Config, error) {
 	if cfg.Secret != "" && len(cfg.Secret) < 16 {
 		return cfg, fmt.Errorf("secret must be at least 16 characters (a random one is generated if omitted)")
 	}
+	if (cfg.Server.TLSCertFile == "") != (cfg.Server.TLSKeyFile == "") {
+		return cfg, fmt.Errorf("server.tlsCertFile and server.tlsKeyFile must both be set, or both left empty")
+	}
 
 	return cfg, nil
 }
@@ -106,6 +123,12 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("FERRUM_BEHIND_PROXY"); v != "" {
 		cfg.Server.BehindProxy = v == "true" || v == "1"
+	}
+	if v := os.Getenv("FERRUM_TLS_CERT_FILE"); v != "" {
+		cfg.Server.TLSCertFile = v
+	}
+	if v := os.Getenv("FERRUM_TLS_KEY_FILE"); v != "" {
+		cfg.Server.TLSKeyFile = v
 	}
 	if v := os.Getenv("FERRUM_DB_DRIVER"); v != "" {
 		cfg.DB.Driver = v
@@ -139,5 +162,8 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("FERRUM_OIDC_REDIRECT_URL"); v != "" {
 		cfg.OIDC.RedirectURL = v
+	}
+	if v := os.Getenv("FERRUM_NEEDLE_BIN"); v != "" {
+		cfg.NeedleBinPath = v
 	}
 }

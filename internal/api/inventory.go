@@ -94,6 +94,13 @@ func (s *Server) guestPowerAction(w http.ResponseWriter, r *http.Request) {
 		writeErrorMsg(w, http.StatusBadRequest, "unsupported action")
 		return
 	}
+	// LXC suspend/resume (criu checkpoint) is best-effort and frequently
+	// unsupported by the container's kernel/rootfs — PVE reports a generic
+	// 5xx for it, not a helpful message. Qemu supports both reliably.
+	if guestType == "lxc" && (action == "suspend" || action == "resume") {
+		writeErrorMsg(w, http.StatusBadRequest, "suspend/resume is not supported for containers")
+		return
+	}
 
 	client, err := s.clientFor(r.Context(), connID)
 	if err != nil {
@@ -111,7 +118,7 @@ func (s *Server) guestPowerAction(w http.ResponseWriter, r *http.Request) {
 }
 
 var allowedPowerActions = map[string]bool{
-	"start": true, "stop": true, "shutdown": true, "reset": true, "suspend": true, "resume": true,
+	"start": true, "stop": true, "shutdown": true, "reboot": true, "reset": true, "suspend": true, "resume": true,
 }
 
 func (s *Server) nodeTasks(w http.ResponseWriter, r *http.Request) {

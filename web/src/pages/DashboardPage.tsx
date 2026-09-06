@@ -30,6 +30,8 @@ import { api, ApiError } from "@/lib/api"
 import { useConnections } from "@/lib/fleet"
 import { cn } from "@/lib/utils"
 import {
+  LAYOUT_VERSION,
+  migrateLayout,
   WIDGET_CATALOG,
   widgetDefaultSettings,
   type DashboardFull,
@@ -138,7 +140,7 @@ export function DashboardPage() {
       .then((list) => {
         setDashboards(list)
       })
-      .catch(() => {})
+      .catch((err) => toast.error(err instanceof ApiError ? err.message : "Failed to load dashboards"))
   }
   useEffect(loadDashboardList, [])
 
@@ -160,12 +162,13 @@ export function DashboardPage() {
 
   // Synchronize local editable layout with loaded dashboard when activeId or query changes
   const loadedWidgets = widgetsQuery.data?.widgets ?? null
+  const loadedVersion = widgetsQuery.data?.version
   const [widgets, setWidgets] = useState<WidgetSpec[] | null>(null)
   const prevLoadedRef = useRef<WidgetSpec[] | null>(null)
 
   if (loadedWidgets !== prevLoadedRef.current) {
     prevLoadedRef.current = loadedWidgets
-    setWidgets(loadedWidgets)
+    setWidgets(loadedWidgets && migrateLayout(loadedVersion, loadedWidgets))
   }
 
   const loadError = widgetsQuery.isError
@@ -184,7 +187,7 @@ export function DashboardPage() {
   function saveLayout(next: WidgetSpec[], targetId = activeId) {
     if (!targetId) return
     dirty.current = false
-    api.put(`/dashboards/${targetId}`, { widgets: next }).catch((err: unknown) => {
+    api.put(`/dashboards/${targetId}`, { version: LAYOUT_VERSION, widgets: next }).catch((err: unknown) => {
       toast.error(err instanceof ApiError ? err.message : "Failed to save dashboard layout")
     })
   }
@@ -194,7 +197,7 @@ export function DashboardPage() {
     if (dirty.current && widgets) saveLayout(widgets) // flush pending edits to the dashboard we're leaving
     setEditing(false)
     setActiveId(id)
-    api.put("/auth/me/preferences", { activeDashboardId: id }).catch(() => {})
+    api.put("/auth/me/preferences", { activeDashboardId: id }).catch((err) => console.warn("failed to save active dashboard preference", err))
     queryClient.setQueryData<{ activeDashboardId?: string } | undefined>(["auth", "preferences"], (old) =>
       old ? { ...old, activeDashboardId: id } : old,
     )
@@ -216,6 +219,7 @@ export function DashboardPage() {
     try {
       await api.put(`/dashboards/${activeId}`, { name })
       setDashboards((prev) => prev?.map((d) => (d.id === activeId ? { ...d, name } : d)) ?? null)
+      toast.success(`Renamed to "${name}"`)
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "Failed to rename dashboard")
     }
@@ -236,7 +240,7 @@ export function DashboardPage() {
       setDashboards(remaining)
       const next = remaining[0]?.id ?? null
       setActiveId(next)
-      if (next) api.put("/auth/me/preferences", { activeDashboardId: next }).catch(() => {})
+      if (next) api.put("/auth/me/preferences", { activeDashboardId: next }).catch((err) => console.warn("failed to save active dashboard preference", err))
       toast.success("Dashboard deleted")
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "Failed to delete dashboard")
@@ -493,11 +497,17 @@ export function DashboardPage() {
           }}
           breakpoints={{ lg: 1024, sm: 640, xs: 0 }}
           cols={{ lg: 12, sm: 6, xs: 1 }}
-          rowHeight={64}
+          // 32px rows (v2) instead of 64: resizing snaps in half-height steps,
+          // so a widget can stop at its content instead of being padded out to
+          // the next 76px multiple. Horizontal margin stays 12; two v2 rows
+          // plus the gap between them equal exactly one old row.
+          rowHeight={32}
           margin={[12, 12]}
           width={width}
           dragConfig={{ enabled: editing, handle: ".drag-handle" }}
-          resizeConfig={{ enabled: editing }}
+          // Edge handles as well as the corner: a widget that is only too tall
+          // is resized straight down, without also having to hold its width.
+          resizeConfig={{ enabled: editing, handles: ["se", "s", "e"] }}
           onLayoutChange={onLayoutChange}
         >
           {widgets.map((w) => {

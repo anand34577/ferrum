@@ -1,17 +1,21 @@
 import { useQuery } from "@tanstack/react-query"
+import { Meter } from "@/components/ui/meter"
 import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { api, type ConnectionInventory } from "@/lib/api"
-import { cn, formatBytes } from "@/lib/utils"
+import { formatBytes } from "@/lib/utils"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 /** Stacked memory usage bars per node (used vs total, with swap pressure
  * context) — the memory-at-a-glance list. */
 export function MemoryByNodeWidget({ settings }: { settings: WidgetSettings }) {
   const connId = settings.connection ?? "all"
-  const { data } = useQuery({
+  const { data, isError } = useQuery({
     queryKey: ["inventory"],
     queryFn: () => api.get<ConnectionInventory[]>("/inventory/"),
     refetchInterval: 15_000,
   })
+
+  if (isError) return <WidgetError />
 
   const nodes = (data ?? [])
     .filter((c) => connId === "all" || c.connectionId === connId)
@@ -31,26 +35,15 @@ export function MemoryByNodeWidget({ settings }: { settings: WidgetSettings }) {
 
   return (
     <div className="flex h-full flex-col justify-center gap-1.5 overflow-auto">
-      {nodes.map((n) => {
-        const tone = n.pct >= 90 ? "error" : n.pct >= 75 ? "warn" : "ok"
-        return (
-          <div key={n.name} className="flex items-center gap-2 text-xs">
-            <span className="w-24 shrink-0 truncate text-[var(--text-muted)]" title={n.name}>{n.name}</span>
-            <div className="h-2.5 flex-1 overflow-hidden rounded-sm bg-[var(--track)]">
-              <div
-                className={cn("h-full rounded-sm", tone === "error" ? "bg-[var(--status-error)]" : tone === "warn" ? "bg-[var(--status-warn)]" : "bg-brand-500")}
-                style={{ width: `${Math.min(100, n.pct)}%` }}
-              />
-            </div>
-            <span className={cn("w-10 shrink-0 text-right font-medium tabular", tone === "error" ? "text-[var(--status-error)]" : tone === "warn" ? "text-[var(--status-warn)]" : "text-[var(--text)]")}>
-              {n.pct.toFixed(0)}%
-            </span>
-            <span className="hidden w-32 shrink-0 text-right text-[10px] text-[var(--text-faint)] tabular sm:block">
-              {formatBytes(n.used)} / {formatBytes(n.total)}
-            </span>
-          </div>
-        )
-      })}
+      {nodes.map((n) => (
+        <div key={n.name} className="flex items-center gap-2 text-xs">
+          <span className="w-24 shrink-0 truncate text-[var(--text-muted)]" title={n.name}>{n.name}</span>
+          <Meter value={n.pct} size="md" showLabel label={`${n.name} memory`} className="flex-1" />
+          <span className="hidden w-32 shrink-0 text-right text-[10px] text-[var(--text-faint)] tabular sm:block">
+            {formatBytes(n.used)} / {formatBytes(n.total)}
+          </span>
+        </div>
+      ))}
       <p className="pt-1 text-center text-[10px] text-[var(--text-faint)]">Worst first · bars show used memory of total</p>
     </div>
   )

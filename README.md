@@ -149,6 +149,24 @@ Both build the frontend, cross-compile with version info baked in (`ferrum -vers
 
 Copy `config.example.yaml` to `config.yaml` and adjust as needed, or set the equivalent `FERRUM_*` environment variables (see the comments in that file for the full list, including SQLite/PostgreSQL, TLS cookie behavior, reverse-proxy support, and optional OIDC single sign-on).
 
+Everything else — notifications, SSO details, security policy, system settings, AI providers, and the REST API/MCP enable switches below — is configured from the admin **Settings** UI once Ferrum is running, not from environment variables.
+
+### Built-in LLM (Needle 2)
+
+The AI Assistant and MCP tool-calling loop can use any OpenAI-chat-completions-compatible provider (OpenAI, Ollama, LM Studio, LocalAI, OpenRouter, ...) configured under **Settings > AI Providers**. There's also an optional zero-config, no-API-key, fully local option backed by [Needle 2](https://huggingface.co/Cactus-Compute/needle2) — a small (45M-parameter) tool-calling model that runs as a self-contained CLI binary with no GPU and no network access required at inference time.
+
+Ferrum does **not** download or bundle this binary itself — it's a third-party artifact only distributed from Hugging Face, and Ferrum never fetches executable content from the network on its own. To enable it:
+
+1. Download the `needle` CLI binary for your platform from the [Needle 2 files](https://huggingface.co/Cactus-Compute/needle2/tree/main) (the `linux/`, `macos/`, or `windows/` directory).
+2. Point Ferrum at it: set `FERRUM_NEEDLE_BIN=/path/to/needle` (or `needleBinPath` in `config.yaml`) before starting Ferrum.
+3. In **Settings > AI Providers**, click "Add provider" and choose the **Needle 2 (built-in, local)** preset, then save.
+
+Ferrum starts the binary itself (as a local subprocess, `127.0.0.1`-only) the first time it's used, and stops it on shutdown. If `FERRUM_NEEDLE_BIN` isn't set, or the file doesn't exist, this provider simply isn't usable — every other provider is unaffected.
+
+## API access, MCP, and audit logging
+
+Any user can generate long-lived API keys under **Profile > API Keys** — scoped to either the general REST API (`Authorization: Bearer <key>` against `/api/v1/...`, for 3rd-party integrations and scripts) or the MCP endpoint only (`/mcp`, for Claude Code/Desktop or any other MCP-capable agent — see **Profile > MCP integration** for ready-to-paste config). Both surfaces are off by default and must be turned on by an admin under **Settings > API & MCP**, which also caps how many tool calls the AI Assistant's agent loop can make per message. Every mutating action — through the UI, the REST API, or MCP — is recorded with who, what, and when under **Audit Log** (admin-only).
+
 ## License
 
 [MIT](LICENSE)

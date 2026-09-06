@@ -4,16 +4,23 @@ import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { api, type ConnectionInventory } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { chartTooltip } from "@/components/charts/tooltipTheme"
+import { chartBarRadius } from "@/lib/chartRadius"
+import { useTheme } from "@/lib/theme"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 /** CPU utilization per node — the classic "which host is hot" bar chart,
  * colored by severity so overloaded nodes jump out. */
 export function CpuByNodeWidget({ settings }: { settings: WidgetSettings }) {
   const connId = settings.connection ?? "all"
-  const { data } = useQuery({
+  const { look } = useTheme()
+  const r = chartBarRadius(look)
+  const { data, isError } = useQuery({
     queryKey: ["inventory"],
     queryFn: () => api.get<ConnectionInventory[]>("/inventory/"),
     refetchInterval: 15_000,
   })
+
+  if (isError) return <WidgetError />
 
   const nodes = (data ?? [])
     .filter((c) => connId === "all" || c.connectionId === connId)
@@ -61,7 +68,7 @@ export function CpuByNodeWidget({ settings }: { settings: WidgetSettings }) {
               hovered column — no band. */}
           <Bar
             dataKey="pct"
-            radius={[4, 4, 0, 0]}
+            radius={[r, r, 0, 0]}
             isAnimationActive={false}
             activeBar={{ stroke: "var(--text-faint)", strokeWidth: 1 }}
           >

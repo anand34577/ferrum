@@ -125,8 +125,8 @@ export function CommandPalette() {
       open={open}
       onOpenChange={setOpen}
       label="Command palette"
-      overlayClassName="fixed inset-0 z-50 bg-black/65 backdrop-blur-sm"
-      contentClassName="fixed left-1/2 top-[12vh] z-50 w-[calc(100vw-2rem)] max-w-xl -translate-x-1/2 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] shadow-2xl dark:shadow-[0_24px_64px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.08)]"
+      overlayClassName="fixed inset-0 z-50 bg-black/65 backdrop-blur-sm data-[state=open]:animate-in data-[state=open]:fade-in data-[state=closed]:animate-out data-[state=closed]:fade-out"
+      contentClassName="fixed left-1/2 top-[12vh] z-50 w-[calc(100vw-2rem)] max-w-xl -translate-x-1/2 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] shadow-2xl dark:shadow-[0_24px_64px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.08)] data-[state=open]:animate-in data-[state=open]:fade-in data-[state=open]:zoom-in-95 data-[state=open]:slide-in-from-top-4 data-[state=closed]:animate-out data-[state=closed]:fade-out data-[state=closed]:zoom-out-95"
     >
       <div
         className="flex items-center gap-2.5 border-b border-[var(--border)] px-4 py-3"
@@ -183,7 +183,7 @@ export function CommandPalette() {
           >
             <Keyboard className="h-4 w-4 shrink-0 text-[var(--text-muted)] group-data-[selected=true]:text-brand-500" aria-hidden />
             <span className="truncate">Keyboard shortcuts</span>
-            <kbd className="ml-auto shrink-0 rounded border border-[var(--border)] bg-[var(--bg-surface)] px-1 py-px font-mono text-[10px] text-[var(--text-faint)]">?</kbd>
+            <kbd className="ml-auto shrink-0 rounded-sm border border-[var(--border)] bg-[var(--bg-surface)] px-1 py-px font-mono text-[10px] text-[var(--text-faint)]">?</kbd>
           </Command.Item>
         </Command.Group>
 
@@ -204,7 +204,7 @@ export function CommandPalette() {
               <t.icon className="h-4 w-4 shrink-0 text-[var(--text-muted)] group-data-[selected=true]:text-brand-500" aria-hidden />
               <span className="truncate">{t.label}</span>
               {theme === t.value && (
-                <span className="ml-auto shrink-0 rounded bg-[var(--bg-muted)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--text-faint)]">
+                <span className="ml-auto shrink-0 rounded-sm bg-[var(--bg-muted)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--text-faint)]">
                   current
                 </span>
               )}
@@ -241,7 +241,10 @@ export function CommandPalette() {
               <Command.Item
                 key={guest.id}
                 value={`${guest.name} ${guest.vmid} ${guest.tags?.replace(/[;,]/g, " ") ?? ""}`}
-                onSelect={() => go("/inventory")}
+                onSelect={() => {
+                  navigate("/inventory", { state: { focusGuestId: guest.id, focusGuestName: guest.name } })
+                  setOpen(false)
+                }}
                 className="group flex cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-[var(--text)] data-[selected=true]:bg-[var(--bg-muted)]"
               >
                 {guest.type === "lxc" ? (
@@ -261,13 +264,13 @@ export function CommandPalette() {
 
       <div className="flex items-center gap-4 border-t border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2 text-[10px] text-[var(--text-faint)]">
         <span className="flex items-center gap-1.5">
-          <kbd className="rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-1 py-px font-mono">↑↓</kbd> navigate
+          <kbd className="rounded-sm border border-[var(--border)] bg-[var(--bg-elevated)] px-1 py-px font-mono">↑↓</kbd> navigate
         </span>
         <span className="flex items-center gap-1.5">
-          <kbd className="rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-1 py-px font-mono">↵</kbd> open
+          <kbd className="rounded-sm border border-[var(--border)] bg-[var(--bg-elevated)] px-1 py-px font-mono">↵</kbd> open
         </span>
         <span className="ml-auto flex items-center gap-1.5">
-          <kbd className="rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-1 py-px font-mono">{modKey} K</kbd> toggle
+          <kbd className="rounded-sm border border-[var(--border)] bg-[var(--bg-elevated)] px-1 py-px font-mono">{modKey} K</kbd> toggle
         </span>
       </div>
     </Command.Dialog>

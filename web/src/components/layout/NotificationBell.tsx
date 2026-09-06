@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
-import { Bell } from "lucide-react"
+import { Bell, Loader2 } from "lucide-react"
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
@@ -57,7 +57,11 @@ export function NotificationBell() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-80">
         <DropdownMenuLabel>Active alerts</DropdownMenuLabel>
-        {activeAlertsQuery.isLoading && <div className="px-2.5 py-4 text-center text-xs text-[var(--text-muted)]">Loading…</div>}
+        {activeAlertsQuery.isLoading && (
+          <div className="flex justify-center px-2.5 py-4">
+            <Loader2 className="h-4 w-4 animate-spin text-[var(--text-muted)]" />
+          </div>
+        )}
         {!activeAlertsQuery.isLoading && (activeAlertsQuery.data?.length ?? 0) === 0 && (
           <div className="px-2.5 py-4 text-center text-xs text-[var(--text-muted)]">Nothing needs attention.</div>
         )}

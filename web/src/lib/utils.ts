@@ -107,3 +107,31 @@ export function guestDotStatus(status?: string): "ok" | "warn" | "error" {
   return "warn"
 }
 
+/** Parses "key=value" lines (blank lines and "#" comments ignored) into a
+ * raw config map — the shared escape hatch for forms that pass through
+ * arbitrary PVE keys (extra guest hardware, datacenter options, ...)
+ * without a dedicated field per possible key. */
+export function parseExtraLines(text: string): Record<string, string> | undefined {
+  const extra: Record<string, string> = {}
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith("#")) continue
+    const eq = trimmed.indexOf("=")
+    if (eq <= 0) continue
+    extra[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim()
+  }
+  return Object.keys(extra).length > 0 ? extra : undefined
+}
+
+/** Config keys that hand the guest/host arbitrary code execution or bypass
+ * normal isolation if set via the free-text "extra options" escape hatch —
+ * `args`/`hookscript` run on the Proxmox host itself, the rest weaken the
+ * guest's isolation from it. Used to warn before saving, not to block. */
+export const DANGEROUS_EXTRA_KEYS = new Set(["args", "hookscript", "smbios1", "lxc.mount.entry", "lxc.cap.drop"])
+
+/** Returns which keys of a parsed "extra options" map are in DANGEROUS_EXTRA_KEYS. */
+export function dangerousExtraKeys(extra: Record<string, string> | undefined): string[] {
+  if (!extra) return []
+  return Object.keys(extra).filter((k) => DANGEROUS_EXTRA_KEYS.has(k.toLowerCase()))
+}
+

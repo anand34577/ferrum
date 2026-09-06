@@ -13,10 +13,10 @@ export function MobileDrawer({ open, onOpenChange, children }: { open: boolean; 
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-[200] bg-black/50" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-[200] bg-black/50 data-[state=open]:animate-in data-[state=open]:fade-in data-[state=closed]:animate-out data-[state=closed]:fade-out" />
         <DialogPrimitive.Content
           aria-label="Navigation menu"
-          className="fixed inset-y-0 left-0 z-[210] flex w-64 flex-col bg-[var(--sidebar-bg)] shadow-lg outline-none"
+          className="fixed inset-y-0 left-0 z-[210] flex w-64 flex-col bg-[var(--sidebar-bg)] shadow-lg outline-none data-[state=open]:animate-in data-[state=open]:slide-in-from-left data-[state=closed]:animate-out data-[state=closed]:slide-out-to-left data-[state=open]:duration-200 data-[state=closed]:duration-150"
         >
           <DialogPrimitive.Title className="sr-only">Navigation menu</DialogPrimitive.Title>
           <div className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--sidebar-border)] pl-4 pr-2">

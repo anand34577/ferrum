@@ -57,3 +57,57 @@ func (c *Client) ScheduleReplicationNow(ctx context.Context, node, id string) (s
 	}
 	return out.Data, nil
 }
+
+// CreateReplicationJobOptions models the writable fields of a replication
+// job (/cluster/replication). ID is "<vmid>-<jobnum>" (e.g. "100-0") —
+// PVE's own naming scheme, chosen by the caller since there's no
+// auto-numbering endpoint.
+type CreateReplicationJobOptions struct {
+	ID       string
+	Guest    int
+	Target   string // target node name
+	Schedule string // e.g. "*/15" (every 15 min); PVE default is every 15 minutes if omitted
+	Comment  string
+	Disable  bool
+}
+
+func replicationJobForm(opts CreateReplicationJobOptions) url.Values {
+	form := url.Values{"type": {"local"}}
+	if opts.Target != "" {
+		form.Set("target", opts.Target)
+	}
+	if opts.Schedule != "" {
+		form.Set("schedule", opts.Schedule)
+	}
+	if opts.Comment != "" {
+		form.Set("comment", opts.Comment)
+	}
+	form.Set("disable", boolFlag(opts.Disable))
+	return form
+}
+
+// CreateReplicationJob schedules a new storage replication job for a guest.
+func (c *Client) CreateReplicationJob(ctx context.Context, opts CreateReplicationJobOptions) error {
+	form := replicationJobForm(opts)
+	form.Set("id", opts.ID)
+	if opts.Guest > 0 {
+		form.Set("guest", fmt.Sprintf("%d", opts.Guest))
+	}
+	return c.post(ctx, "/cluster/replication", form, nil)
+}
+
+// UpdateReplicationJob edits an existing replication job's schedule/target/comment/enabled state.
+func (c *Client) UpdateReplicationJob(ctx context.Context, id string, opts CreateReplicationJobOptions) error {
+	return c.put(ctx, "/cluster/replication/"+url.PathEscape(id), replicationJobForm(opts), nil)
+}
+
+// DeleteReplicationJob removes a replication job. When force is true, PVE
+// also removes the already-replicated disk images from the target node
+// instead of leaving them behind.
+func (c *Client) DeleteReplicationJob(ctx context.Context, id string, force bool) error {
+	form := url.Values{}
+	if force {
+		form.Set("force", "1")
+	}
+	return c.delete(ctx, "/cluster/replication/"+url.PathEscape(id), form, nil)
+}

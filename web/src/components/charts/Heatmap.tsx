@@ -74,7 +74,7 @@ export function Heatmap({ rows, columnLabels, valueFormatter, max, cellHeight = 
                 <div
                   key={c}
                   className={cn(
-                    "rounded-[3px] transition-transform hover:scale-110",
+                    "rounded-sm transition-transform hover:scale-110",
                     typeof v !== "number" && "opacity-40",
                   )}
                   style={{ ...cellStyle(v), ...cellStyleWidth, height: cellHeight }}
@@ -89,7 +89,7 @@ export function Heatmap({ rows, columnLabels, valueFormatter, max, cellHeight = 
           {[0.15, 0.35, 0.55, 0.75, 0.95].map((r) => (
             <span
               key={r}
-              className="inline-block h-2.5 w-4 rounded-[2px]"
+              className="inline-block h-2.5 w-4 rounded-sm"
               style={{ background: `color-mix(in oklab, var(--chart-1) ${Math.round(8 + r * 86)}%, var(--bg-muted))` }}
             />
           ))}

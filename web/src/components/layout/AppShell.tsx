@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   ClipboardList,
   Database,
+  GitBranch,
   HardDrive,
   LayoutDashboard,
   Layers,
@@ -16,6 +17,7 @@ import {
   Settings,
   Shield,
   ShieldCheck,
+  Sparkles,
   Sun,
   Terminal,
   UserRound,
@@ -23,7 +25,7 @@ import {
   Waypoints,
 } from "lucide-react"
 import { type ReactNode, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 import { BrandMark } from "@/components/layout/BrandMark"
 import { api } from "@/lib/api"
 import { CommandPalette } from "@/components/layout/CommandPalette"
@@ -71,6 +73,7 @@ const navGroups: { label: string; items: NavItemSpec[] }[] = [
       { to: "/storage", label: "Storage", icon: Database },
       { to: "/pools", label: "Resource Pools", icon: Layers },
       { to: "/ha", label: "High Availability", icon: ShieldCheck },
+      { to: "/cluster", label: "Cluster & SDN", icon: GitBranch, adminOnly: true },
     ],
   },
   {
@@ -80,6 +83,7 @@ const navGroups: { label: string; items: NavItemSpec[] }[] = [
       { to: "/firewall", label: "Firewall", icon: Shield },
       { to: "/alerts", label: "Alerts", icon: AlertTriangle },
       { to: "/tasks", label: "Task Center", icon: Terminal },
+      { to: "/ai-assistant", label: "AI Assistant", icon: Sparkles },
     ],
   },
   {
@@ -107,8 +111,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { user, signOut } = useAuth()
   const { effectiveTheme, toggle } = useTheme()
   const navigate = useNavigate()
+  const location = useLocation()
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
+  // The AI Assistant page fills main's h-full with a fixed-height chat panel
+  // instead of scrolling content, so main's usual bottom padding (sized for
+  // scrolled-content breathing room) just reads as wasted space below the
+  // panel. Give it a smaller, still-nonzero gap instead.
+  const isChatPage = location.pathname === "/ai-assistant"
 
   const groups = visibleGroups(user?.isAdmin ?? false)
 
@@ -270,8 +280,27 @@ export function AppShell({ children }: { children: ReactNode }) {
             wrapper makes taller pages overflow it, and that overflow paints
             right over the padding — the exact "content glued to the screen
             bottom" effect this padding exists to prevent. */}
-        <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto p-4 pb-10 outline-none md:p-6 md:pb-12">
-          <div className="mx-auto w-full max-w-[1720px]">{children}</div>
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className={cn(
+            "flex-1 overflow-y-auto p-4 outline-none md:p-6",
+            isChatPage ? "pb-5 md:pb-6" : "pb-10 md:pb-12",
+          )}
+        >
+          {/* h-full only for the chat page, which needs a definite height to
+              size its bounded, non-scrolling layout against (it scrolls its
+              own message list instead of the page). Every other page must
+              NOT get h-full: it pins the wrapper's layout box to exactly
+              main's content-box height, and on any page taller than the
+              viewport the real content then overflows past that box —
+              since main's bottom padding is measured against the wrapper's
+              box edge, not its overflowing content, the overflow bleeds
+              straight through the space the padding should occupy and the
+              bottom gap disappears. Auto-height (the default) doesn't have
+              this problem: the wrapper grows to fit its content instead of
+              being pinned undersized. */}
+          <div className={cn("mx-auto w-full max-w-[1720px]", isChatPage && "h-full")}>{children}</div>
         </main>
       </div>
     </div>

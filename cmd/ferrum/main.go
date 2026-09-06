@@ -134,7 +134,9 @@ func runServer(ctx context.Context, cfg config.Config) {
 	srv := api.New(db, authSvc, secretBox, api.ServerOptions{
 		SecureCookies: cfg.Server.SecureCookies,
 		BehindProxy:   cfg.Server.BehindProxy,
+		NeedleBinPath: cfg.NeedleBinPath,
 	})
+	defer srv.Close()
 
 	// OIDC and notification (Gotify/SMTP) settings are admin-editable from
 	// the Settings UI and live in the database from here on; config.yaml's
@@ -160,7 +162,7 @@ func runServer(ctx context.Context, cfg config.Config) {
 	// stops — rather than polling through — the graceful-shutdown window.
 	pollerCtx, stopPoller := context.WithCancel(ctx)
 	defer stopPoller()
-	go evaluator.Run(pollerCtx, 60*time.Second)
+	go evaluator.Run(pollerCtx, srv.AlertPollInterval(ctx))
 
 	distFS, err := web.DistFS()
 	if err != nil {
@@ -179,8 +181,15 @@ func runServer(ctx context.Context, cfg config.Config) {
 	}
 
 	go func() {
-		slog.Info("ferrum listening", "addr", cfg.Server.Addr)
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		var err error
+		if cfg.Server.TLSCertFile != "" {
+			slog.Info("ferrum listening (tls)", "addr", cfg.Server.Addr)
+			err = httpServer.ListenAndServeTLS(cfg.Server.TLSCertFile, cfg.Server.TLSKeyFile)
+		} else {
+			slog.Info("ferrum listening", "addr", cfg.Server.Addr)
+			err = httpServer.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
 			slog.Error("server stopped", "error", err)
 			os.Exit(1)
 		}

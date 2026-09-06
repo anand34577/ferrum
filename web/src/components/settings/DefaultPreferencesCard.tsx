@@ -8,13 +8,14 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { api, ApiError } from "@/lib/api"
-import type { Accent, Look, ThemePreference } from "@/lib/theme"
+import type { Accent, Density, Look, ThemePreference } from "@/lib/theme"
 
 interface DefaultPreferences {
   theme: ThemePreference
   accent: Accent
   look: Look
   landingPage: string
+  density: Density
 }
 
 const LOOKS: { value: Look; label: string }[] = [
@@ -27,6 +28,9 @@ const LOOKS: { value: Look; label: string }[] = [
   { value: "glassmorphism", label: "Glassmorphism" },
   { value: "neumorphism", label: "Neumorphism" },
   { value: "brutalist", label: "Brutalist" },
+  { value: "solarized", label: "Solarized" },
+  { value: "highContrast", label: "High Contrast" },
+  { value: "aurora", label: "Aurora" },
 ]
 const ACCENTS: { value: Accent; label: string }[] = [
   { value: "oxide", label: "Oxide" },
@@ -47,6 +51,11 @@ const LANDING_PAGES = [
   { value: "/firewall", label: "Firewall" },
   { value: "/alerts", label: "Alerts" },
   { value: "/tasks", label: "Task Center" },
+  { value: "/ai-assistant", label: "AI Assistant" },
+]
+const DENSITIES: { value: Density; label: string }[] = [
+  { value: "comfortable", label: "Comfortable" },
+  { value: "compact", label: "Compact" },
 ]
 
 /**
@@ -95,7 +104,7 @@ function DefaultPreferencesForm({ initial }: { initial: DefaultPreferences }) {
 
   return (
     <>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <div className="space-y-1.5">
           <Label>Theme</Label>
           <Select value={form.theme} onValueChange={(v) => setForm({ ...form, theme: v as ThemePreference })}>
@@ -131,6 +140,15 @@ function DefaultPreferencesForm({ initial }: { initial: DefaultPreferences }) {
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
               {LANDING_PAGES.map((p) => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label>Density</Label>
+          <Select value={form.density} onValueChange={(v) => setForm({ ...form, density: v as Density })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {DENSITIES.map((d) => <SelectItem key={d.value} value={d.value}>{d.label}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>

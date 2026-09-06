@@ -30,6 +30,13 @@ const (
 	loginMaxFailures   = 5
 	loginWindow        = 15 * time.Minute
 	loginSweepInterval = 5 * time.Minute
+
+	// aiChatMaxPerMinute bounds how many /ai/chat completions one user can
+	// start per minute — the endpoint proxies to a paid/rate-limited LLM
+	// provider, so an unbounded caller (buggy client, or a compromised
+	// session/API key) could otherwise run up cost or exhaust the
+	// provider's own rate limit for every other user.
+	aiChatMaxPerMinute = 20
 )
 
 func newLoginLimiter() *loginLimiter {
@@ -118,4 +125,55 @@ func (l *loginLimiter) sweepLocked() {
 			delete(l.failed, key)
 		}
 	}
+}
+
+// requestLimiter caps how many requests one key (typically a user ID) can
+// make inside a fixed window — a hard ceiling, not smooth throttling, which
+// is all endpoints proxying to a paid/rate-limited upstream (the AI chat's
+// LLM provider) need: it bounds the cost/DoS blast radius of one runaway
+// caller without needing a token-bucket's extra bookkeeping.
+type requestLimiter struct {
+	mu            sync.Mutex
+	counts        map[string]*windowCount
+	max           int
+	window        time.Duration
+	sweepInterval time.Duration
+	lastSweep     time.Time
+}
+
+type windowCount struct {
+	count      int
+	windowFrom time.Time
+}
+
+func newRequestLimiter(max int, window time.Duration) *requestLimiter {
+	return &requestLimiter{counts: map[string]*windowCount{}, max: max, window: window, sweepInterval: window, lastSweep: time.Now()}
+}
+
+// Allow reports whether another request for key may proceed inside the
+// current window, incrementing its count if so.
+func (l *requestLimiter) Allow(key string) (allowed bool, retryAfter time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := time.Now()
+	if now.Sub(l.lastSweep) >= l.sweepInterval {
+		l.lastSweep = now
+		for k, c := range l.counts {
+			if now.Sub(c.windowFrom) > l.window {
+				delete(l.counts, k)
+			}
+		}
+	}
+
+	c, ok := l.counts[key]
+	if !ok || now.Sub(c.windowFrom) > l.window {
+		l.counts[key] = &windowCount{count: 1, windowFrom: now}
+		return true, 0
+	}
+	if c.count >= l.max {
+		return false, l.window - now.Sub(c.windowFrom)
+	}
+	c.count++
+	return true, 0
 }

@@ -17,16 +17,17 @@ type defaultPreferencesRow struct {
 	accent      string
 	look        string
 	landingPage string
+	density     string
 }
 
 func defaultDefaultPreferencesRow() defaultPreferencesRow {
-	return defaultPreferencesRow{theme: "system", accent: "oxide", look: "enterprise", landingPage: "/"}
+	return defaultPreferencesRow{theme: "system", accent: "oxide", look: "enterprise", landingPage: "/", density: "comfortable"}
 }
 
 func (s *Server) loadDefaultPreferencesRow(ctx context.Context) (defaultPreferencesRow, error) {
 	row := defaultDefaultPreferencesRow()
-	err := s.db.QueryRowContext(ctx, `SELECT theme, accent, look, landing_page FROM default_preferences WHERE id = 1`).
-		Scan(&row.theme, &row.accent, &row.look, &row.landingPage)
+	err := s.db.QueryRowContext(ctx, `SELECT theme, accent, look, landing_page, density FROM default_preferences WHERE id = 1`).
+		Scan(&row.theme, &row.accent, &row.look, &row.landingPage, &row.density)
 	if err == sql.ErrNoRows {
 		return defaultDefaultPreferencesRow(), nil
 	}
@@ -38,12 +39,12 @@ func (s *Server) loadDefaultPreferencesRow(ctx context.Context) (defaultPreferen
 
 func (s *Server) saveDefaultPreferencesRow(ctx context.Context, row defaultPreferencesRow) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO default_preferences (id, theme, accent, look, landing_page, updated_at)
-		VALUES (1, ?, ?, ?, ?, ?)
+		INSERT INTO default_preferences (id, theme, accent, look, landing_page, density, updated_at)
+		VALUES (1, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			theme = excluded.theme, accent = excluded.accent, look = excluded.look, landing_page = excluded.landing_page,
-			updated_at = excluded.updated_at`,
-		row.theme, row.accent, row.look, row.landingPage, time.Now().UTC().Format(time.RFC3339))
+			density = excluded.density, updated_at = excluded.updated_at`,
+		row.theme, row.accent, row.look, row.landingPage, row.density, time.Now().UTC().Format(time.RFC3339))
 	return err
 }
 
@@ -52,10 +53,11 @@ type defaultPreferencesResponse struct {
 	Accent      string `json:"accent"`
 	Look        string `json:"look"`
 	LandingPage string `json:"landingPage"`
+	Density     string `json:"density"`
 }
 
 func toDefaultPreferencesResponse(row defaultPreferencesRow) defaultPreferencesResponse {
-	return defaultPreferencesResponse{Theme: row.theme, Accent: row.accent, Look: row.look, LandingPage: row.landingPage}
+	return defaultPreferencesResponse{Theme: row.theme, Accent: row.accent, Look: row.look, LandingPage: row.landingPage, Density: row.density}
 }
 
 func (s *Server) getDefaultPreferences(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +74,7 @@ type defaultPreferencesPatch struct {
 	Accent      *string `json:"accent"`
 	Look        *string `json:"look"`
 	LandingPage *string `json:"landingPage"`
+	Density     *string `json:"density"`
 }
 
 func (s *Server) putDefaultPreferences(w http.ResponseWriter, r *http.Request) {
@@ -114,6 +117,13 @@ func (s *Server) putDefaultPreferences(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		row.landingPage = *patch.LandingPage
+	}
+	if patch.Density != nil {
+		if !validDensities[*patch.Density] {
+			writeErrorMsg(w, http.StatusBadRequest, "density must be one of: comfortable, compact")
+			return
+		}
+		row.density = *patch.Density
 	}
 
 	if err := s.saveDefaultPreferencesRow(r.Context(), row); err != nil {

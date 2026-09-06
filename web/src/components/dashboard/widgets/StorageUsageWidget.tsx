@@ -1,9 +1,12 @@
+import { Meter } from "@/components/ui/meter"
 import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { useScopedInventory } from "@/lib/fleet"
 import { formatBytes } from "@/lib/utils"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 export function StorageUsageWidget({ settings }: { settings: WidgetSettings }) {
-  const { resources } = useScopedInventory(settings)
+  const { resources, isError } = useScopedInventory(settings)
+  if (isError) return <WidgetError />
 
   const pools = resources
     .filter((r) => r.type === "storage" && (r.maxdisk ?? 0) > 0)
@@ -20,14 +23,9 @@ export function StorageUsageWidget({ settings }: { settings: WidgetSettings }) {
         const pct = Math.min(100, ((p.disk ?? 0) / (p.maxdisk || 1)) * 100)
         return (
           <div key={p.id} className="flex items-center gap-2 text-sm">
-            <span className="w-28 truncate">{p.storage ?? p.name}</span>
-            <div className="h-1.5 flex-1 overflow-hidden rounded-sm bg-[var(--track)]">
-              <div
-                className={pct > 85 ? "h-full bg-[var(--status-error)]" : "h-full bg-brand-500"}
-                style={{ width: `${pct}%` }}
-              />
-            </div>
-            <span className="w-24 text-right text-xs text-[var(--text-muted)]">
+            <span className="w-28 shrink-0 truncate" title={p.storage ?? p.name}>{p.storage ?? p.name}</span>
+            <Meter value={pct} label={`${p.storage ?? p.name} usage`} className="min-w-16 flex-1" />
+            <span className="shrink-0 whitespace-nowrap text-right text-xs text-[var(--text-muted)] tabular">
               {formatBytes(p.disk ?? 0)} / {formatBytes(p.maxdisk ?? 0)}
             </span>
           </div>

@@ -3,11 +3,14 @@ import { AlertTriangle, ChevronRight, ExternalLink, Settings as SettingsIcon } f
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import { toast } from "sonner"
+import { AgentSettingsCard } from "@/components/settings/AgentSettingsCard"
+import { AIProvidersCard } from "@/components/settings/AIProvidersCard"
 import { AppearanceCard } from "@/components/settings/AppearanceCard"
 import { DefaultPreferencesCard } from "@/components/settings/DefaultPreferencesCard"
 import { NotificationsSettingsCard } from "@/components/settings/NotificationsSettingsCard"
 import { OIDCSettingsCard } from "@/components/settings/OIDCSettingsCard"
 import { SecuritySettingsCard } from "@/components/settings/SecuritySettingsCard"
+import { SystemSettingsCard } from "@/components/settings/SystemSettingsCard"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -17,7 +20,13 @@ import { Label } from "@/components/ui/label"
 import { PageHeader } from "@/components/ui/page-header"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
+import { useConfirm } from "@/components/ui/confirm-dialog"
 import { api, ApiError, type ClusterResource, type ConnectionInventory, type DatacenterOptions, type Subscription } from "@/lib/api"
+import { dangerousExtraKeys, parseExtraLines } from "@/lib/utils"
+
+// Options DatacenterOptionsForm already has a named field for — sent via
+// the typed fields, not the raw "extra" editor, so they don't show up twice.
+const NAMED_OPTION_KEYS = new Set(["keyboard", "console", "http_proxy", "email_from", "mac_prefix", "description"])
 
 export function SettingsPage() {
   const { data: inventory, isLoading, isError, refetch } = useQuery({
@@ -43,6 +52,7 @@ export function SettingsPage() {
       <AppearanceCard />
       <DefaultPreferencesCard />
       <SecuritySettingsCard />
+      <SystemSettingsCard />
       <NotificationsSettingsCard />
 
       <Link
@@ -60,6 +70,8 @@ export function SettingsPage() {
       </Link>
 
       <OIDCSettingsCard />
+      <AIProvidersCard />
+      <AgentSettingsCard />
 
       {isError ? (
         <ErrorState title="Couldn't load connections" onRetry={refetch} />
@@ -123,16 +135,38 @@ function DatacenterOptionsForm({
   initial: DatacenterOptions
 }) {
   const queryClient = useQueryClient()
+  const confirm = useConfirm()
   const [form, setForm] = useState<DatacenterOptions>(initial)
+  const [extraText, setExtraText] = useState("")
 
   const save = useMutation({
-    mutationFn: () => api.put(`/connections/${connId}/cluster/options`, form),
+    mutationFn: () => api.put(`/connections/${connId}/cluster/options`, { ...form, raw: undefined, extra: parseExtraLines(extraText) }),
     onSuccess: () => {
       toast.success("Datacenter options saved")
+      setExtraText("")
       queryClient.invalidateQueries({ queryKey: ["datacenter-options", connId] })
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to save datacenter options"),
   })
+
+  async function submitSave() {
+    const keys = dangerousExtraKeys(parseExtraLines(extraText))
+    if (keys.length > 0) {
+      const ok = await confirm({
+        title: "Advanced option runs on the host",
+        description: `"${keys.join(", ")}" ${keys.length > 1 ? "are" : "is"} not sandboxed like normal datacenter config — it can run arbitrary code on cluster nodes. Only continue if you trust this configuration.`,
+        confirmLabel: "Save anyway",
+      })
+      if (!ok) return
+    }
+    save.mutate()
+  }
+
+  // Every option PVE reports that this form doesn't already have a field
+  // for — shown read-only so nothing silently disappears from view, with
+  // the editor below to change or clear one (PVE deletes an option when
+  // it's sent as an empty string).
+  const otherOptions = Object.entries(initial.raw ?? {}).filter(([k]) => !NAMED_OPTION_KEYS.has(k))
 
   return (
     <>
@@ -176,7 +210,30 @@ function DatacenterOptionsForm({
           onChange={(e) => setForm({ ...form, description: e.target.value })}
         />
       </div>
-      <Button size="sm" loading={save.isPending} onClick={() => save.mutate()}>
+      {otherOptions.length > 0 && (
+        <div className="space-y-1.5">
+          <Label>Other options set on this cluster</Label>
+          <div className="flex flex-wrap gap-1.5">
+            {otherOptions.map(([k, v]) => (
+              <Badge key={k}>{k}: {String(v)}</Badge>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="space-y-1.5">
+        <Label>Advanced: additional options (one key=value per line)</Label>
+        <textarea
+          className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 font-mono text-xs"
+          rows={2}
+          placeholder={"bwlimit=default=10240\nu2f=appid=https://example.com"}
+          value={extraText}
+          onChange={(e) => setExtraText(e.target.value)}
+        />
+        <p className="text-xs text-[var(--text-muted)]">
+          Sets any datacenter option PVE supports beyond the fields above. Send a key with an empty value (e.g. "bwlimit=") to clear it.
+        </p>
+      </div>
+      <Button size="sm" loading={save.isPending} onClick={() => void submitSave()}>
         Save options
       </Button>
     </>

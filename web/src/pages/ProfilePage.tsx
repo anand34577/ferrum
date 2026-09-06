@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { AlertTriangle, Bell, Check, Copy, KeyRound, ShieldCheck, ShieldOff, UserRound } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
+import { ApiKeysCard } from "@/components/profile/ApiKeysCard"
+import { McpIntegrationCard } from "@/components/profile/McpIntegrationCard"
 import { AppearanceCard } from "@/components/settings/AppearanceCard"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -163,7 +165,12 @@ export function ProfilePage() {
   }
 
   return (
-    <div className="max-w-2xl space-y-4">
+    // No max-w cap here — matches SettingsPage, whose near-identical cards
+    // (label + description + switch/button row) use the full width the
+    // layout already gives them. The previous max-w-2xl (672px) squeezed
+    // those same rows into a narrow column, wrapping text and crowding
+    // controls together despite plenty of unused space beside it.
+    <div className="space-y-4">
       <PageHeader
         title="Profile & Security"
         description={user ? `${user.username} · ${user.email}` : undefined}
@@ -260,6 +267,9 @@ export function ProfilePage() {
           )}
         </CardContent>
       </Card>
+
+      <ApiKeysCard />
+      <McpIntegrationCard />
     </div>
   )
 }

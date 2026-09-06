@@ -2,14 +2,17 @@ import { StatusDot } from "@/components/ui/status-dot"
 import { useFleetOverview, useScopedInventory } from "@/lib/fleet"
 import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { formatRelativeTime } from "@/lib/utils"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 export function ConnectionStatusWidget({ settings }: { settings: WidgetSettings }) {
-  const { connections } = useScopedInventory(settings)
+  const { connections, isError } = useScopedInventory(settings)
   // /overview rows carry the poll latency + last-checked timestamp the raw
   // inventory rows don't have; both queries share a cache key so this costs
   // nothing once the overview page or another widget has fetched it.
   const { data: overview } = useFleetOverview()
   const overviewById = new Map((overview ?? []).map((o) => [o.connectionId, o]))
+
+  if (isError) return <WidgetError />
 
   if (!connections.length) {
     return <p className="text-sm text-[var(--text-muted)]">No connections configured yet.</p>

@@ -33,6 +33,9 @@ type AlertEvaluator struct {
 	db       *store.DB
 	conns    *connections.Resolver
 	notifier *notify.Notifier // nil until SetNotifier is called — every send site is nil-checked
+
+	tickerMu sync.Mutex
+	ticker   *time.Ticker // nil until Run starts it; guarded so SetInterval (an HTTP handler goroutine) can reset it safely
 }
 
 func NewAlertEvaluator(db *store.DB, conns *connections.Resolver) *AlertEvaluator {
@@ -47,9 +50,23 @@ func (e *AlertEvaluator) SetNotifier(n *notify.Notifier) {
 	e.notifier = n
 }
 
+// SetInterval changes how often Run re-evaluates rules, effective on the
+// next tick — no restart needed. A no-op before Run has started; Run then
+// applies whatever interval was saved by that point.
+func (e *AlertEvaluator) SetInterval(d time.Duration) {
+	e.tickerMu.Lock()
+	defer e.tickerMu.Unlock()
+	if e.ticker != nil && d > 0 {
+		e.ticker.Reset(d)
+	}
+}
+
 // Run blocks, evaluating rules every interval until ctx is cancelled.
 func (e *AlertEvaluator) Run(ctx context.Context, interval time.Duration) {
+	e.tickerMu.Lock()
 	ticker := time.NewTicker(interval)
+	e.ticker = ticker
+	e.tickerMu.Unlock()
 	defer ticker.Stop()
 
 	e.evaluateOnce(ctx)
@@ -67,9 +84,6 @@ func (e *AlertEvaluator) evaluateOnce(ctx context.Context) {
 	rules, err := e.loadRules(ctx)
 	if err != nil {
 		slog.Error("alert evaluator: loading rules failed", "error", err)
-		return
-	}
-	if len(rules) == 0 {
 		return
 	}
 
@@ -92,6 +106,7 @@ func (e *AlertEvaluator) evaluateOnce(ctx context.Context) {
 		conn      connections.Info
 		resources []pve.ClusterResource
 		ok        bool
+		err       error
 	}
 	results := make([]fetched, len(conns))
 	var wg sync.WaitGroup
@@ -110,11 +125,13 @@ func (e *AlertEvaluator) evaluateOnce(ctx context.Context) {
 				// The inventory UI surfaces unreachable connections; here we
 				// still want a trail for "why did alerts stop updating".
 				slog.Warn("alert evaluator: connection unreachable, skipping", "connectionId", conn.ID, "name", conn.Name, "error", err)
+				results[i] = fetched{conn: conn, err: err}
 				return
 			}
 			resources, err := client.ClusterResources(ctx)
 			if err != nil {
 				slog.Warn("alert evaluator: fetching cluster resources failed, skipping", "connectionId", conn.ID, "name", conn.Name, "error", err)
+				results[i] = fetched{conn: conn, err: err}
 				return
 			}
 			results[i] = fetched{conn: conn, resources: resources, ok: true}
@@ -122,7 +139,12 @@ func (e *AlertEvaluator) evaluateOnce(ctx context.Context) {
 	}
 	wg.Wait()
 
+	// Connectivity is tracked and notified unconditionally — whether a host
+	// answers at all matters regardless of whether the admin has configured
+	// any threshold rule, since a fully offline cluster is the one case
+	// metric-threshold rules can never catch (there's no metric to evaluate).
 	for _, f := range results {
+		e.recordConnectionHealth(ctx, f.conn, f.ok, f.err)
 		if !f.ok {
 			continue
 		}
@@ -324,6 +346,120 @@ func (e *AlertEvaluator) upsertActive(ctx context.Context, ru rule, conn connect
 			}()
 		}
 	}
+}
+
+// ConnectionHealth is one row of connection_health — whether a configured
+// Proxmox connection answered on the evaluator's last poll.
+type ConnectionHealth struct {
+	ConnectionID   string `json:"connectionId"`
+	ConnectionName string `json:"connectionName"`
+	Status         string `json:"status"` // "up" | "down"
+	LastError      string `json:"lastError,omitempty"`
+	Since          string `json:"since"`
+	UpdatedAt      string `json:"updatedAt"`
+}
+
+// ConnectionHealthList returns every tracked connection's last-known
+// reachability, most-recently-changed first — used by the API to surface
+// "is Proxmox itself reachable" independently of any alert rule.
+func (e *AlertEvaluator) ConnectionHealthList(ctx context.Context) ([]ConnectionHealth, error) {
+	rows, err := e.db.QueryContext(ctx, `
+		SELECT connection_id, connection_name, status, last_error, since, updated_at
+		FROM connection_health ORDER BY since DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []ConnectionHealth{}
+	for rows.Next() {
+		var h ConnectionHealth
+		var lastError *string
+		if err := rows.Scan(&h.ConnectionID, &h.ConnectionName, &h.Status, &lastError, &h.Since, &h.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if lastError != nil {
+			h.LastError = *lastError
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+// recordConnectionHealth persists whether conn answered this tick and fires
+// a notification on every up<->down transition — a connection going
+// unreachable is treated as a standalone, always-on critical event, never
+// silently absorbed into "skipped this tick" the way it was before: if
+// Proxmox itself is down, that's exactly when a notification matters most,
+// and it must not depend on the admin having set up a metric threshold rule.
+func (e *AlertEvaluator) recordConnectionHealth(ctx context.Context, conn connections.Info, ok bool, fetchErr error) {
+	if conn.ID == "" {
+		return // zero-value fetched{} for a connection that was never dialed (shouldn't happen, but don't record garbage)
+	}
+	status := "up"
+	var lastError string
+	if !ok {
+		status = "down"
+		if fetchErr != nil {
+			lastError = fetchErr.Error()
+		}
+	}
+
+	var prevStatus string
+	hasPrev := e.db.QueryRowContext(ctx, `SELECT status FROM connection_health WHERE connection_id = ?`, conn.ID).Scan(&prevStatus) == nil
+	now := time.Now().UTC().Format(time.RFC3339)
+	changed := !hasPrev || prevStatus != status
+
+	if changed {
+		if _, err := e.db.ExecContext(ctx, `
+			INSERT INTO connection_health (connection_id, connection_name, status, last_error, since, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?)
+			ON CONFLICT (connection_id) DO UPDATE SET
+				connection_name = excluded.connection_name, status = excluded.status,
+				last_error = excluded.last_error, since = excluded.since, updated_at = excluded.updated_at`,
+			conn.ID, conn.Name, status, nullableString(lastError), now, now,
+		); err != nil {
+			slog.Error("alert evaluator: recording connection health failed", "connectionId", conn.ID, "error", err)
+			return
+		}
+	} else {
+		if _, err := e.db.ExecContext(ctx, `
+			UPDATE connection_health SET connection_name = ?, last_error = ?, updated_at = ? WHERE connection_id = ?`,
+			conn.Name, nullableString(lastError), now, conn.ID,
+		); err != nil {
+			slog.Error("alert evaluator: updating connection health failed", "connectionId", conn.ID, "error", err)
+		}
+		return
+	}
+
+	if !hasPrev && status == "up" {
+		return // first-ever poll of a healthy connection isn't a "recovery" worth announcing
+	}
+	slog.Warn("connection health changed", "connectionId", conn.ID, "name", conn.Name, "status", status)
+	if e.notifier == nil {
+		return
+	}
+	var title, message string
+	if status == "down" {
+		title = fmt.Sprintf("[CRITICAL] %s unreachable", conn.Name)
+		message = fmt.Sprintf("Ferrum can no longer reach %q. Last error: %s", conn.Name, lastError)
+	} else {
+		title = fmt.Sprintf("[RESOLVED] %s reachable again", conn.Name)
+		message = fmt.Sprintf("Ferrum has re-established contact with %q.", conn.Name)
+	}
+	emails := e.optedInEmails(context.Background())
+	go func() {
+		for _, err := range e.notifier.Notify(context.Background(), title, message, emails...) {
+			slog.Error("connection health notification failed", "error", err)
+		}
+	}()
+}
+
+func nullableString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 func (e *AlertEvaluator) resolveIfActive(ctx context.Context, ruleID, resourceID string) {

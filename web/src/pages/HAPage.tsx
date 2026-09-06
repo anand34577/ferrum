@@ -5,15 +5,17 @@ import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { EmptyState } from "@/components/ui/empty-state"
 import { ErrorState } from "@/components/ui/error-state"
+import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { PageHeader } from "@/components/ui/page-header"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Hint } from "@/components/ui/tooltip"
-import { api, ApiError, type ClusterResource, type ConnectionInventory, type HAGroup, type HAResource, type HAStatus } from "@/lib/api"
+import { api, ApiError, type ClusterResource, type ConnectionInventory, type HAGroup, type HARule, type HAResource, type HAStatus } from "@/lib/api"
 
 function haStateVariant(state?: string): "ok" | "warn" | "error" | "default" {
   if (state === "started") return "ok"
@@ -64,6 +66,16 @@ export function HAPage() {
       retry: false,
     })),
   })
+  // HA rules (Proxmox 9). Older servers just answer an empty list (see
+  // pve.HARules), so this never needs the "unavailable" fallback text the
+  // legacy groups query does.
+  const ruleQueries = useQueries({
+    queries: connections.map((c) => ({
+      queryKey: ["ha-rules", c.connectionId],
+      queryFn: () => api.get<HARule[]>(`/connections/${c.connectionId}/cluster/ha/rules`),
+      retry: false,
+    })),
+  })
 
   const [form, setForm] = useState({ connId: "", guestId: "", group: "" })
   const selectedGuest = form.connId
@@ -103,6 +115,77 @@ export function HAPage() {
       confirmLabel: "Remove from HA",
     })
     if (ok) removeResource.mutate({ connId, sid: resSid })
+  }
+
+  const [groupForm, setGroupForm] = useState({ connId: "", group: "", nodes: "", restricted: false, nofailback: false })
+  const addGroup = useMutation({
+    mutationFn: () =>
+      api.post(`/connections/${groupForm.connId}/cluster/ha/groups`, {
+        group: groupForm.group,
+        nodes: groupForm.nodes,
+        restricted: groupForm.restricted,
+        nofailback: groupForm.nofailback,
+      }),
+    onSuccess: () => {
+      toast.success("HA group created")
+      queryClient.invalidateQueries({ queryKey: ["ha-groups"] })
+      setGroupForm({ ...groupForm, group: "", nodes: "", restricted: false, nofailback: false })
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to create HA group"),
+  })
+  const deleteGroup = useMutation({
+    mutationFn: ({ connId, group }: { connId: string; group: string }) =>
+      api.delete(`/connections/${connId}/cluster/ha/groups/${encodeURIComponent(group)}`),
+    onSuccess: () => {
+      toast.success("HA group deleted")
+      queryClient.invalidateQueries({ queryKey: ["ha-groups"] })
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to delete HA group"),
+  })
+  async function removeGroup(connId: string, group: string) {
+    const ok = await confirm({
+      title: `Delete group ${group}?`,
+      description: "Resources assigned to this group lose their node preference until reassigned.",
+      confirmLabel: "Delete group",
+    })
+    if (ok) deleteGroup.mutate({ connId, group })
+  }
+
+  const [ruleForm, setRuleForm] = useState({ connId: "", rule: "", resources: "", nodes: "", strict: false })
+  const addRule = useMutation({
+    mutationFn: () =>
+      api.post(`/connections/${ruleForm.connId}/cluster/ha/rules`, {
+        rule: ruleForm.rule,
+        options: {
+          type: "node-affinity",
+          resources: ruleForm.resources,
+          nodes: ruleForm.nodes,
+          strict: ruleForm.strict ? "1" : "0",
+        },
+      }),
+    onSuccess: () => {
+      toast.success("HA rule created")
+      queryClient.invalidateQueries({ queryKey: ["ha-rules"] })
+      setRuleForm({ ...ruleForm, rule: "", resources: "", nodes: "", strict: false })
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to create HA rule"),
+  })
+  const deleteRule = useMutation({
+    mutationFn: ({ connId, rule }: { connId: string; rule: string }) =>
+      api.delete(`/connections/${connId}/cluster/ha/rules/${encodeURIComponent(rule)}`),
+    onSuccess: () => {
+      toast.success("HA rule deleted")
+      queryClient.invalidateQueries({ queryKey: ["ha-rules"] })
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to delete HA rule"),
+  })
+  async function removeRule(connId: string, rule: string) {
+    const ok = await confirm({
+      title: `Delete rule ${rule}?`,
+      description: "The affinity constraint is removed — HA is free to place these resources on any eligible node again.",
+      confirmLabel: "Delete rule",
+    })
+    if (ok) deleteRule.mutate({ connId, rule })
   }
 
   const guestOptionsForConn = (c: ConnectionInventory): ClusterResource[] =>
@@ -197,6 +280,107 @@ export function HAPage() {
             </CardContent>
           </Card>
 
+          <Card>
+            <CardHeader>
+              <CardTitle>Create HA group</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+                <div className="space-y-1.5">
+                  <Label>Connection</Label>
+                  <Select value={groupForm.connId} onValueChange={(v) => setGroupForm({ ...groupForm, connId: v })}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {connections.map((c) => (
+                        <SelectItem key={c.connectionId} value={c.connectionId}>{c.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Group name</Label>
+                  <Input value={groupForm.group} onChange={(e) => setGroupForm({ ...groupForm, group: e.target.value })} placeholder="webservers" />
+                </div>
+                <div className="space-y-1.5 sm:col-span-2">
+                  <Label>Nodes</Label>
+                  <Input value={groupForm.nodes} onChange={(e) => setGroupForm({ ...groupForm, nodes: e.target.value })} placeholder="pve1,pve2:2" />
+                </div>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-4">
+                <label className="flex items-center gap-2 text-sm">
+                  <Checkbox checked={groupForm.restricted} onCheckedChange={(v) => setGroupForm({ ...groupForm, restricted: v === true })} />
+                  Restricted
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <Checkbox checked={groupForm.nofailback} onCheckedChange={(v) => setGroupForm({ ...groupForm, nofailback: v === true })} />
+                  No failback
+                </label>
+              </div>
+              <Button
+                className="mt-3"
+                size="sm"
+                loading={addGroup.isPending}
+                disabled={!groupForm.connId || !groupForm.group || !groupForm.nodes}
+                onClick={() => addGroup.mutate()}
+              >
+                {!addGroup.isPending && <Plus className="h-3.5 w-3.5" />} Create group
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Add node-affinity rule</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="mb-3 text-xs text-[var(--text-muted)]">
+                Proxmox 9's HA rules — pins one or more resources to a set of nodes. Only meaningful on Proxmox 9; older clusters use groups instead.
+              </p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+                <div className="space-y-1.5">
+                  <Label>Connection</Label>
+                  <Select value={ruleForm.connId} onValueChange={(v) => setRuleForm({ ...ruleForm, connId: v })}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {connections.map((c) => (
+                        <SelectItem key={c.connectionId} value={c.connectionId}>{c.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Rule ID</Label>
+                  <Input value={ruleForm.rule} onChange={(e) => setRuleForm({ ...ruleForm, rule: e.target.value })} placeholder="pin-web" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Resource SID(s)</Label>
+                  <Input value={ruleForm.resources} onChange={(e) => setRuleForm({ ...ruleForm, resources: e.target.value })} placeholder="vm:100,ct:101" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Node(s)</Label>
+                  <Input value={ruleForm.nodes} onChange={(e) => setRuleForm({ ...ruleForm, nodes: e.target.value })} placeholder="pve1,pve2" />
+                </div>
+              </div>
+              <label className="mt-3 flex items-center gap-2 text-sm">
+                <Checkbox checked={ruleForm.strict} onCheckedChange={(v) => setRuleForm({ ...ruleForm, strict: v === true })} />
+                Strict (never place on any other node)
+              </label>
+              <Button
+                className="mt-3"
+                size="sm"
+                loading={addRule.isPending}
+                disabled={!ruleForm.connId || !ruleForm.rule || !ruleForm.resources || !ruleForm.nodes}
+                onClick={() => addRule.mutate()}
+              >
+                {!addRule.isPending && <Plus className="h-3.5 w-3.5" />} Add rule
+              </Button>
+            </CardContent>
+          </Card>
+
           {connections.map((c, i) => (
             <Card key={c.connectionId}>
               <CardHeader>
@@ -226,6 +410,7 @@ export function HAPage() {
                 <div>
                   <p className="mb-2 text-xs font-medium text-[var(--text-muted)]">Resources</p>
                   <div className="space-y-1.5">
+                    {resourceQueries[i].isError && <p className="text-xs text-[var(--text-muted)]">Couldn't load HA resources for this connection.</p>}
                     {resourceQueries[i].data?.length === 0 && <p className="text-sm text-[var(--text-muted)]">No HA-managed guests.</p>}
                     {resourceQueries[i].data?.map((res) => (
                       <div key={res.sid} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
@@ -269,6 +454,17 @@ export function HAPage() {
                           {g.restricted === 1 && <Badge variant="warn">Restricted</Badge>}
                           {g.nofailback === 1 && <Badge variant="default">No failback</Badge>}
                           <span className="break-all font-mono text-xs text-[var(--text-muted)]">{g.nodes}</span>
+                          <Hint label="Delete group">
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="hover:bg-[color-mix(in_oklab,var(--status-error)_12%,transparent)] hover:text-[var(--status-error)]"
+                              aria-label={`Delete group ${g.group}`}
+                              onClick={() => removeGroup(c.connectionId, g.group)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </Hint>
                         </div>
                       </div>
                     ))}
@@ -280,6 +476,40 @@ export function HAPage() {
                         Group list unavailable for this connection — Proxmox 9 retired HA groups in favor of HA rules, so legacy group definitions may no longer be exposed.
                       </p>
                     )}
+                  </div>
+                </div>
+                <div>
+                  <p className="mb-2 text-xs font-medium text-[var(--text-muted)]">HA rules (Proxmox 9)</p>
+                  <div className="space-y-1.5">
+                    {ruleQueries[i].isError && <p className="text-xs text-[var(--text-muted)]">Couldn't load HA rules for this connection.</p>}
+                    {ruleQueries[i].data?.length === 0 && (
+                      <p className="text-sm text-[var(--text-muted)]">No HA rules configured.</p>
+                    )}
+                    {ruleQueries[i].data?.map((rule) => (
+                      <div key={rule.rule as string} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
+                        <div className="min-w-0">
+                          <span className="font-medium">{rule.rule as string}</span>
+                          <Badge className="ml-2" variant="default">{rule.type as string}</Badge>
+                          {rule.comment != null && <span className="ml-2 text-xs text-[var(--text-muted)]">{String(rule.comment)}</span>}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {rule.disable ? <Badge variant="warn">Disabled</Badge> : null}
+                          {rule.resources != null && <span className="break-all font-mono text-xs text-[var(--text-muted)]">{String(rule.resources)}</span>}
+                          {rule.nodes != null && <span className="break-all font-mono text-xs text-[var(--text-muted)]">→ {String(rule.nodes)}</span>}
+                          <Hint label="Delete rule">
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="hover:bg-[color-mix(in_oklab,var(--status-error)_12%,transparent)] hover:text-[var(--status-error)]"
+                              aria-label={`Delete rule ${rule.rule as string}`}
+                              onClick={() => removeRule(c.connectionId, rule.rule as string)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </Hint>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               </CardContent>

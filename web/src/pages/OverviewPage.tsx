@@ -2,6 +2,9 @@ import { useQuery } from "@tanstack/react-query"
 import {
   Activity,
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   Box,
   Boxes,
   ChevronRight,
@@ -24,6 +27,7 @@ import { Heatmap, type HeatmapRow } from "@/components/charts/Heatmap"
 import { KpiCard } from "@/components/charts/KpiCard"
 import { Button } from "@/components/ui/button"
 import { ErrorState } from "@/components/ui/error-state"
+import { Meter, SplitMeter } from "@/components/ui/meter"
 import { PageHeader } from "@/components/ui/page-header"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusDot } from "@/components/ui/status-dot"
@@ -71,64 +75,6 @@ const ALERT_METRIC_LABELS: Record<string, string> = {
   guest_cpu: "Guest CPU",
   guest_mem: "Guest memory",
   storage_usage: "Storage pool",
-}
-
-function UsageBar({ pct, className }: { pct: number; className?: string }) {
-  const tone = utilizationTone(pct)
-  return (
-    <div className={cn("flex min-w-0 items-center gap-2", className)}>
-      <div className="h-2 w-full min-w-14 overflow-hidden rounded-sm bg-[var(--track)]">
-        <div
-          className={cn(
-            "h-full rounded-sm transition-all duration-300 ease-out",
-            tone === "error"
-              ? "bg-[var(--status-error)] shadow-[0_0_8px_rgba(239,68,68,0.4)]"
-              : tone === "warn"
-                ? "bg-[var(--status-warn)] shadow-[0_0_8px_rgba(245,158,11,0.3)]"
-                : "bg-brand-500 shadow-[0_0_6px_rgba(189,90,44,0.3)]",
-          )}
-          style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
-        />
-      </div>
-      <span className={cn("w-11 shrink-0 text-right text-xs font-semibold tabular", toneClass[tone])}>{pct.toFixed(0)}%</span>
-    </div>
-  )
-}
-
-/** A single stacked horizontal bar with a legend — used for the guest
- * running/stopped mix and the storage-by-type rollup. */
-function SplitBar({
-  segments,
-  total,
-  formatValue,
-}: {
-  segments: { label: string; value: number; color: string }[]
-  total: number
-  formatValue?: (v: number) => string
-}) {
-  const fmt = formatValue ?? ((v: number) => String(v))
-  return (
-    <div>
-      <div className="flex h-2 w-full overflow-hidden rounded-sm bg-[var(--track)]" role="img" aria-label={segments.map((s) => `${s.label} ${fmt(s.value)}`).join(", ")}>
-        {total > 0 &&
-          segments
-            .filter((s) => s.value > 0)
-            .map((s) => <div key={s.label} className="h-full" style={{ width: `${(s.value / total) * 100}%`, background: s.color }} />)}
-      </div>
-      <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-[var(--text-muted)]">
-        {segments
-          .filter((s) => s.value > 0)
-          .map((s) => (
-            <span key={s.label} className="flex items-center gap-1">
-              <span className="h-1.5 w-1.5 rounded-full" style={{ background: s.color }} aria-hidden />
-              {s.label} <span className="tabular">{fmt(s.value)}</span>
-              {total > 0 && <span className="text-[var(--text-faint)] tabular">{Math.round((s.value / total) * 100)}%</span>}
-            </span>
-          ))}
-        {total === 0 && <span>Nothing to show yet.</span>}
-      </div>
-    </div>
-  )
 }
 
 export function OverviewPage() {
@@ -182,10 +128,15 @@ export function OverviewPage() {
     return (
       <button
         onClick={() => (active ? setSortDesc((d) => !d) : (setSortKey(key), setSortDesc(true)))}
-        className={cn("flex w-full items-center gap-1 text-xs font-medium uppercase tracking-wide", align === "right" ? "justify-end" : "justify-start", active ? "text-[var(--text)]" : "text-[var(--text-muted)] hover:text-[var(--text)]")}
+        aria-label={`${label}: activate to sort${active ? (sortDesc ? ", currently descending" : ", currently ascending") : ""}`}
+        className={cn(
+          "flex w-full items-center gap-1.5 transition-colors",
+          align === "right" ? "justify-end" : "justify-start",
+          active ? "text-[var(--text)]" : "text-[var(--text-muted)] hover:text-[var(--text)]",
+        )}
       >
         {label}
-        {active && <span aria-hidden>{sortDesc ? "↓" : "↑"}</span>}
+        {active ? sortDesc ? <ArrowDown className="h-3 w-3 text-brand-500" /> : <ArrowUp className="h-3 w-3 text-brand-500" /> : <ArrowUpDown className="h-3 w-3 opacity-35" />}
       </button>
     )
   }
@@ -344,7 +295,7 @@ export function OverviewPage() {
                   would crush its bar cells instead of scrolling. */}
               <table className="w-full min-w-[880px] text-sm">
                 <thead className="border-b border-[var(--border)] bg-[var(--bg-muted)]/50">
-                  <tr>
+                  <tr className="[&>th]:font-mono [&>th]:text-[11px] [&>th]:font-semibold [&>th]:uppercase [&>th]:tracking-wider [&>th]:text-[var(--text-muted)]">
                     <th className="px-4 py-2 text-left">{sortButton("name", "Connection", "left")}</th>
                     <th className="px-3 py-2 text-right">{sortButton("nodes", "Nodes")}</th>
                     <th className="px-3 py-2 text-right">{sortButton("vms", "VMs")}</th>
@@ -385,9 +336,9 @@ export function OverviewPage() {
                       </td>
                       <td className="px-3 py-2.5 text-right tabular">{c.vms.total}</td>
                       <td className="px-3 py-2.5 text-right tabular">{c.lxcs.total}</td>
-                      <td className="px-3 py-2.5">{c.online ? <UsageBar pct={c.cpu.pct} /> : <span className="text-xs text-[var(--text-faint)]">—</span>}</td>
-                      <td className="px-3 py-2.5">{c.online ? <UsageBar pct={c.memory.pct} /> : <span className="text-xs text-[var(--text-faint)]">—</span>}</td>
-                      <td className="px-3 py-2.5">{c.online ? <UsageBar pct={c.storage.pct} /> : <span className="text-xs text-[var(--text-faint)]">—</span>}</td>
+                      <td className="px-3 py-2.5">{c.online ? <Meter value={c.cpu.pct} size="md" showLabel label="CPU" /> : <span className="text-xs text-[var(--text-faint)]">—</span>}</td>
+                      <td className="px-3 py-2.5">{c.online ? <Meter value={c.memory.pct} size="md" showLabel label="Memory" /> : <span className="text-xs text-[var(--text-faint)]">—</span>}</td>
+                      <td className="px-3 py-2.5">{c.online ? <Meter value={c.storage.pct} size="md" showLabel label="Storage" /> : <span className="text-xs text-[var(--text-faint)]">—</span>}</td>
                       <td className="px-3 py-2.5 text-right tabular">
                         {c.alerts.critical > 0 ? (
                           <span className="font-medium text-[var(--status-error)]">{c.alerts.critical}</span>
@@ -441,7 +392,7 @@ export function OverviewPage() {
                     </span>
                     <span className="w-40 min-w-0 shrink-0 truncate font-medium" title={`${g.name} — ${g.conn}`}>{g.name}</span>
                     <span className="hidden w-28 shrink-0 truncate text-[10px] text-[var(--text-muted)] sm:block">{g.conn}</span>
-                    <UsageBar pct={g.cpuPct} className="min-w-24 flex-1" />
+                    <Meter value={g.cpuPct} size="md" showLabel label="CPU" className="min-w-24 flex-1" />
                     <span className="w-24 shrink-0 text-right text-[10px] text-[var(--text-faint)] tabular" title="Memory usage">
                       mem {g.memPct.toFixed(0)}%
                     </span>
@@ -472,6 +423,7 @@ export function OverviewPage() {
                 {alerts.map((a) => (
                   <li key={a.id} className="flex items-center gap-2.5 text-xs">
                     <span
+                      role="img"
                       className={cn("h-1.5 w-1.5 shrink-0 rounded-full", a.severity === "critical" ? "bg-[var(--status-error)]" : "bg-[var(--status-warn)]")}
                       aria-label={a.severity}
                     />
@@ -519,7 +471,7 @@ export function OverviewPage() {
                     {totals.running} of {guestsTotal} up
                   </span>
                 </p>
-                <SplitBar
+                <SplitMeter
                   total={guestsTotal}
                   segments={[
                     { label: "running", value: totals.running, color: "var(--status-ok)" },
@@ -538,7 +490,7 @@ export function OverviewPage() {
                   <span className="text-[var(--text-muted)]">Storage by type</span>
                   <span className="tabular text-[var(--text-muted)]">{formatBytes(storageByType.total)}</span>
                 </p>
-                <SplitBar total={storageByType.total} segments={storageByType.segments} formatValue={formatBytes} />
+                <SplitMeter total={storageByType.total} segments={storageByType.segments} formatValue={formatBytes} />
               </div>
 
               <div className="grid grid-cols-2 gap-2 border-t border-[var(--border)] pt-3 text-xs text-[var(--text-muted)]">
@@ -586,7 +538,7 @@ function ResourceCard({
     <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4.5 transition-colors duration-200 hover:border-[var(--border-strong)] dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),0_1px_3px_rgba(0,0,0,0.4)]">
       <div className="flex items-center justify-between gap-2">
         <p className="flex items-center gap-1.5 font-display text-xs font-semibold">
-          <span className="flex h-5 w-5 items-center justify-center rounded bg-[color-mix(in_oklab,var(--color-brand-500)_12%,transparent)] text-brand-500">
+          <span className="flex h-5 w-5 items-center justify-center rounded-sm bg-[color-mix(in_oklab,var(--color-brand-500)_12%,transparent)] text-brand-500">
             <Icon className="h-3 w-3" />
           </span>
           {title}
@@ -603,7 +555,7 @@ function ResourceCard({
           .map((r) => (
             <div key={r.name} className="flex items-center gap-2 text-xs">
               <span className="w-24 shrink-0 truncate text-[var(--text-muted)]" title={r.name}>{r.name}</span>
-              <UsageBar pct={r.pct} className="flex-1" />
+              <Meter value={r.pct} size="md" showLabel label="Utilization" className="flex-1" />
               <span className="hidden w-28 shrink-0 text-right text-[10px] text-[var(--text-faint)] tabular sm:block">{r.detail}</span>
             </div>
           ))}

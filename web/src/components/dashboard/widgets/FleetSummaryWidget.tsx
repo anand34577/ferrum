@@ -1,10 +1,14 @@
-import { Cpu, HardDrive, MemoryStick, Server } from "lucide-react"
+import { Cpu, HardDrive, Loader2, MemoryStick, Server } from "lucide-react"
+import { Meter } from "@/components/ui/meter"
 import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { useScopedInventory } from "@/lib/fleet"
-import { cn, formatBytes } from "@/lib/utils"
+import { formatBytes } from "@/lib/utils"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 export function FleetSummaryWidget({ settings }: { settings: WidgetSettings }) {
-  const { resources, isLoading } = useScopedInventory(settings)
+  const { resources, isLoading, isError } = useScopedInventory(settings)
+  if (isLoading) return <Loader2 className="h-4 w-4 animate-spin text-[var(--text-muted)]" />
+  if (isError) return <WidgetError />
 
   const nodes = resources.filter((r) => r.type === "node")
   const guests = resources.filter((r) => r.type === "qemu" || r.type === "lxc")
@@ -20,6 +24,7 @@ export function FleetSummaryWidget({ settings }: { settings: WidgetSettings }) {
       value: `${nodes.filter((n) => n.status === "online").length}`,
       total: `${nodes.length}`,
       progress: nodes.length ? (nodes.filter((n) => n.status === "online").length / nodes.length) * 100 : 0,
+      invert: true,
       icon: Server,
     },
     {
@@ -27,6 +32,7 @@ export function FleetSummaryWidget({ settings }: { settings: WidgetSettings }) {
       value: `${running.length}`,
       total: `${guests.length}`,
       progress: guests.length ? (running.length / guests.length) * 100 : 0,
+      invert: true,
       icon: Cpu,
     },
     {
@@ -34,6 +40,7 @@ export function FleetSummaryWidget({ settings }: { settings: WidgetSettings }) {
       value: formatBytes(usedMem),
       total: formatBytes(totalMem),
       progress: totalMem ? (usedMem / totalMem) * 100 : 0,
+      invert: false,
       icon: MemoryStick,
     },
     {
@@ -41,6 +48,7 @@ export function FleetSummaryWidget({ settings }: { settings: WidgetSettings }) {
       value: formatBytes(usedDisk),
       total: formatBytes(totalDisk),
       progress: totalDisk ? (usedDisk / totalDisk) * 100 : 0,
+      invert: false,
       icon: HardDrive,
     },
   ]
@@ -53,18 +61,13 @@ export function FleetSummaryWidget({ settings }: { settings: WidgetSettings }) {
             <div className="min-w-0">
               <p className="text-[10px] text-[var(--text-muted)]">{c.label}</p>
               <p className="font-display text-lg font-semibold">
-                {isLoading ? "-" : c.value}
+                {c.value}
                 <span className="ml-1 text-xs font-normal text-[var(--text-muted)]">/ {c.total}</span>
               </p>
             </div>
             <c.icon className="h-6 w-6 shrink-0 text-brand-500 opacity-70" />
           </div>
-          <div className="mt-1.5 h-1 overflow-hidden rounded-sm bg-[var(--track)]">
-            <div
-              className={cn("h-full rounded-sm", c.progress > 90 ? "bg-[var(--status-error)]" : c.progress > 75 ? "bg-[var(--status-warn)]" : "bg-brand-500")}
-              style={{ width: `${Math.min(100, c.progress)}%` }}
-            />
-          </div>
+          <Meter value={c.progress} size="xs" invert={c.invert} label={c.label} className="mt-1.5" />
         </div>
       ))}
     </div>

@@ -1,14 +1,16 @@
-import { Boxes, Container, Cpu, HardDrive, MemoryStick, Network, ShieldCheck, TriangleAlert } from "lucide-react"
-import { summarizeFleet } from "@/lib/fleet"
-import { useFleetOverview } from "@/lib/fleet"
+import { Boxes, Container, Cpu, HardDrive, Loader2, MemoryStick, Network, ShieldCheck, TriangleAlert } from "lucide-react"
+import { Meter } from "@/components/ui/meter"
+import { summarizeFleet, useFleetOverview, utilizationTone } from "@/lib/fleet"
 import { cn, formatBytes, formatPercentFine } from "@/lib/utils"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 /** The at-a-glance KPI matrix for the whole estate: servers, nodes, VMs,
  * containers, then the three resource families and alerts. Fleet-wide —
  * one tile per question an admin asks first. */
 export function FleetOverviewWidget() {
-  const { data: overview, isLoading } = useFleetOverview()
-  if (isLoading) return <p className="text-sm text-[var(--text-muted)]">Loading fleet…</p>
+  const { data: overview, isLoading, isError } = useFleetOverview()
+  if (isLoading) return <Loader2 className="h-4 w-4 animate-spin text-[var(--text-muted)]" />
+  if (isError) return <WidgetError />
   const t = summarizeFleet(overview)
 
   const primary = [
@@ -41,7 +43,7 @@ export function FleetOverviewWidget() {
         </div>
       ))}
       {meters.map((m) => {
-        const tone = m.pct >= 90 ? "error" : m.pct >= 75 ? "warn" : "ok"
+        const tone = utilizationTone(m.pct)
         return (
           <div key={m.label} className="rounded-md border border-[var(--border)] bg-[var(--bg-muted)]/60 px-3 py-2">
             <div className="flex items-center justify-between gap-2">
@@ -49,12 +51,7 @@ export function FleetOverviewWidget() {
               <m.icon className="h-3.5 w-3.5 shrink-0 text-brand-500 opacity-80" />
             </div>
             <p className={cn("font-display text-xl font-semibold leading-tight tabular", tone === "error" ? "text-[var(--status-error)]" : tone === "warn" ? "text-[var(--status-warn)]" : "text-[var(--status-ok)]")}>{m.value}</p>
-            <div className="mt-1 h-1 overflow-hidden rounded-sm bg-[var(--track)]">
-              <div
-                className={cn("h-full rounded-sm", tone === "error" ? "bg-[var(--status-error)]" : tone === "warn" ? "bg-[var(--status-warn)]" : "bg-brand-500")}
-                style={{ width: `${Math.min(100, m.pct)}%` }}
-              />
-            </div>
+            <Meter value={m.pct} size="xs" label={m.label} className="mt-1" />
             <p className="mt-0.5 truncate text-[10px] text-[var(--text-faint)] tabular">{m.sub}</p>
           </div>
         )

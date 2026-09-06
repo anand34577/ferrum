@@ -1,6 +1,6 @@
-import { Check, Monitor, Moon, Sun } from "lucide-react"
+import { Check, LayoutList, Monitor, Moon, Rows3, Sun } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { useTheme, type Accent, type Look, type ThemePreference } from "@/lib/theme"
+import { useTheme, type Accent, type Density, type Look, type ThemePreference } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 
 /**
@@ -29,18 +29,18 @@ function ThemePreview({ variant, active }: { variant: ThemePreference; active: b
     >
       <div className={cn("flex h-2.5 items-center gap-0.5 border-b px-1", dark ? "border-[#2b3038] bg-[#1a1d22]" : "border-[#d7dbe2] bg-white")}>
         <span className="h-1 w-1 rounded-full bg-[var(--status-ok)]" />
-        <span className={cn("h-1 w-4 rounded-full", dark ? "bg-[#3a414c]" : "bg-[#d7dbe2]")} />
+        <span className={cn("h-1 w-4 rounded-sm", dark ? "bg-[#3a414c]" : "bg-[#d7dbe2]")} />
       </div>
       <div className="flex gap-1 p-1">
-        <div className={cn("w-3 rounded-sm", dark ? "bg-[#15171b]" : "bg-[#15171b]")} />
+        <div className={cn("w-3 rounded-sm", dark ? "bg-[#15171b]" : "bg-[#e4e7ec]")} />
         <div className="flex-1 space-y-1">
           <div className="flex gap-1">
             <div className={cn("h-4 flex-1 rounded-sm", dark ? "bg-[#1a1d22]" : "bg-white")} />
             <div className={cn("h-4 flex-1 rounded-sm", dark ? "bg-[#1a1d22]" : "bg-white")} />
             <div className="h-4 flex-1 rounded-sm bg-brand-500" />
           </div>
-          <div className={cn("h-1.5 w-2/3 rounded-full", dark ? "bg-[#20242a]" : "bg-[#e4e7ec]")} />
-          <div className={cn("h-1.5 w-1/2 rounded-full", dark ? "bg-[#20242a]" : "bg-[#e4e7ec]")} />
+          <div className={cn("h-1.5 w-2/3 rounded-sm", dark ? "bg-[#20242a]" : "bg-[#d7dbe2]")} />
+          <div className={cn("h-1.5 w-1/2 rounded-sm", dark ? "bg-[#20242a]" : "bg-[#d7dbe2]")} />
         </div>
       </div>
     </div>
@@ -57,6 +57,9 @@ const LOOKS: { value: Look; label: string; hint: string }[] = [
   { value: "glassmorphism", label: "Glassmorphism", hint: "Frosted layered panels — translucent surfaces, blur, soft gradient glow" },
   { value: "neumorphism", label: "Neumorphism", hint: "Soft extruded surfaces — tactile dual shadows, no hard borders" },
   { value: "brutalist", label: "Brutalist", hint: "Raw and high-contrast — thick borders, hard offset shadows, zero radius" },
+  { value: "solarized", label: "Solarized", hint: "The classic low-contrast editor palette — warm paper light, deep teal dark" },
+  { value: "highContrast", label: "High Contrast", hint: "Accessibility-first — pure black/white, thick hairlines, AAA-tuned status colors" },
+  { value: "aurora", label: "Aurora", hint: "Vivid and dark — neon cyan/violet glow standing in for shadow" },
 ]
 
 /** A real, live mockup, not a static illustration: scoping [data-look] to
@@ -87,6 +90,11 @@ function LookPreview({ variant, dark }: { variant: Look; dark: boolean }) {
   )
 }
 
+const DENSITIES: { value: Density; label: string; hint: string; icon: typeof Rows3 }[] = [
+  { value: "comfortable", label: "Comfortable", hint: "Roomier rows — the default", icon: LayoutList },
+  { value: "compact", label: "Compact", hint: "Tighter rows across every table and list — more on screen at once", icon: Rows3 },
+]
+
 const ACCENTS: { value: Accent; label: string; swatch: string }[] = [
   { value: "oxide", label: "Oxide", swatch: "#bd5a2c" },
   { value: "azure", label: "Azure", swatch: "#3568b8" },
@@ -96,7 +104,7 @@ const ACCENTS: { value: Accent; label: string; swatch: string }[] = [
 ]
 
 export function AppearanceCard() {
-  const { theme, setTheme, effectiveTheme, accent, setAccent, look, setLook } = useTheme()
+  const { theme, setTheme, effectiveTheme, accent, setAccent, look, setLook, density, setDensity } = useTheme()
 
   return (
     <Card>
@@ -109,7 +117,10 @@ export function AppearanceCard() {
       <CardContent className="space-y-5">
         <div>
           <p className="mb-2 text-sm font-medium">Look &amp; feel</p>
-          <div className="grid max-w-xl grid-cols-1 gap-3 sm:grid-cols-3" role="radiogroup" aria-label="Look and feel">
+          {/* Twelve presets, laid out 6/6 on wide screens and stepping down
+              through 4/4/4, 3/3/3/3, then 2-per-row as the viewport narrows —
+              never a lone dangling item in the last row at any width. */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6" role="radiogroup" aria-label="Look and feel">
             {LOOKS.map((opt) => {
               const active = look === opt.value
               return (
@@ -187,6 +198,38 @@ export function AppearanceCard() {
                 >
                   <span className="flex h-7 w-7 items-center justify-center rounded-full" style={{ background: a.swatch }}>
                     {active && <Check className="h-3.5 w-3.5 text-white" strokeWidth={3} aria-hidden />}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        <div>
+          <p className="mb-2 text-sm font-medium">Density</p>
+          <div className="grid max-w-md grid-cols-2 gap-3" role="radiogroup" aria-label="Density">
+            {DENSITIES.map((d) => {
+              const active = density === d.value
+              return (
+                <button
+                  key={d.value}
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => setDensity(d.value)}
+                  className={cn(
+                    "flex items-start gap-2.5 rounded-lg border p-3 text-left transition-colors",
+                    active
+                      ? "border-[var(--ring)] bg-[color-mix(in_oklab,var(--color-brand-500)_6%,var(--bg-surface))]"
+                      : "border-[var(--border)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-hover)]",
+                  )}
+                >
+                  <d.icon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--text-muted)]" aria-hidden />
+                  <span>
+                    <span className="flex items-center gap-1.5 text-sm font-medium">
+                      {d.label}
+                      {active && <span className="text-[10px] font-semibold uppercase tracking-wide text-brand-600 dark:text-brand-400">Active</span>}
+                    </span>
+                    <span className="mt-0.5 block text-xs text-[var(--text-muted)]">{d.hint}</span>
                   </span>
                 </button>
               )
