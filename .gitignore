@@ -9,6 +9,7 @@ config.yaml
 # Go build artifacts
 /ferrum
 *.exe
+!internal/needle/bundled/**/*.exe
 *.exe~
 *.dll
 *.so

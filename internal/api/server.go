@@ -162,6 +162,7 @@ func New(db *store.DB, authSvc *auth.Service, secretBox *secrets.Box, opts Serve
 		}
 		return out
 	})
+	s.seedBuiltinNeedleProvider(context.Background())
 	return s
 }
 

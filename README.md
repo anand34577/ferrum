@@ -155,13 +155,14 @@ Everything else — notifications, SSO details, security policy, system settings
 
 The AI Assistant and MCP tool-calling loop can use any OpenAI-chat-completions-compatible provider (OpenAI, Ollama, LM Studio, LocalAI, OpenRouter, ...) configured under **Settings > AI Providers**. There's also an optional zero-config, no-API-key, fully local option backed by [Needle 2](https://huggingface.co/Cactus-Compute/needle2) — a small (45M-parameter) tool-calling model that runs as a self-contained CLI binary with no GPU and no network access required at inference time.
 
-Ferrum does **not** download or bundle this binary itself — it's a third-party artifact only distributed from Hugging Face, and Ferrum never fetches executable content from the network on its own. To enable it:
+Needle 2 is Apache-2.0 licensed, so on **Windows, Linux, and macOS (amd64 or arm64)** Ferrum ships its official CLI binary baked into the `ferrum` binary itself (`internal/needle/bundled_*.go`, one per platform via `go:embed`) — nothing to download, nothing to configure. On a fresh install (no AI provider configured yet), Ferrum extracts it to a cache file and registers it automatically as the default assistant the first time it starts — no manual "Add provider" step needed. If you've already configured a provider, or want to add/re-add it yourself, use **Settings > AI Providers** > "Add provider" > the **Needle 2 (built-in, local)** preset.
 
-1. Download the `needle` CLI binary for your platform from the [Needle 2 files](https://huggingface.co/Cactus-Compute/needle2/tree/main) (the `linux/`, `macos/`, or `windows/` directory).
-2. Point Ferrum at it: set `FERRUM_NEEDLE_BIN=/path/to/needle` (or `needleBinPath` in `config.yaml`) before starting Ferrum.
-3. In **Settings > AI Providers**, click "Add provider" and choose the **Needle 2 (built-in, local)** preset, then save.
+On any other platform (32-bit, RISC-V, Windows/ARM64, ...) there's no bundled binary — Ferrum still never fetches executable content from the network on its own. To enable it there:
 
-Ferrum starts the binary itself (as a local subprocess, `127.0.0.1`-only) the first time it's used, and stops it on shutdown. If `FERRUM_NEEDLE_BIN` isn't set, or the file doesn't exist, this provider simply isn't usable — every other provider is unaffected.
+1. Download the `needle` CLI binary for your platform from the [Needle 2 files](https://huggingface.co/Cactus-Compute/needle2/tree/main).
+2. Point Ferrum at it: set `FERRUM_NEEDLE_BIN=/path/to/needle` (or `needleBinPath` in `config.yaml`) before starting Ferrum. This also overrides the bundled binary on a supported platform, if you'd rather run a different build.
+
+Ferrum starts the binary itself (as a local subprocess, `127.0.0.1`-only) the first time it's used, and stops it on shutdown. If no binary is bundled for the platform and `FERRUM_NEEDLE_BIN` isn't set (or doesn't exist), this provider simply isn't usable — every other provider is unaffected.
 
 ## API access, MCP, and audit logging
 
