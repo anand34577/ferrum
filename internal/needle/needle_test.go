@@ -14,18 +14,49 @@ func TestIsBuiltin(t *testing.T) {
 	}
 }
 
+// withNoBundledBinary simulates running on a platform Ferrum doesn't embed
+// a Needle binary for (see bundled_other.go), so tests of the "nothing
+// available" path aren't at the mercy of which OS/arch actually runs them —
+// every supported CI platform (windows/amd64, linux/amd64, linux/arm64,
+// darwin/arm64) now has one baked in via go:embed.
+func withNoBundledBinary(t *testing.T) {
+	t.Helper()
+	orig := bundledBinary
+	bundledBinary = nil
+	t.Cleanup(func() { bundledBinary = orig })
+}
+
 func TestAvailableFalseWhenBinaryMissing(t *testing.T) {
+	withNoBundledBinary(t)
 	m := NewManager("")
 	if m.Available() {
-		t.Fatal("expected Available() to be false with no configured path")
+		t.Fatal("expected Available() to be false with no configured path and no bundled binary")
 	}
 	m2 := NewManager("/does/not/exist/needle")
 	if m2.Available() {
-		t.Fatal("expected Available() to be false for a nonexistent path")
+		t.Fatal("expected Available() to be false for a nonexistent configured path")
+	}
+}
+
+func TestAvailableTrueWhenBundled(t *testing.T) {
+	if len(bundledBinary) == 0 {
+		t.Skip("no binary bundled for this platform")
+	}
+	m := NewManager("")
+	if !m.Available() {
+		t.Fatal("expected Available() to be true when a binary is bundled for this platform and no override is configured")
+	}
+}
+
+func TestExplicitBinPathWinsOverBundled(t *testing.T) {
+	m := NewManager("/does/not/exist/needle")
+	if m.Available() {
+		t.Fatal("an explicitly configured (but missing) path must not silently fall back to the bundled binary")
 	}
 }
 
 func TestChatCompletionFailsClearlyWhenNotInstalled(t *testing.T) {
+	withNoBundledBinary(t)
 	m := NewManager("")
 	_, status, err := m.ChatCompletion(context.Background(), []map[string]any{{"role": "user", "content": "hi"}}, nil)
 	if err == nil {
@@ -37,6 +68,7 @@ func TestChatCompletionFailsClearlyWhenNotInstalled(t *testing.T) {
 }
 
 func TestTestConnectionFailsClearlyWhenNotInstalled(t *testing.T) {
+	withNoBundledBinary(t)
 	m := NewManager("")
 	if _, err := m.TestConnection(context.Background()); err == nil {
 		t.Fatal("expected an error when the binary isn't installed")

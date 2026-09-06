@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -17,6 +18,74 @@ import (
 
 	"ferrum/internal/needle"
 )
+
+// seedBuiltinNeedleProvider makes the built-in Needle 2 provider Ferrum's
+// default AI assistant, unconditionally, on every startup where a binary is
+// available for the running platform (bundled — see internal/needle's
+// go:embed — or FERRUM_NEEDLE_BIN) — not just on a fresh install. It is
+// idempotent (matches the existing row by base_url = needle.BaseURL rather
+// than inserting a duplicate on every restart) and always (re)asserts its
+// model as THE global default, demoting whatever else held that spot: the
+// point of a *built-in* assistant is that it's always there and always
+// selected, with zero setup, on any install that has a binary for its
+// platform — that's a deliberate, standing product decision, not a
+// one-time fallback for an empty database.
+func (s *Server) seedBuiltinNeedleProvider(ctx context.Context) {
+	if !s.needle.Available() {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	var providerID string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM ai_providers WHERE base_url = ?`, needle.BaseURL).Scan(&providerID)
+	switch {
+	case err == sql.ErrNoRows:
+		providerID = uuid.NewString()
+		if _, err := s.db.ExecContext(ctx, `
+			INSERT INTO ai_providers (id, name, base_url, api_key_enc, model, is_enabled, is_default, created_at, updated_at)
+			VALUES (?, 'Needle 2 (built-in, local)', ?, NULL, '', 1, 0, ?, ?)`,
+			providerID, needle.BaseURL, now, now,
+		); err != nil {
+			slog.Error("seeding built-in needle provider", "error", err)
+			return
+		}
+	case err != nil:
+		slog.Error("looking up built-in needle provider", "error", err)
+		return
+	default:
+		// Already registered from a previous run — make sure it's still
+		// enabled even if an operator had switched it off.
+		if _, err := s.db.ExecContext(ctx, `UPDATE ai_providers SET is_enabled = 1, updated_at = ? WHERE id = ?`, now, providerID); err != nil {
+			slog.Error("re-enabling built-in needle provider", "error", err)
+		}
+	}
+
+	var modelID string
+	err = s.db.QueryRowContext(ctx, `SELECT id FROM ai_provider_models WHERE provider_id = ?`, providerID).Scan(&modelID)
+	switch {
+	case err == sql.ErrNoRows:
+		modelID = uuid.NewString()
+		if _, err := s.db.ExecContext(ctx, `
+			INSERT INTO ai_provider_models (id, provider_id, label, model_id, is_default, created_at)
+			VALUES (?, ?, 'needle2', 'needle2', 1, ?)`,
+			modelID, providerID, now,
+		); err != nil {
+			slog.Error("seeding built-in needle model", "error", err)
+			return
+		}
+	case err != nil:
+		slog.Error("looking up built-in needle model", "error", err)
+		return
+	}
+
+	if err := s.clearOtherDefaultModels(ctx, modelID); err != nil {
+		slog.Error("clearing other default AI models", "error", err)
+		return
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE ai_provider_models SET is_default = 1 WHERE id = ?`, modelID); err != nil {
+		slog.Error("setting built-in needle model as default", "error", err)
+	}
+}
 
 // aiModelDTO is one selectable model under a provider. label is the
 // human-facing name shown in pickers; modelID is the exact identifier sent

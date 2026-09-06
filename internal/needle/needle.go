@@ -3,15 +3,17 @@
 // self-contained CLI binary — as a zero-config, no-API-key "built-in" AI
 // provider for Ferrum's AI Assistant and MCP tool-calling loop.
 //
-// Ferrum does not download, bundle, or execute this binary automatically:
-// it is a proprietary third-party artifact (CLI binary or WASM component)
-// distributed only from Hugging Face, and Ferrum never fetches executable
-// content from the network on its own. An operator who wants this provider
-// must download the CLI binary for their platform themselves and point
-// FERRUM_NEEDLE_BIN (or the default ./data/needle/needle[.exe]) at it — see
-// README "Built-in LLM (Needle 2)" for the exact steps. Available() reports
-// false, and every call fails with a clear "not installed" error, until
-// that file exists.
+// Needle 2 is Apache-2.0, so its official CLI binary (bundled_*.go, one
+// per platform, go:embed'd behind build tags) ships baked into the Ferrum
+// binary itself for Windows/Linux/macOS on amd64 or arm64 — no download, no
+// FERRUM_NEEDLE_BIN, no manual step; resolveBinPath extracts it to a cache
+// file on first use. On any other platform (32-bit, RISC-V, Windows/ARM64,
+// ...) Ferrum still never fetches executable content from the network on
+// its own: an operator there must download the CLI binary themselves and
+// point FERRUM_NEEDLE_BIN at it — see README "Built-in LLM (Needle 2)" for
+// the exact steps. Available() reports false, and every call fails with a
+// clear "not installed" error, until a binary (bundled or configured) is in
+// place.
 //
 // Needle's own HTTP server (`needle --serve`) is NOT OpenAI-compatible: it
 // takes a single `{"input": "..."}` string per request (no message history,
@@ -28,6 +30,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -46,16 +49,25 @@ const BaseURL = "needle://local"
 // IsBuiltin reports whether baseURL names the built-in Needle provider.
 func IsBuiltin(baseURL string) bool { return baseURL == BaseURL }
 
-// listenAddr is where the Needle CLI's --serve mode listens. The README
-// excerpt Ferrum was built against documents no --port flag (just "runs on
-// localhost:8080"), so this is fixed rather than guessed at — a future
-// Needle build that adds one can have this promoted to a Manager field.
-const listenAddr = "127.0.0.1:8080"
+// listenPort/listenAddr is where the Needle CLI's --serve mode listens.
+// Needle defaults --serve to :8080, which collides with Ferrum's own
+// default server.addr (also :8080, see config.example.yaml) — a Needle
+// subprocess started after Ferrum would fail to bind and never become
+// ready. `--port` (undocumented in the model card's README, but present in
+// the actual CLI's --help) moves it out of the way; the chosen value just
+// needs to avoid Ferrum's own port and other common local dev ports.
+const listenPort = "58211"
+const listenAddr = "127.0.0.1:" + listenPort
 
 // startTimeout bounds how long ensureRunning waits for a freshly spawned
 // process to answer its first request before giving up and reporting the
-// binary as unusable this run.
-const startTimeout = 10 * time.Second
+// binary as unusable this run. Generous because it isn't just a TCP-accept
+// wait: Needle's "tool retrieval" (README) does a one-time embedding pass
+// over every declared tool on the process's first request once the catalog
+// exceeds 5 tools — true for Ferrum's real catalog — so cold start plus
+// first-inference warmup can run a few seconds even though the listener
+// itself comes up almost immediately.
+const startTimeout = 20 * time.Second
 
 // Manager owns the lifecycle of at most one Needle CLI subprocess — "each
 // component instance owns one conversation" per the model's own docs, and
@@ -74,15 +86,76 @@ func NewManager(binPath string) *Manager {
 	return &Manager{binPath: binPath}
 }
 
-// Available reports whether the configured binary exists — used to hide/
-// disable the built-in provider in the UI and to fail fast with a clear
-// message instead of an opaque connection error.
+// syncBuffer is bytes.Buffer plus a mutex, so it's safe as an exec.Cmd's
+// Stdout/Stderr (written from the subprocess-reading goroutines the os/exec
+// package spawns internally) while ensureRunning's own goroutine reads it
+// via String() to build an error message.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return strings.TrimSpace(b.buf.String())
+}
+
+// Available reports whether a usable binary exists — either the one an
+// operator configured, or (see resolveBinPath) the one bundled for this
+// platform — used to hide/disable the built-in provider in the UI and to
+// fail fast with a clear message instead of an opaque connection error.
 func (m *Manager) Available() bool {
-	if m.binPath == "" {
-		return false
+	_, err := m.resolveBinPath()
+	return err == nil
+}
+
+// resolveBinPath returns the binary path this Manager will actually run: an
+// operator-configured FERRUM_NEEDLE_BIN wins outright (an explicit choice
+// should never be silently overridden); otherwise, if this platform has one
+// baked in via go:embed (see bundled_*.go — Windows/Linux/macOS on amd64 or
+// arm64), it's written out to a cache file once and reused, so Ferrum works
+// with zero manual download/config on the platforms it ships a binary for.
+func (m *Manager) resolveBinPath() (string, error) {
+	if m.binPath != "" {
+		info, err := os.Stat(m.binPath)
+		if err != nil || info.IsDir() {
+			return "", fmt.Errorf("configured needle binary not found at %q", m.binPath)
+		}
+		return m.binPath, nil
 	}
-	info, err := os.Stat(m.binPath)
-	return err == nil && !info.IsDir()
+	if len(bundledBinary) == 0 {
+		return "", fmt.Errorf("no needle binary bundled for this platform")
+	}
+	return extractBundled()
+}
+
+// extractBundled writes the embedded binary to a stable cache path once,
+// skipping the write if a file of the exact same size is already there
+// (cheap enough to check every call, avoids re-extracting ~15MB on every
+// startup). Not content-hashed — ponytail: a corrupted cache file that
+// happens to match the size would be reused as-is; delete the cache
+// directory by hand if that's ever suspected, a byte-for-byte checksum isn't
+// worth it for a file this binary only ever writes itself.
+func extractBundled() (string, error) {
+	dir := filepath.Join(os.TempDir(), "ferrum-needle-bin")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("preparing needle cache dir: %w", err)
+	}
+	path := filepath.Join(dir, bundledName)
+	if info, err := os.Stat(path); err == nil && info.Size() == int64(len(bundledBinary)) {
+		return path, nil
+	}
+	if err := os.WriteFile(path, bundledBinary, 0o755); err != nil {
+		return "", fmt.Errorf("extracting bundled needle binary: %w", err)
+	}
+	return path, nil
 }
 
 // Close stops the subprocess, if running. Safe to call even if it was never
@@ -113,8 +186,9 @@ func (m *Manager) closeLocked() {
 // process is spawned. Add real supervision if Needle proves flaky in
 // practice; nothing observed in its docs suggests it will be.
 func (m *Manager) ensureRunning(ctx context.Context) error {
-	if !m.Available() {
-		return fmt.Errorf("needle binary not found at %q — see README \"Built-in LLM (Needle 2)\" for install steps", m.binPath)
+	binPath, err := m.resolveBinPath()
+	if err != nil {
+		return fmt.Errorf("%w — see README \"Built-in LLM (Needle 2)\" for install steps", err)
 	}
 
 	m.mu.Lock()
@@ -129,7 +203,16 @@ func (m *Manager) ensureRunning(ctx context.Context) error {
 		return fmt.Errorf("writing needle tools file: %w", err)
 	}
 
-	cmd := exec.Command(m.binPath, "--tools", toolsPath, "--serve")
+	cmd := exec.Command(binPath, "--tools", toolsPath, "--serve", "--port", listenPort)
+	// Captured rather than discarded: without this, a subprocess that
+	// starts and immediately exits (bad args, missing runtime dep, port
+	// already taken from outside our own bookkeeping) fails completely
+	// silently — ensureRunning just spins until startTimeout with no clue
+	// why. logBuf is small (Needle logs one line on startup) so keeping it
+	// in memory for the process's lifetime is fine.
+	var logBuf syncBuffer
+	cmd.Stdout = &logBuf
+	cmd.Stderr = &logBuf
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting needle: %w", err)
 	}
@@ -139,8 +222,10 @@ func (m *Manager) ensureRunning(ctx context.Context) error {
 	// so the next ensureRunning call notices and respawns instead of trying
 	// to reuse a dead process — Signal(0)-style liveness checks aren't
 	// reliably supported cross-platform (notably on Windows), but Wait() is.
+	exited := make(chan struct{})
 	go func() {
 		_ = cmd.Wait()
+		close(exited)
 		m.mu.Lock()
 		if m.cmd == cmd {
 			m.running = false
@@ -149,21 +234,71 @@ func (m *Manager) ensureRunning(ctx context.Context) error {
 		m.mu.Unlock()
 	}()
 
-	deadline := time.Now().Add(startTimeout)
-	for time.Now().Before(deadline) {
-		// Any completed HTTP round-trip — even a Needle-side error response
-		// — proves the server is accepting connections; only a transport
-		// failure (connection refused, still starting up) means "not ready".
-		pingCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	// Two phases, deliberately not one poll loop of full requests: dialing a
+	// bare TCP connection (no bytes sent) is cheap and safe to retry while
+	// the listener is still coming up, but a real /complete round-trip is
+	// not — Needle serves one request at a time, and a real request that
+	// gets cancelled client-side keeps running server-side, so retrying
+	// *those* on a short timeout just piles up work that never finishes
+	// (see startTimeout's doc comment on why that first request is slow).
+	// So: poll the bare socket until something answers, then send exactly
+	// one real request and let it run.
+	select {
+	case <-waitForListener(ctx, listenAddr, startTimeout):
+	case <-exited:
+		return fmt.Errorf("needle exited immediately: %s", logBuf.String())
+	}
+
+	pingCtx, cancel := context.WithTimeout(ctx, startTimeout)
+	pingErr := make(chan error, 1)
+	go func() {
 		_, _, err := doComplete(pingCtx, "ping")
+		pingErr <- err
+	}()
+
+	select {
+	case err := <-pingErr:
 		cancel()
 		if err == nil {
 			return nil
 		}
-		time.Sleep(150 * time.Millisecond)
+		m.closeLocked()
+		return fmt.Errorf("needle did not become ready within %s (%v): %s", startTimeout, err, logBuf.String())
+	case <-exited:
+		cancel()
+		// Crashed (or exited) before ever answering a request — no point
+		// waiting out the rest of startTimeout. logBuf carries whatever it
+		// printed (its own error, a missing dependency, license/arch
+		// mismatch, ...) so this isn't a bare "not ready".
+		return fmt.Errorf("needle exited immediately: %s", logBuf.String())
 	}
-	m.closeLocked()
-	return fmt.Errorf("needle did not become ready within %s", startTimeout)
+}
+
+// waitForListener returns a channel that closes as soon as addr accepts a
+// bare TCP connection, or when timeout elapses (whichever first) — the
+// caller distinguishes the two via the connection's own read/request
+// afterward, so this never needs to report which happened. Only a raw dial
+// is retried here; see ensureRunning for why a real request isn't.
+func waitForListener(ctx context.Context, addr string, timeout time.Duration) <-chan struct{} {
+	ready := make(chan struct{})
+	go func() {
+		defer close(ready)
+		deadline := time.Now().Add(timeout)
+		for time.Now().Before(deadline) {
+			d := net.Dialer{Timeout: 200 * time.Millisecond}
+			conn, err := d.DialContext(ctx, "tcp", addr)
+			if err == nil {
+				conn.Close()
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+	}()
+	return ready
 }
 
 // --- request/response translation ---
