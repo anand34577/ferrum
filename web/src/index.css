@@ -1,4 +1,10 @@
 @import "tailwindcss";
+/* Defines the `animate-in`/`fade-in`/`zoom-in-95`/`slide-in-from-*` utilities
+   used throughout ui/dialog.tsx, dropdown-menu.tsx, select.tsx, tooltip.tsx,
+   and multi-select.tsx — without this, those class names don't exist under
+   Tailwind v4 (which silently drops unrecognized utilities rather than
+   erroring), so every overlay in the app popped in/out with zero animation. */
+@import "tw-animate-css";
 
 /* The app toggles a .dark class on <html> (lib/theme.tsx) — point Tailwind's
    dark: variant at the class instead of the OS media query so every dark:
@@ -698,6 +704,190 @@
   --card-shadow-hover: 6px 6px 0 0 #f2f1ec;
 }
 
+/* Solarized — the classic low-contrast, color-precise editor palette
+   (Ethan Schoonover's Solarized): warm paper-toned light, deep teal-black
+   dark, and both share the same restrained accent hues so switching
+   light/dark never looks like a different app. Gently rounded, soft
+   shadows — a calm, long-session register. */
+[data-look="solarized"] {
+  --font-display: var(--font-sans);
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+}
+[data-look="solarized"]:not(.dark) {
+  --bg: #fdf6e3;
+  --bg-surface: #fffdf7;
+  --bg-surface-hover: #f5efdc;
+  --bg-elevated: #fffdf7;
+  --bg-muted: #eee8d5;
+  --border: #ddd6bc;
+  --border-strong: #c3bb9c;
+  --text: #073642;
+  --text-muted: #657b83;
+  --text-faint: #7c8f96;
+  --status-ok: #6b8e00;
+  --status-warn: #9d7500;
+  --status-error: #d2282a;
+  --status-info: #1e7cb8;
+  --track: #e4dcc2;
+  --elev-xs: 0 1px 2px rgb(101 123 131 / 0.08);
+  --elev-sm: 0 1px 2px rgb(101 123 131 / 0.1), 0 1px 3px rgb(101 123 131 / 0.08);
+  --elev-md: 0 2px 6px rgb(101 123 131 / 0.14);
+  --elev-lg: 0 6px 18px rgb(101 123 131 / 0.18);
+  --elev-card: 0 1px 3px rgb(101 123 131 / 0.1);
+}
+[data-look="solarized"].dark {
+  --bg: #00212b;
+  --bg-surface: #073642;
+  --bg-surface-hover: #0a4152;
+  --bg-elevated: #0a4152;
+  --bg-muted: #0a4152;
+  --border: #114b5f;
+  --border-strong: #1c6280;
+  --text: #eee8d5;
+  --text-muted: #93a1a1;
+  --text-faint: #839496;
+  --status-ok: #a3be3c;
+  --status-warn: #e0a72e;
+  --status-error: #ff6e64;
+  --status-info: #5fb3e0;
+  --track: #114b5f;
+  --elev-xs: 0 1px 2px rgb(0 0 0 / 0.35);
+  --elev-sm: 0 1px 3px rgb(0 0 0 / 0.4);
+  --elev-md: 0 4px 12px rgb(0 0 0 / 0.45);
+  --elev-lg: 0 10px 28px rgb(0 0 0 / 0.5);
+  --elev-card: 0 1px 3px rgb(0 0 0 / 0.35);
+}
+
+/* High Contrast — an accessibility-first register: pure black/white ground,
+   thick 2px hairlines everywhere, no soft shadow to fight edge detection,
+   and status hues picked for a documented 7:1+ ratio against their surface.
+   Built for AAA legibility and low-vision use, not as a decorative option. */
+[data-look="highContrast"] {
+  --font-display: var(--font-sans);
+  --radius-sm: 0.125rem;
+  --radius-md: 0.1875rem;
+  --radius-lg: 0.25rem;
+  --radius-xl: 0.375rem;
+  --elev-xs: none;
+  --elev-sm: none;
+  --elev-md: none;
+  --elev-lg: none;
+  --elev-card: none;
+  --page-grid: none;
+  --sidebar-border-width: 2px;
+  --header-blur: none;
+}
+[data-look="highContrast"]:not(.dark) {
+  --bg: #ffffff;
+  --bg-surface: #ffffff;
+  --bg-surface-hover: #eaeaea;
+  --bg-elevated: #ffffff;
+  --bg-muted: #e8e8e8;
+  --border: #000000;
+  --border-strong: #000000;
+  --text: #000000;
+  --text-muted: #1f1f1f;
+  --text-faint: #333333;
+  --ring: #000000;
+  --status-ok: #005a1f;
+  --status-warn: #6b4300;
+  --status-error: #a3001e;
+  --status-info: #00358a;
+  --track: #cfcfcf;
+  --sidebar-bg: #000000;
+  --sidebar-border: #ffffff;
+  --sidebar-text: #ffffff;
+  --sidebar-text-muted: #d4d4d4;
+  --sidebar-active-bg: #ffffff;
+  --sidebar-active-text: #000000;
+}
+[data-look="highContrast"].dark {
+  --bg: #000000;
+  --bg-surface: #000000;
+  --bg-surface-hover: #1a1a1a;
+  --bg-elevated: #000000;
+  --bg-muted: #171717;
+  --border: #ffffff;
+  --border-strong: #ffffff;
+  --text: #ffffff;
+  --text-muted: #e6e6e6;
+  --text-faint: #cccccc;
+  --ring: #ffffff;
+  --status-ok: #33ff85;
+  --status-warn: #ffd23d;
+  --status-error: #ff6b6b;
+  --status-info: #6ec3ff;
+  --track: #2b2b2b;
+  --sidebar-bg: #ffffff;
+  --sidebar-border: #000000;
+  --sidebar-text: #000000;
+  --sidebar-text-muted: #333333;
+  --sidebar-active-bg: #000000;
+  --sidebar-active-text: #ffffff;
+}
+[data-look="highContrast"] .nav-item-active {
+  border: 2px solid currentColor;
+}
+
+/* Aurora — a saturated, dark-forward register: near-black ground, neon
+   cyan/violet glow standing in for shadow, comfortable rounding. The most
+   vivid of the twelve, meant for a dim room where the fleet status should
+   feel alive rather than a plain gray dashboard. */
+[data-look="aurora"] {
+  --font-display: "Space Grotesk", "Inter", sans-serif;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.375rem;
+  --header-blur: blur(16px);
+}
+[data-look="aurora"]:not(.dark) {
+  --bg: #eef4f7;
+  --bg-surface: #ffffff;
+  --bg-surface-hover: #f2f8fa;
+  --bg-elevated: #ffffff;
+  --bg-muted: #e2edf1;
+  --border: #cfe2e8;
+  --border-strong: #a9c7d0;
+  --status-ok: #0f9d68;
+  --status-warn: #b5790a;
+  --status-error: #d13f4f;
+  --status-info: #1f8fc4;
+  --elev-card: 0 8px 22px rgb(20 130 150 / 0.1);
+  --card-shadow-hover: 0 14px 32px rgb(20 130 150 / 0.16);
+}
+[data-look="aurora"].dark {
+  --bg: #04070c;
+  --bg-surface: #0b1220;
+  --bg-surface-hover: #101a2e;
+  --bg-elevated: #101a2e;
+  --bg-muted: #0e1626;
+  --border: color-mix(in oklab, #35e8c8 22%, #131c2e);
+  --border-strong: color-mix(in oklab, #35e8c8 38%, #131c2e);
+  --text: #eefaf7;
+  --text-muted: #8fa6ac;
+  --text-faint: #8fa6ac;
+  --status-ok: #35e8a0;
+  --status-warn: #f0c04a;
+  --status-error: #ff5c7a;
+  --status-info: #52c4ff;
+  --track: #16233a;
+  --sidebar-bg: #03060a;
+  --sidebar-border: color-mix(in oklab, #35e8c8 18%, #03060a);
+  --elev-xs: 0 0 0 1px color-mix(in oklab, #35e8c8 10%, transparent);
+  --elev-sm: 0 0 0 1px color-mix(in oklab, #35e8c8 12%, transparent), 0 2px 14px color-mix(in oklab, #8b5cf6 18%, transparent);
+  --elev-md: 0 0 0 1px color-mix(in oklab, #35e8c8 14%, transparent), 0 6px 26px color-mix(in oklab, #8b5cf6 22%, transparent);
+  --elev-lg: 0 0 0 1px color-mix(in oklab, #35e8c8 16%, transparent), 0 14px 44px color-mix(in oklab, #8b5cf6 26%, transparent);
+  --elev-card: 0 0 0 1px color-mix(in oklab, #35e8c8 12%, transparent), 0 6px 22px rgb(0 0 0 / 0.5);
+  --card-shadow-hover: 0 0 0 1px color-mix(in oklab, #35e8c8 20%, transparent), 0 16px 40px color-mix(in oklab, #8b5cf6 26%, transparent);
+}
+[data-look="aurora"] .nav-item-active {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, #35e8c8 35%, transparent);
+}
+
 /* Glassmorphism's actual "glass": cards and the sidebar are the only two
    surfaces given translucency + blur — everywhere else (inputs, dropdowns,
    dense tables) stays opaque on purpose, so frosted panels never fight
@@ -736,7 +926,22 @@
   box-shadow: inset 2px 2px 5px rgb(0 0 0 / 0.45), inset -2px -2px 5px rgb(255 255 255 / 0.08);
 }
 [data-look="brutalist"] .nav-item-active {
-  border-width: 2px;
+  border: 2px solid var(--sidebar-text);
+}
+
+/* Density — "compact" tightens row padding across every DataTable (Tasks,
+   Alerts, Backups, Users, Connections, Audit, ...) and the Inventory tree,
+   so a screen with room to spare can show meaningfully more rows without
+   scrolling. Unlayered, so it beats the Tailwind `py-*` utility on the same
+   element regardless of specificity — same reasoning as the focus-visible
+   override above. */
+[data-density="compact"] .dt-cell {
+  padding-top: 0.375rem;
+  padding-bottom: 0.375rem;
+}
+[data-density="compact"] .inv-row {
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
 }
 
 * {
@@ -807,6 +1012,25 @@ body {
   background: var(--text-muted);
 }
 
+/* react-grid-layout (Dashboard widget rearranging) ships its own drag
+   placeholder and resize-handle glyph with hardcoded colors — a plain solid
+   red box for the placeholder (which reads as an error state, not "drop
+   here") and a near-black corner glyph for the resize handle (invisible on
+   a dark surface/look). Re-themed to the app's brand and text tokens so
+   dragging/resizing a widget looks intentional in every theme. */
+/* Selectors are ancestor-qualified beyond react-grid-layout's own rule
+   (which is otherwise equal-specificity) so this wins regardless of whether
+   its lazy-loaded route chunk's CSS happens to load before or after this
+   file. */
+.react-grid-layout .react-grid-item.react-grid-placeholder {
+  background: var(--color-brand-500);
+  border-radius: var(--radius-lg);
+}
+.react-grid-layout .react-grid-item > .react-resizable-handle::after {
+  border-right-color: var(--text-faint);
+  border-bottom-color: var(--text-faint);
+}
+
 /* React Flow chrome (Topology page) — the stock Controls/MiniMap/selection
    styles hardcode light-theme whites and near-black strokes, which read
    wrong in dark mode (and vice versa). Re-point them at the app tokens so
@@ -838,7 +1062,7 @@ body {
 
 .react-flow__controls {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   box-shadow: var(--elev-sm);
 }
@@ -849,7 +1073,7 @@ body {
 
 .react-flow__minimap {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 

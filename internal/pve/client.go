@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -67,6 +68,38 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("pve %s %s failed (%d): %s", e.Method, e.Path, e.StatusCode, e.Body)
 }
 
+// Message returns a clean, user-facing error string extracted from PVE's
+// JSON error body — {"data":null,"errors":{"vmid":"value does not match
+// the regex pattern"}} becomes "vmid: value does not match the regex
+// pattern" instead of the raw blob. Falls back to e.Body verbatim when the
+// body isn't PVE's structured error shape (e.g. a proxy/gateway error page).
+func (e *StatusError) Message() string {
+	var parsed struct {
+		Message string            `json:"message"`
+		Errors  map[string]string `json:"errors"`
+	}
+	if err := json.Unmarshal([]byte(e.Body), &parsed); err != nil {
+		return e.Body
+	}
+	var parts []string
+	if parsed.Message != "" {
+		parts = append(parts, strings.TrimSuffix(parsed.Message, "\n"))
+	}
+	// Sort keys for a stable message across calls with the same error set.
+	keys := make([]string, 0, len(parsed.Errors))
+	for k := range parsed.Errors {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s: %s", k, parsed.Errors[k]))
+	}
+	if len(parts) == 0 {
+		return e.Body
+	}
+	return strings.Join(parts, "; ")
+}
+
 // StatusCodeOf reports the upstream HTTP status carried by err (0 if err
 // isn't an upstream status failure).
 func StatusCodeOf(err error) int {
@@ -81,6 +114,8 @@ func StatusCodeOf(err error) int {
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
+	// streamClient has no whole-request timeout — see New.
+	streamClient *http.Client
 
 	// API-token auth (preferred): "PVEAPIToken=user@realm!tokenid=secret"
 	apiTokenHeader string
@@ -94,14 +129,24 @@ type Client struct {
 
 type Option func(*Client)
 
+// insecureTransport is shared by every skip-verify client. Cloning
+// DefaultTransport per Client (the old behaviour) gave each one its own
+// empty connection pool, so a fresh TLS handshake ran on every single
+// upstream call for token-auth connections — which build a Client per
+// request. One transport means one pool, reused across connections.
+var insecureTransport = func() *http.Transport {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user-controlled per-connection trust setting
+	return tr
+}()
+
 func WithInsecureSkipVerify(skip bool) Option {
 	return func(c *Client) {
 		if !skip {
 			return // keep the default transport (proxy support, HTTP/2, pool tuning)
 		}
-		tr := http.DefaultTransport.(*http.Transport).Clone()
-		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user-controlled per-connection trust setting
-		c.httpClient.Transport = tr
+		c.httpClient.Transport = insecureTransport
+		c.streamClient.Transport = insecureTransport
 	}
 }
 
@@ -110,6 +155,10 @@ func New(host string, port int, opts ...Option) *Client {
 	c := &Client{
 		baseURL:    fmt.Sprintf("https://%s:%d/api2/json", host, port),
 		httpClient: &http.Client{Timeout: 15 * time.Second},
+		// Bulk transfers (ISO/template uploads, file-restore downloads) are
+		// bounded by their request context, not by a fixed whole-request
+		// deadline: a 4 GiB ISO can never finish inside httpClient's 15s.
+		streamClient: &http.Client{},
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -204,10 +253,75 @@ func (c *Client) do(ctx context.Context, method, path string, body url.Values, o
 		}
 		return err
 	}
+	if out == nil || len(raw) == 0 {
+		// A 2xx with an empty body (some PVE endpoints, e.g. the journal
+		// endpoint on certain configurations, do this when there's nothing
+		// to report) isn't malformed JSON — leave out at its zero value
+		// instead of failing json.Unmarshal's "unexpected end of JSON input".
+		return nil
+	}
+	return json.Unmarshal(raw, out)
+}
+
+// PostMultipart issues an authenticated POST with an arbitrary body and
+// content-type (a multipart/form-data file upload) instead of do()'s
+// url.Values-encoded form — used for storage content uploads (ISOs,
+// container templates) where the payload is a file stream, not form fields.
+func (c *Client) PostMultipart(ctx context.Context, path, contentType string, body io.Reader, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", contentType)
+	c.authenticate(req)
+
+	resp, err := c.streamClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode >= 300 {
+		err := &StatusError{Method: http.MethodPost, Path: path, StatusCode: resp.StatusCode, Body: string(raw)}
+		if resp.StatusCode == http.StatusUnauthorized {
+			return errors.Join(ErrUnauthorized, err)
+		}
+		return err
+	}
 	if out == nil {
 		return nil
 	}
 	return json.Unmarshal(raw, out)
+}
+
+// StreamGet issues an authenticated GET and hands back the raw response for
+// the caller to stream (e.g. proxying a file-restore download) rather than
+// buffering it into memory like do() — the caller MUST close the response
+// body. path is relative to /api2/json, same as every other method here.
+func (c *Client) StreamGet(ctx context.Context, path string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.authenticate(req)
+	resp, err := c.streamClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		err := &StatusError{Method: http.MethodGet, Path: path, StatusCode: resp.StatusCode, Body: string(raw)}
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, errors.Join(ErrUnauthorized, err)
+		}
+		return nil, err
+	}
+	return resp, nil
 }
 
 // WSAuth returns the HTTP header/value pair needed to authenticate a raw
@@ -342,6 +456,12 @@ type ClusterLogEntry struct {
 	PID  int    `json:"pid"`
 	Tag  string `json:"tag"`
 	UID  int    `json:"uid"`
+	// Time (unix seconds) and Pri (syslog priority, 0=emerg..7=debug) come
+	// back from /cluster/log on every row; dropping them left the feed with
+	// no way to say when a line happened or how bad it was.
+	Time int64  `json:"time"`
+	Pri  int    `json:"pri"`
+	User string `json:"user,omitempty"`
 }
 
 func (c *Client) ClusterLog(ctx context.Context, limit int) ([]ClusterLogEntry, error) {

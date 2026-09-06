@@ -7,7 +7,7 @@ export function Checkbox({ className, ...props }: ComponentProps<typeof Checkbox
   return (
     <CheckboxPrimitive.Root
       className={cn(
-        "relative flex h-4 w-4 shrink-0 items-center justify-center rounded border border-[var(--border-strong)] bg-[var(--bg-surface)] transition-colors",
+        "relative flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border border-[var(--border-strong)] bg-[var(--bg-surface)] transition-colors",
         // Invisible hit-area expansion: the 16px visual stays, but the
         // clickable/pressable region meets touch-target minimums.
         "before:absolute before:-inset-2 before:content-['']",

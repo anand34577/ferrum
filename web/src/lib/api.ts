@@ -207,11 +207,17 @@ export interface Task {
   starttime: number
   endtime?: number
   id?: string
+  /** Only present on the single-task status endpoint; the server normalizes
+   *  it into `status`, so prefer `status` for the OK/failed verdict. */
+  exitstatus?: string
 }
 
 // Mirrors pve.GuestLiveStatus (internal/pve/guests.go).
 export interface GuestLiveStatus {
   status: string
+  /** QEMU only: "running" | "paused" | "prelaunch" | … A suspended VM keeps
+   *  status "running", so this is the only way to tell it is paused. */
+  qmpstatus?: string
   name?: string
   cpu?: number
   cpus?: number
@@ -242,6 +248,11 @@ export interface BackupJob {
   mode?: string
   compress?: string
   comment?: string
+  "notification-mode"?: string
+  mailto?: string
+  mailnotification?: string
+  bwlimit?: number
+  pigz?: number
 }
 
 // Mirrors pve.Pool / pve.PoolDetail (internal/pve/pools.go).
@@ -280,6 +291,18 @@ export interface HAStatus {
   type: string
   status?: string
   node?: string
+}
+
+// Mirrors pve.HARule (internal/pve/ha.go) — Proxmox 9's HA rules
+// (node-affinity / resource-affinity). Loose on purpose: rule-type-specific
+// fields (resources, nodes, affinity, strict, ...) fall through here rather
+// than being individually modeled, mirroring the Go side's Raw map.
+export interface HARule {
+  rule: string
+  type: string
+  comment?: string
+  disable?: number
+  [key: string]: unknown
 }
 
 // Mirrors pve.ReplicationJob / pve.ReplicationStatus (internal/pve/replication.go).
@@ -348,6 +371,9 @@ export interface DatacenterOptions {
   description?: string
   mac_prefix?: string
   max_workers?: number
+  // Every option PVE returned, unfiltered — includes fields above by name
+  // plus anything this type doesn't model (bwlimit, migration, u2f, ...).
+  raw?: Record<string, unknown>
 }
 
 // Mirrors pve.Node (internal/pve/nodes.go).
@@ -388,8 +414,9 @@ export interface AptUpdate {
   Description: string
 }
 
-// Mirrors pve.SyslogEntry (internal/pve/nodes.go).
-export interface SyslogEntry {
+// Mirrors pve.JournalEntry (internal/pve/nodes.go) — the structured,
+// filterable systemd journal that replaced the legacy plain-text syslog feed.
+export interface JournalEntry {
   n: number
   t: string
 }
@@ -426,6 +453,9 @@ export interface ClusterLogEntry {
   pid: number
   tag: string
   uid: number
+  time: number
+  pri: number
+  user?: string
 }
 
 // Mirrors pve.Storage (internal/pve/storage.go).
@@ -474,6 +504,42 @@ export interface SmartData {
   text?: string
 }
 
+// Mirrors pve.ZFSPoolInfo / pve.LVMVolumeGroup / pve.LVMThinPool (internal/pve/disks.go).
+export interface ZFSPoolInfo {
+  name: string
+  size?: number
+  free?: number
+  health?: string
+}
+export interface LVMVolumeGroup {
+  name: string
+  size?: number
+  free?: number
+}
+export interface LVMThinPool {
+  lv: string
+  vg: string
+  size?: number
+  used?: number
+}
+
+// Mirrors pve.NFSExport / pve.CIFSShare / pve.ISCSITarget / pve.GlusterVolume (internal/pve/storage.go).
+export interface NFSExport {
+  path: string
+  options?: string
+}
+export interface CIFSShare {
+  share: string
+  description?: string
+}
+export interface ISCSITarget {
+  target: string
+  portal?: string
+}
+export interface GlusterVolume {
+  volname: string
+}
+
 // Mirrors pve.StorageContentItem (internal/pve/storage.go).
 export interface StorageContentItem {
   volid: string
@@ -482,6 +548,7 @@ export interface StorageContentItem {
   size?: number
   vmid?: number
   ctime?: number
+  protected?: number
 }
 
 // Mirrors pve.DiskDevice / pve.NetDevice (internal/pve/guests.go).
@@ -561,6 +628,197 @@ export interface AlertRule {
   createdAt: string
 }
 
+// Mirrors pve.GuestAgentExecResult / GuestAgentExecStatus (internal/pve/agent.go).
+export interface GuestAgentExecResult {
+  pid: number
+}
+
+export interface GuestAgentExecStatus {
+  exited: boolean
+  exitcode?: number
+  signal?: number
+  "out-data"?: string
+  "err-data"?: string
+  truncated?: boolean
+}
+
+// Mirrors the raw maps returned by pve.GuestAgentOSInfo / GuestAgentFSInfo /
+// GuestAgentVCPUs (internal/pve/agent.go) — fields vary by guest OS, so these
+// stay loose rather than pinning a rigid shape the backend doesn't guarantee.
+export type GuestAgentOSInfo = Record<string, unknown>
+export type GuestAgentFSInfo = Record<string, unknown>
+export type GuestAgentVCPU = Record<string, unknown>
+
+// Mirrors pve.CephMon / CephMgr / CephFS (internal/pve/storage.go).
+export interface CephMon {
+  name: string
+  host?: string
+  addr?: string
+  quorum?: number
+}
+
+export interface CephMgr {
+  host?: string
+  addr?: string
+  active?: number
+}
+
+export interface CephFilesystem {
+  name: string
+}
+
+// Mirrors pve.FileRestoreEntry (internal/pve/storage.go).
+export interface FileRestoreEntry {
+  filepath: string
+  type: "f" | "d"
+  size?: number
+  mtime?: number
+}
+
+// Mirrors pve.SDNZone / SDNVnet / SDNSubnet (internal/pve/sdn.go).
+export interface SDNZone {
+  zone: string
+  type: string
+  nodes?: string
+  mtu?: number
+  pending?: number
+  raw?: Record<string, unknown>
+}
+
+export interface SDNVnet {
+  vnet: string
+  zone: string
+  alias?: string
+  tag?: number
+  vlanaware?: number
+  pending?: number
+}
+
+export interface SDNSubnet {
+  subnet: string
+  type: string
+  gateway?: string
+  snat?: number
+}
+
+export interface SDNController {
+  controller: string
+  type: string
+  raw?: Record<string, unknown>
+}
+
+export interface SDNIPAM {
+  ipam: string
+  type: string
+  raw?: Record<string, unknown>
+}
+
+// Mirrors pve.AccessUser / AccessUserToken / AccessRole / AccessACLEntry /
+// AccessDomain (internal/pve/access.go) — Proxmox's own user/permission
+// system, read-only here (distinct from this app's local accounts in User).
+export interface AccessUser {
+  userid: string
+  enable?: number
+  expire?: number
+  email?: string
+  firstname?: string
+  lastname?: string
+  comment?: string
+  groups?: string
+  tokens?: AccessUserToken[]
+}
+
+export interface AccessUserToken {
+  tokenid: string
+  comment?: string
+  expire?: number
+  privsep?: number
+}
+
+export interface AccessRole {
+  roleid: string
+  raw?: Record<string, unknown>
+}
+
+export interface AccessACLEntry {
+  path: string
+  roleid: string
+  ugid: string
+  type: string
+  propagate?: number
+}
+
+export interface AccessDomain {
+  realm: string
+  type: string
+  comment?: string
+  default?: number
+}
+
+// Mirrors pve.NodeCertificate (internal/pve/certificates.go).
+export interface NodeCertificate {
+  filename: string
+  subject?: string
+  issuer?: string
+  notbefore?: number
+  notafter?: number
+  fingerprint?: string
+  san?: string[]
+}
+
+// Mirrors pve.ClusterConfigNode / ClusterJoinInfo (internal/pve/cluster_membership.go).
+export interface ClusterConfigNode {
+  name: string
+  nodeid?: number
+  quorum_votes?: number
+}
+
+export interface ClusterJoinInfo {
+  fingerprint: string
+  nodelist?: { name: string; pve_addr?: string }[]
+  preferred_node?: string
+}
+
+// Mirrors pve.NodeDNSConfig / NodeTimeInfo / NodeHosts (internal/pve/nodes.go).
+export interface NodeDNSConfig {
+  search?: string
+  dns1?: string
+  dns2?: string
+  dns3?: string
+}
+
+export interface NodeTimeInfo {
+  timezone: string
+  time: number
+  localtime: number
+}
+
+export interface NodeHosts {
+  data: string
+  digest?: string
+}
+
+// Mirrors pve.NodeService (internal/pve/nodes.go).
+export interface NodeService {
+  service: string
+  name?: string
+  desc?: string
+  state: string
+}
+
+// Mirrors poller.ConnectionHealth (internal/poller/alerts.go) — whether a
+// connection answered the alert evaluator's last poll, tracked independently
+// of alert_rules so "is the server even reachable" doesn't depend on the
+// admin having configured a threshold first.
+export interface ConnectionHealth {
+  connectionId: string
+  connectionName: string
+  status: "up" | "down"
+  lastError?: string
+  since: string
+  updatedAt: string
+}
+
 // Mirrors api.alertInstanceDTO (internal/api/alerts.go).
 export interface AlertInstance {
   id: string
@@ -576,4 +834,83 @@ export interface AlertInstance {
   triggeredAt: string
   updatedAt: string
   resolvedAt?: string
+}
+
+// Mirrors auth.APIKey (internal/auth/apikeys.go). scope "api" works against
+// the general REST API; "mcp" works only against the MCP endpoint — the two
+// are mutually exclusive by design.
+export interface ApiKey {
+  id: string
+  name: string
+  keyPrefix: string
+  scope: "api" | "mcp"
+  lastUsedAt?: string
+  expiresAt?: string
+  createdAt: string
+}
+
+// Returned once, at creation — never retrievable again.
+export interface CreatedApiKey extends ApiKey {
+  key: string
+}
+
+// Mirrors api.aiModelDTO — one selectable model under a provider. label is
+// the friendly display name; modelId is the exact identifier sent to the
+// provider's API (frequently different, e.g. "GPT-4o mini" vs "gpt-4o-mini").
+export interface AIModel {
+  id: string
+  label: string
+  modelId: string
+  isDefault: boolean
+  createdAt: string
+}
+
+// Mirrors api.aiProviderDTO (internal/api/ai_providers.go) — admin view. A
+// provider can carry any number of models.
+export interface AIProvider {
+  id: string
+  name: string
+  baseUrl: string
+  hasApiKey: boolean
+  isEnabled: boolean
+  models: AIModel[]
+  createdAt: string
+  updatedAt: string
+}
+
+// Mirrors api.usableProviderDTO/usableModelDTO — what every user sees in the
+// assistant's picker: enabled providers and their models only.
+export interface UsableAIModel {
+  id: string
+  label: string
+  isDefault: boolean
+}
+export interface UsableAIProvider {
+  providerId: string
+  providerName: string
+  models: UsableAIModel[]
+}
+
+export interface AIChatMessage {
+  role: "system" | "user" | "assistant"
+  content: string
+}
+
+// Mirrors api.agentSettingsResponse (internal/api/agent_settings.go).
+export interface AgentSettings {
+  mcpEnabled: boolean
+  apiEnabled: boolean
+  maxToolIterations: number
+}
+
+// Mirrors api.toolCallDTO (internal/api/ai_activity.go).
+export interface ToolCallRecord {
+  id: string
+  username?: string // present only in the admin, cross-user view
+  source: "chat" | "mcp"
+  tool: string
+  args?: string
+  ok: boolean
+  error?: string
+  createdAt: string
 }

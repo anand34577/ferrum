@@ -2,10 +2,12 @@ import { RankedBarChart } from "@/components/charts/RankedBarChart"
 import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { useScopedInventory } from "@/lib/fleet"
 import { formatUptime } from "@/lib/utils"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 export function UptimeLeaderboardWidget({ settings }: { settings: WidgetSettings }) {
   const scope = settings.scope ?? "guest"
-  const { resources } = useScopedInventory(settings)
+  const { resources, isError } = useScopedInventory(settings)
+  if (isError) return <WidgetError />
 
   const wantType = scope === "node" ? (t: string) => t === "node" : (t: string) => t === "qemu" || t === "lxc"
   const rows = resources

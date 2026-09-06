@@ -28,6 +28,7 @@ import { useTheme } from "@/lib/theme"
 import { cn, formatBytes, formatPercentFine } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { ErrorState } from "@/components/ui/error-state"
+import { Meter } from "@/components/ui/meter"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusDot } from "@/components/ui/status-dot"
 
@@ -56,12 +57,7 @@ function loadPositions(): PositionMap {
 
 /** Tiny horizontal load bar used across all topology cards. */
 function LoadBar({ pct }: { pct: number }) {
-  const color = pct >= 90 ? "bg-[var(--status-error)]" : pct >= 75 ? "bg-[var(--status-warn)]" : "bg-brand-500"
-  return (
-    <div className="h-1 min-w-10 flex-1 overflow-hidden rounded-sm bg-[var(--track)]">
-      <div className={cn("h-full rounded-sm", color)} style={{ width: `${Math.min(100, pct)}%` }} />
-    </div>
-  )
+  return <Meter value={pct} size="xs" label="Load" className="min-w-10 flex-1" />
 }
 
 function Chip({ kind }: { kind: string }) {
@@ -71,7 +67,7 @@ function Chip({ kind }: { kind: string }) {
       : kind === "LXC"
         ? "bg-[color-mix(in_oklab,var(--chart-2)_15%,transparent)] text-[var(--chart-2)]"
         : "bg-[var(--bg-muted)] text-[var(--text-muted)]"
-  return <span className={cn("shrink-0 rounded px-1 py-px font-mono text-[9px] font-semibold uppercase tracking-wide", styles)}>{kind}</span>
+  return <span className={cn("shrink-0 rounded-sm px-1 py-px font-mono text-[9px] font-semibold uppercase tracking-wide", styles)}>{kind}</span>
 }
 
 /** The central hub everything hangs from — double-click the title to rename
@@ -91,7 +87,7 @@ function RootNameEditor({
       <input
         autoFocus
         value={draft}
-        className="nodrag w-40 rounded border border-brand-400/60 bg-[var(--bg-surface)] px-1.5 py-0.5 font-display text-sm font-semibold text-[var(--text)] outline-none"
+        className="nodrag w-40 rounded-sm border border-brand-400/60 bg-[var(--bg-surface)] px-1.5 py-0.5 font-display text-sm font-semibold text-[var(--text)] outline-none"
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
           e.stopPropagation()
@@ -274,6 +270,31 @@ const nodeTypes = { root: RootNode, connection: ConnectionNode, pveNode: PveNode
 
 type FlowNode = Node<Record<string, unknown>>
 
+/** html-to-image's `backgroundColor` option only paints the *cloned source
+ * element's* own box — which keeps its on-screen size unless every one of
+ * its own CSS rules is beaten by an inline override, something we can't
+ * fully guarantee across React Flow's own stylesheet. The visible symptom
+ * was a background that only covered the original on-screen viewport size,
+ * with the diagram's full (larger, padded) canvas beyond that left
+ * transparent — rendering as white and making nodes there look like they'd
+ * overflowed. Painting an explicit full-canvas <rect> as the first child of
+ * the exported SVG sidesteps that entirely: it always covers exactly
+ * `width`×`height`, independent of how the library sized the cloned node. */
+function injectSvgBackground(dataUrl: string, width: number, height: number, color: string): string {
+  const svgText = decodeURIComponent(dataUrl.slice(dataUrl.indexOf(",") + 1))
+  const doc = new DOMParser().parseFromString(svgText, "image/svg+xml")
+  const svg = doc.documentElement
+  const rect = doc.createElementNS("http://www.w3.org/2000/svg", "rect")
+  rect.setAttribute("x", "0")
+  rect.setAttribute("y", "0")
+  rect.setAttribute("width", String(width))
+  rect.setAttribute("height", String(height))
+  rect.setAttribute("fill", color)
+  svg.insertBefore(rect, svg.firstChild)
+  const serialized = new XMLSerializer().serializeToString(doc)
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(serialized)}`
+}
+
 /** Exports the current diagram as a standalone SVG, sized and framed to fit
  * every node regardless of the on-screen pan/zoom — not a screenshot of
  * whatever's currently in the viewport. Rendered via html-to-image's toSvg
@@ -298,7 +319,7 @@ function ExportSvgButton() {
 
     const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#ffffff"
     try {
-      const dataUrl = await toSvg(viewportEl, {
+      const rawDataUrl = await toSvg(viewportEl, {
         backgroundColor: bg,
         width,
         height,
@@ -308,6 +329,7 @@ function ExportSvgButton() {
           transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.zoom})`,
         },
       })
+      const dataUrl = injectSvgBackground(rawDataUrl, width, height, bg)
       const a = document.createElement("a")
       a.href = dataUrl
       a.download = `ferrum-topology-${new Date().toISOString().slice(0, 10)}.svg`
@@ -468,12 +490,19 @@ export function TopologyPage() {
             </Panel>
           )}
           {!isError && isLoading && !hasGraph && (
-            <Panel position="top-center" className="text-sm text-[var(--text-muted)]" aria-busy>
+            <Panel
+              position="top-center"
+              className="!m-2 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 text-sm text-[var(--text-muted)] shadow-xs"
+              aria-busy
+            >
               Mapping your fleet…
             </Panel>
           )}
           {!isError && !isLoading && !hasGraph && (
-            <Panel position="top-center" className="text-sm text-[var(--text-muted)]">
+            <Panel
+              position="top-center"
+              className="!m-2 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 text-sm text-[var(--text-muted)] shadow-xs"
+            >
               No connections configured yet — add one under Connections.
             </Panel>
           )}

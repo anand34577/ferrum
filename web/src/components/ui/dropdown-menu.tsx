@@ -30,6 +30,8 @@ export function DropdownMenuSubContent({ className, ...props }: ComponentProps<t
         sideOffset={4}
         className={cn(
           "z-[300] min-w-40 overflow-hidden rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] p-1 shadow-md",
+          "data-[state=open]:animate-in data-[state=open]:fade-in data-[state=open]:zoom-in-95",
+          "data-[state=closed]:animate-out data-[state=closed]:fade-out data-[state=closed]:zoom-out-95",
           className,
         )}
         {...props}
@@ -46,6 +48,7 @@ export function DropdownMenuContent({ className, sideOffset = 6, children, ...pr
         className={cn(
           "z-[300] min-w-40 overflow-hidden rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] p-1 shadow-md",
           "data-[state=open]:animate-in data-[state=open]:fade-in data-[state=open]:zoom-in-95",
+          "data-[state=closed]:animate-out data-[state=closed]:fade-out data-[state=closed]:zoom-out-95",
           className,
         )}
         {...props}

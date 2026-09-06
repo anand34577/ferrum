@@ -9,7 +9,10 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { UploadTemplateDialog } from "@/components/inventory/UploadTemplateDialog"
+import { useConfirm } from "@/components/ui/confirm-dialog"
 import { api, ApiError, type ClusterResource, type TemplateItem } from "@/lib/api"
+import { dangerousExtraKeys, parseExtraLines } from "@/lib/utils"
 
 interface CreateGuestDialogProps {
   connId: string
@@ -21,15 +24,19 @@ interface CreateGuestDialogProps {
 const vmDefaults = {
   node: "", name: "", cores: 2, memoryMb: 2048, storage: "local-lvm", diskGb: 20,
   bridge: "vmbr0", iso: "", ciUser: "", ciPassword: "", sshPublicKey: "", ipConfig: "ip=dhcp",
+  extraText: "",
 }
 
 const lxcDefaults = {
   node: "", hostname: "", cores: 2, memoryMb: 1024, storage: "local-lvm", diskGb: 8,
   template: "", bridge: "vmbr0", password: "", sshPublicKey: "", unprivileged: true,
+  extraText: "",
 }
+
 
 export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateGuestDialogProps) {
   const queryClient = useQueryClient()
+  const confirm = useConfirm()
   const [vmForm, setVmForm] = useState(vmDefaults)
   const [lxcForm, setLxcForm] = useState(lxcDefaults)
 
@@ -43,7 +50,7 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
   const vztmpls = templatesQuery.data?.filter((t) => t.content === "vztmpl") ?? []
 
   const createVM = useMutation({
-    mutationFn: () => api.post(`/connections/${connId}/vms`, vmForm),
+    mutationFn: () => api.post(`/connections/${connId}/vms`, { ...vmForm, extraText: undefined, extra: parseExtraLines(vmForm.extraText) }),
     onSuccess: () => {
       toast.success("VM creation started")
       queryClient.invalidateQueries({ queryKey: ["inventory"] })
@@ -54,7 +61,7 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
   })
 
   const createLXC = useMutation({
-    mutationFn: () => api.post(`/connections/${connId}/lxc`, lxcForm),
+    mutationFn: () => api.post(`/connections/${connId}/lxc`, { ...lxcForm, extraText: undefined, extra: parseExtraLines(lxcForm.extraText) }),
     onSuccess: () => {
       toast.success("Container creation started")
       queryClient.invalidateQueries({ queryKey: ["inventory"] })
@@ -63,6 +70,23 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to create container"),
   })
+
+  async function confirmDangerousExtra(keys: string[]) {
+    if (keys.length === 0) return true
+    return confirm({
+      title: "Advanced option runs on the host",
+      description: `"${keys.join(", ")}" ${keys.length > 1 ? "are" : "is"} not sandboxed like normal guest config — it can run arbitrary code on the Proxmox host or weaken this guest's isolation. Only continue if you trust this configuration.`,
+      confirmLabel: "Create anyway",
+    })
+  }
+
+  async function submitVM() {
+    if (await confirmDangerousExtra(dangerousExtraKeys(parseExtraLines(vmForm.extraText)))) createVM.mutate()
+  }
+
+  async function submitLXC() {
+    if (await confirmDangerousExtra(dangerousExtraKeys(parseExtraLines(lxcForm.extraText)))) createLXC.mutate()
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -116,7 +140,10 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
                 <Input value={vmForm.bridge} onChange={(e) => setVmForm({ ...vmForm, bridge: e.target.value })} />
               </div>
               <div className="col-span-2 space-y-1.5">
-                <Label>Boot ISO (optional — omit when cloning a cloud-init template)</Label>
+                <div className="flex items-center justify-between">
+                  <Label>Boot ISO (optional — omit when cloning a cloud-init template)</Label>
+                  <UploadTemplateDialog connId={connId} nodes={nodes} content="iso" />
+                </div>
                 <Select value={vmForm.iso} onValueChange={(v) => setVmForm({ ...vmForm, iso: v })}>
                   <SelectTrigger>
                     <SelectValue placeholder={templatesQuery.isLoading ? "Loading..." : "None"} />
@@ -153,10 +180,21 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
             <p className="text-xs text-[var(--text-muted)]">
               Cloud-init fields only take effect when cloning from a cloud-init-capable template.
             </p>
+            <div className="space-y-1.5">
+              <Label>Advanced: extra disks/NICs/hardware (one key=value per line)</Label>
+              <textarea
+                className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 font-mono text-xs"
+                rows={2}
+                placeholder={"scsi1=local-lvm:32\nnet1=virtio,bridge=vmbr1"}
+                value={vmForm.extraText}
+                onChange={(e) => setVmForm({ ...vmForm, extraText: e.target.value })}
+              />
+            </div>
             <FormError message={createVM.error instanceof ApiError ? createVM.error.message : createVM.error ? "Failed to create VM" : undefined} />
-            <DialogFooter>
-              <Button disabled={!vmForm.node || createVM.isPending} onClick={() => createVM.mutate()}>
-                {createVM.isPending ? "Creating..." : "Create VM"}
+            <DialogFooter className="flex-col items-end gap-1">
+              {!vmForm.node && <p className="text-xs text-[var(--text-muted)]">Select a node to continue.</p>}
+              <Button loading={createVM.isPending} disabled={!vmForm.node} onClick={() => void submitVM()}>
+                Create VM
               </Button>
             </DialogFooter>
           </TabsContent>
@@ -179,7 +217,10 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
                 <Input value={lxcForm.hostname} onChange={(e) => setLxcForm({ ...lxcForm, hostname: e.target.value })} />
               </div>
               <div className="col-span-2 space-y-1.5">
-                <Label>Container template</Label>
+                <div className="flex items-center justify-between">
+                  <Label>Container template</Label>
+                  <UploadTemplateDialog connId={connId} nodes={nodes} content="vztmpl" />
+                </div>
                 <Select value={lxcForm.template} onValueChange={(v) => setLxcForm({ ...lxcForm, template: v })}>
                   <SelectTrigger>
                     <SelectValue placeholder={templatesQuery.isLoading ? "Loading..." : "Select a template..."} />
@@ -191,7 +232,7 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
                       </SelectItem>
                     ))}
                     {vztmpls.length === 0 && !templatesQuery.isLoading && (
-                      <SelectItem value="__none__" disabled>No container templates found — download one in Proxmox first</SelectItem>
+                      <SelectItem value="__none__" disabled>No container templates found — add one above</SelectItem>
                     )}
                   </SelectContent>
                 </Select>
@@ -225,10 +266,25 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
               <Switch checked={lxcForm.unprivileged} onCheckedChange={(v) => setLxcForm({ ...lxcForm, unprivileged: v })} />
               Unprivileged container (recommended)
             </label>
+            <div className="space-y-1.5">
+              <Label>Advanced: extra mount points/NICs/hardware (one key=value per line)</Label>
+              <textarea
+                className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 font-mono text-xs"
+                rows={2}
+                placeholder={"mp0=local-lvm:8,mp=/data\nnet1=name=eth1,bridge=vmbr1"}
+                value={lxcForm.extraText}
+                onChange={(e) => setLxcForm({ ...lxcForm, extraText: e.target.value })}
+              />
+            </div>
             <FormError message={createLXC.error instanceof ApiError ? createLXC.error.message : createLXC.error ? "Failed to create container" : undefined} />
-            <DialogFooter>
-              <Button disabled={!lxcForm.node || !lxcForm.template || createLXC.isPending} onClick={() => createLXC.mutate()}>
-                {createLXC.isPending ? "Creating..." : "Create Container"}
+            <DialogFooter className="flex-col items-end gap-1">
+              {!lxcForm.node ? (
+                <p className="text-xs text-[var(--text-muted)]">Select a node to continue.</p>
+              ) : !lxcForm.template ? (
+                <p className="text-xs text-[var(--text-muted)]">Select a container template to continue.</p>
+              ) : null}
+              <Button loading={createLXC.isPending} disabled={!lxcForm.node || !lxcForm.template} onClick={() => void submitLXC()}>
+                Create Container
               </Button>
             </DialogFooter>
           </TabsContent>

@@ -1,10 +1,12 @@
 import { RankedBarChart } from "@/components/charts/RankedBarChart"
 import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { useScopedInventory } from "@/lib/fleet"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 export function TopConsumersWidget({ settings }: { settings: WidgetSettings }) {
   const metric = settings.metric === "mem" ? "mem" : "cpu"
-  const { resources } = useScopedInventory(settings)
+  const { resources, isError } = useScopedInventory(settings)
+  if (isError) return <WidgetError />
 
   const guests = resources
     .filter((r) => (r.type === "qemu" || r.type === "lxc") && r.status === "running")

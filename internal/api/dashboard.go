@@ -18,20 +18,26 @@ import (
 // planning") instead of one shared layout — each is a fully independent
 // widget grid, all under this same per-user table. defaultDashboardLayout
 // seeds a brand-new account's first one.
+// layoutVersion 2 halved the grid's row unit (64px rows -> 32px) so resizing
+// snaps in finer steps; every v1 height/y is exactly double in v2. The client
+// migrates any layout it reads below this version.
+const layoutVersion = 2
+
 const defaultDashboardLayout = `{
+  "version": 2,
   "widgets": [
-    {"id": "fleet-overview", "type": "fleet-overview", "x": 0, "y": 0, "w": 12, "h": 4},
-    {"id": "fleet-trend", "type": "fleet-trend", "x": 0, "y": 4, "w": 12, "h": 5},
-    {"id": "cpu-by-node", "type": "cpu-by-node", "x": 0, "y": 9, "w": 6, "h": 4},
-    {"id": "memory-by-node", "type": "memory-by-node", "x": 6, "y": 9, "w": 6, "h": 4},
-    {"id": "top-consumers", "type": "top-consumers", "x": 0, "y": 13, "w": 6, "h": 4},
-    {"id": "running-tasks", "type": "running-tasks", "x": 6, "y": 13, "w": 6, "h": 4},
-    {"id": "storage-usage", "type": "storage-usage", "x": 0, "y": 17, "w": 6, "h": 4},
-    {"id": "alert-activity", "type": "alert-activity", "x": 6, "y": 17, "w": 6, "h": 4}
+    {"id": "fleet-overview", "type": "fleet-overview", "x": 0, "y": 0, "w": 12, "h": 8},
+    {"id": "fleet-trend", "type": "fleet-trend", "x": 0, "y": 8, "w": 12, "h": 10},
+    {"id": "cpu-by-node", "type": "cpu-by-node", "x": 0, "y": 18, "w": 6, "h": 8},
+    {"id": "memory-by-node", "type": "memory-by-node", "x": 6, "y": 18, "w": 6, "h": 8},
+    {"id": "top-consumers", "type": "top-consumers", "x": 0, "y": 26, "w": 6, "h": 8},
+    {"id": "running-tasks", "type": "running-tasks", "x": 6, "y": 26, "w": 6, "h": 8},
+    {"id": "storage-usage", "type": "storage-usage", "x": 0, "y": 34, "w": 6, "h": 8},
+    {"id": "alert-activity", "type": "alert-activity", "x": 6, "y": 34, "w": 6, "h": 8}
   ]
 }`
 
-const emptyDashboardLayout = `{"widgets": []}`
+const emptyDashboardLayout = `{"version": 2, "widgets": []}`
 
 // Bounds how many dashboards one account can hoard — this is a personal
 // workspace list, not a multi-tenant resource, so a generous flat cap is
@@ -69,8 +75,9 @@ func (d dashboardDTO) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		ID      string          `json:"id"`
 		Name    string          `json:"name"`
+		Version int             `json:"version"`
 		Widgets json.RawMessage `json:"widgets"`
-	}{d.ID, d.Name, widgets})
+	}{d.ID, d.Name, parsed.Version, widgets})
 }
 
 func (s *Server) insertDashboard(w http.ResponseWriter, r *http.Request, userID, name string, layout []byte) (dashboardSummary, bool) {
@@ -284,9 +291,15 @@ type storedWidget struct {
 	Y    int    `json:"y"`
 	W    int    `json:"w"`
 	H    int    `json:"h"`
+	// Per-widget settings (connection filter, row counts, ...) round-trip as
+	// an opaque string map — without this field the re-marshal below would
+	// silently drop them on every save.
+	Settings map[string]string `json:"settings,omitempty"`
 }
 
 type storedLayout struct {
+	// Absent (0) means a pre-versioning v1 layout; see layoutVersion.
+	Version int            `json:"version,omitempty"`
 	Widgets []storedWidget `json:"widgets"`
 }
 
@@ -307,7 +320,10 @@ func parseDashboardLayout(body []byte) ([]byte, error) {
 		if wgt.ID == "" || wgt.Type == "" {
 			return nil, fmt.Errorf("every widget needs an id and a type")
 		}
-		if wgt.X < 0 || wgt.Y < 0 || wgt.W <= 0 || wgt.H <= 0 || wgt.W > 12 || wgt.H > 40 || wgt.X > 12 || wgt.Y > 1000 {
+		if len(wgt.Settings) > 20 {
+			return nil, fmt.Errorf("widget %q has too many settings", wgt.ID)
+		}
+		if wgt.X < 0 || wgt.Y < 0 || wgt.W <= 0 || wgt.H <= 0 || wgt.W > 12 || wgt.H > 80 || wgt.X > 12 || wgt.Y > 1000 {
 			return nil, fmt.Errorf("widget %q has out-of-bounds grid coordinates", wgt.ID)
 		}
 	}

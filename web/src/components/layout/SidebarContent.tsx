@@ -56,8 +56,8 @@ export function SidebarContent({
                 "nav-item group relative flex items-center gap-2.5 rounded-sm px-2.5 py-1.5 font-display text-sm font-medium transition-all duration-150 select-none",
                 collapsed && "justify-center px-2",
                 active
-                  ? "nav-item-active border border-brand-700/50 bg-[var(--sidebar-active-bg)] text-[var(--sidebar-active-text)]"
-                  : "border border-transparent text-[var(--sidebar-text-muted)] hover:bg-[var(--sidebar-active-bg)] hover:text-[var(--sidebar-text)]",
+                  ? "nav-item-active bg-[var(--sidebar-active-bg)] text-[var(--sidebar-active-text)]"
+                  : "text-[var(--sidebar-text-muted)] hover:bg-[var(--sidebar-active-bg)] hover:text-[var(--sidebar-text)]",
               )
               const link = (
                 <NavLink

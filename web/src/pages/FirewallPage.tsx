@@ -33,13 +33,16 @@ function ClusterFirewallSwitch({ connId }: { connId: string }) {
   })
   const toggle = useMutation({
     mutationFn: (enable: boolean) => api.put(`/connections/${connId}/cluster/firewall/options`, { enable }),
-    onSuccess: () => {
+    onSuccess: (_data, enable) => {
+      toast.success(`Cluster firewall ${enable ? "enabled" : "disabled"}`)
       queryClient.invalidateQueries({ queryKey: ["fw-options", connId] })
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to update firewall options"),
   })
 
-  if (optionsQuery.isError) return null
+  if (optionsQuery.isError) {
+    return <p className="text-xs text-[var(--text-muted)]">Couldn't load firewall status.</p>
+  }
   const enabled = optionsQuery.data?.enable === 1
 
   return (
@@ -129,7 +132,7 @@ function AliasesAndIPSets({ connId }: { connId: string }) {
           <Plus className="h-3.5 w-3.5" /> Add alias
         </Button>
         {showAliasForm && (
-          <div className="grid grid-cols-3 gap-3 rounded-md border border-[var(--border)] p-3">
+          <div className="grid grid-cols-1 gap-3 rounded-md border border-[var(--border)] p-3 sm:grid-cols-3">
             <Input placeholder="Name" value={aliasForm.name} onChange={(e) => setAliasForm({ ...aliasForm, name: e.target.value })} />
             <Input placeholder="CIDR" value={aliasForm.cidr} onChange={(e) => setAliasForm({ ...aliasForm, cidr: e.target.value })} />
             <Button size="sm" disabled={!aliasForm.name || !aliasForm.cidr || addAlias.isPending} onClick={() => addAlias.mutate()}>
@@ -138,6 +141,8 @@ function AliasesAndIPSets({ connId }: { connId: string }) {
           </div>
         )}
         <div className="space-y-1.5">
+          {aliasesQuery.isLoading && <Skeleton className="h-9" />}
+          {aliasesQuery.isError && <p className="text-sm text-[var(--text-muted)]">Could not load aliases.</p>}
           {aliasesQuery.data?.map((a) => (
             <div key={a.name} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
               <span className="min-w-0 break-all">
@@ -166,7 +171,7 @@ function AliasesAndIPSets({ connId }: { connId: string }) {
           <Plus className="h-3.5 w-3.5" /> Create IP set
         </Button>
         {showIPSetForm && (
-          <div className="grid grid-cols-3 gap-3 rounded-md border border-[var(--border)] p-3">
+          <div className="grid grid-cols-1 gap-3 rounded-md border border-[var(--border)] p-3 sm:grid-cols-3">
             <Input placeholder="Name" value={ipsetForm.name} onChange={(e) => setIpsetForm({ ...ipsetForm, name: e.target.value })} />
             <Input placeholder="Comment" value={ipsetForm.comment} onChange={(e) => setIpsetForm({ ...ipsetForm, comment: e.target.value })} />
             <Button size="sm" disabled={!ipsetForm.name || addIPSet.isPending} onClick={() => addIPSet.mutate()}>
@@ -175,6 +180,8 @@ function AliasesAndIPSets({ connId }: { connId: string }) {
           </div>
         )}
         <div className="space-y-1.5">
+          {ipsetsQuery.isLoading && <Skeleton className="h-9" />}
+          {ipsetsQuery.isError && <p className="text-sm text-[var(--text-muted)]">Could not load IP sets.</p>}
           {ipsetsQuery.data?.map((s) => (
             <div key={s.name} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
               <span className="min-w-0 break-words">

@@ -5,6 +5,7 @@ import { api, type AlertInstance } from "@/lib/api"
 import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { scopedConnection } from "@/lib/fleet"
 import { useMemo } from "react"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 export function AlertActivityWidget({ settings }: { settings: WidgetSettings }) {
   const connId = scopedConnection(settings)
@@ -29,6 +30,8 @@ export function AlertActivityWidget({ settings }: { settings: WidgetSettings }) 
   const critical = connId === "all" ? summaryQuery.data?.critical ?? 0 : active.filter((a) => a.severity === "critical").length
   const total = warning + critical
 
+  if (summaryQuery.isError && activeQuery.isError) return <WidgetError />
+
   if (total === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-1 text-center">
@@ -50,7 +53,7 @@ export function AlertActivityWidget({ settings }: { settings: WidgetSettings }) 
       <DonutChart data={slices} centerValue={String(total)} centerLabel="active" height={110} />
       <DonutLegend data={slices} />
       {latest.length > 0 && (
-        <div className="w-full space-y-1 border-t border-[var(--border)] pt-2">
+        <div className="mb-1 w-full space-y-1 border-t border-[var(--border)] pt-2">
           {latest.map((a) => (
             <p key={a.id} className="flex items-center gap-1.5 truncate text-xs text-[var(--text-muted)]">
               <StatusDot status={a.severity === "critical" ? "error" : "warn"} />

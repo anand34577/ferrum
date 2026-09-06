@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strconv"
+	"strings"
 )
 
 // Disk is one physical drive as reported by PVE's disk manager
@@ -71,4 +73,164 @@ func (c *Client) DiskSMART(ctx context.Context, node, devpath string) (*SmartDat
 		return nil, err
 	}
 	return &out.Data, nil
+}
+
+// --- Provisioning: turning an idle physical disk into usable storage.
+// Everything below is destructive (wipes/repartitions the disk) or creates
+// a new pool/volume group; callers must gate these behind an admin check
+// and a scary confirmation, same as any other irreversible operation.
+
+// WipeDisk destroys the partition table (and any filesystem signatures) on
+// devpath, returning it to "unused" so it can be handed to InitGPT or one of
+// the CreateXStorage calls below. Synchronous, no UPID.
+func (c *Client) WipeDisk(ctx context.Context, node, devpath string) error {
+	form := url.Values{"disk": {devpath}}
+	return c.post(ctx, fmt.Sprintf("/nodes/%s/disks/wipedisk", PathEscape(node)), form, nil)
+}
+
+// InitGPT writes a fresh GPT partition table to devpath. uuid is optional
+// (PVE generates one when empty). Returns a UPID.
+func (c *Client) InitGPT(ctx context.Context, node, devpath, uuid string) (string, error) {
+	form := url.Values{"disk": {devpath}}
+	if uuid != "" {
+		form.Set("uuid", uuid)
+	}
+	var out struct {
+		Data string `json:"data"`
+	}
+	if err := c.post(ctx, fmt.Sprintf("/nodes/%s/disks/initgpt", PathEscape(node)), form, &out); err != nil {
+		return "", err
+	}
+	return out.Data, nil
+}
+
+func boolForm(b bool) string {
+	if b {
+		return "1"
+	}
+	return "0"
+}
+
+// CreateDirectoryStorage formats devpath with ext4 and mounts it under
+// /mnt/pve/<name>, optionally registering it as a "dir" storage
+// (add_storage=1) so it's immediately usable for VM disks/backups/ISOs.
+// Returns a UPID.
+func (c *Client) CreateDirectoryStorage(ctx context.Context, node, devpath, name string, addStorage bool) (string, error) {
+	form := url.Values{"device": {devpath}, "name": {name}, "add_storage": {boolForm(addStorage)}}
+	var out struct {
+		Data string `json:"data"`
+	}
+	if err := c.post(ctx, fmt.Sprintf("/nodes/%s/disks/directory", PathEscape(node)), form, &out); err != nil {
+		return "", err
+	}
+	return out.Data, nil
+}
+
+// CreateLVMStorage creates an LVM volume group on devpath, optionally
+// registering it as an "lvm" storage. Returns a UPID.
+func (c *Client) CreateLVMStorage(ctx context.Context, node, devpath, name string, addStorage bool) (string, error) {
+	form := url.Values{"device": {devpath}, "name": {name}, "add_storage": {boolForm(addStorage)}}
+	var out struct {
+		Data string `json:"data"`
+	}
+	if err := c.post(ctx, fmt.Sprintf("/nodes/%s/disks/lvm", PathEscape(node)), form, &out); err != nil {
+		return "", err
+	}
+	return out.Data, nil
+}
+
+// CreateLVMThinStorage creates an LVM-thin pool on devpath, optionally
+// registering it as an "lvmthin" storage. Returns a UPID.
+func (c *Client) CreateLVMThinStorage(ctx context.Context, node, devpath, name string, addStorage bool) (string, error) {
+	form := url.Values{"device": {devpath}, "name": {name}, "add_storage": {boolForm(addStorage)}}
+	var out struct {
+		Data string `json:"data"`
+	}
+	if err := c.post(ctx, fmt.Sprintf("/nodes/%s/disks/lvmthin", PathEscape(node)), form, &out); err != nil {
+		return "", err
+	}
+	return out.Data, nil
+}
+
+// CreateZFSPool creates a ZFS pool spanning devices (raidlevel e.g. "single",
+// "mirror", "raid10", "raidz", "raidz2", "raidz3"), optionally registering it
+// as a "zfspool" storage. ashift <= 0 leaves it at PVE's default. Returns a
+// UPID.
+func (c *Client) CreateZFSPool(ctx context.Context, node, name string, devices []string, raidLevel string, ashift int, addStorage bool) (string, error) {
+	form := url.Values{
+		"name":        {name},
+		"devices":     {strings.Join(devices, ",")},
+		"add_storage": {boolForm(addStorage)},
+	}
+	if raidLevel != "" {
+		form.Set("raidlevel", raidLevel)
+	}
+	if ashift > 0 {
+		form.Set("ashift", strconv.Itoa(ashift))
+	}
+	var out struct {
+		Data string `json:"data"`
+	}
+	if err := c.post(ctx, fmt.Sprintf("/nodes/%s/disks/zfs", PathEscape(node)), form, &out); err != nil {
+		return "", err
+	}
+	return out.Data, nil
+}
+
+// ZFSPoolInfo is one existing ZFS pool as reported by the disk manager
+// (/nodes/{node}/disks/zfs) — distinct from the guest-facing storage config,
+// this is what's actually on-disk regardless of whether it's registered.
+type ZFSPoolInfo struct {
+	Name   string `json:"name"`
+	Size   int64  `json:"size,omitempty"`
+	Free   int64  `json:"free,omitempty"`
+	Health string `json:"health,omitempty"`
+}
+
+// NodeZFSPools lists ZFS pools already present on node.
+func (c *Client) NodeZFSPools(ctx context.Context, node string) ([]ZFSPoolInfo, error) {
+	var out struct {
+		Data []ZFSPoolInfo `json:"data"`
+	}
+	if err := c.get(ctx, fmt.Sprintf("/nodes/%s/disks/zfs", PathEscape(node)), &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
+}
+
+// LVMVolumeGroup is one existing LVM volume group (/nodes/{node}/disks/lvm).
+type LVMVolumeGroup struct {
+	Name string `json:"name"`
+	Size int64  `json:"size,omitempty"`
+	Free int64  `json:"free,omitempty"`
+}
+
+// NodeLVMVolumeGroups lists LVM volume groups already present on node.
+func (c *Client) NodeLVMVolumeGroups(ctx context.Context, node string) ([]LVMVolumeGroup, error) {
+	var out struct {
+		Data []LVMVolumeGroup `json:"data"`
+	}
+	if err := c.get(ctx, fmt.Sprintf("/nodes/%s/disks/lvm", PathEscape(node)), &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
+}
+
+// LVMThinPool is one existing LVM-thin pool (/nodes/{node}/disks/lvmthin).
+type LVMThinPool struct {
+	LV   string `json:"lv"`
+	VG   string `json:"vg"`
+	Size int64  `json:"size,omitempty"`
+	Used int64  `json:"used,omitempty"`
+}
+
+// NodeLVMThinPools lists LVM-thin pools already present on node.
+func (c *Client) NodeLVMThinPools(ctx context.Context, node string) ([]LVMThinPool, error) {
+	var out struct {
+		Data []LVMThinPool `json:"data"`
+	}
+	if err := c.get(ctx, fmt.Sprintf("/nodes/%s/disks/lvmthin", PathEscape(node)), &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
 }

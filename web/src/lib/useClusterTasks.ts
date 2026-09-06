@@ -6,33 +6,34 @@ export interface FleetTask extends Task {
   connName: string
 }
 
-// Aggregates /nodes/{node}/tasks across every configured connection so
-// widgets and the Task Center page share one polling strategy. An optional
-// connection id scopes the stream to one Proxmox host/cluster.
+// Aggregates /cluster/tasks across every configured connection so widgets and
+// the Task Center page share one polling strategy. An optional connection id
+// scopes the stream to one Proxmox host/cluster.
+//
+// This deliberately does NOT fan out over nodes: PVE aggregates the task log
+// cluster-wide, so one request per *connection* returns what one request per
+// *node* used to, at 1/N the upstream cost on every 10s tick.
 export function useClusterTasks(scopeConnId?: string) {
   const { data: inventory } = useQuery({
     queryKey: ["inventory"],
     queryFn: ({ signal }) => api.get<ConnectionInventory[]>("/inventory/", { signal }),
   })
 
-  const nodeTargets =
+  const targets =
     inventory
       ?.filter((conn) => !scopeConnId || scopeConnId === "all" || conn.connectionId === scopeConnId)
-      .flatMap((conn) =>
-        (conn.resources ?? [])
-          .filter((r) => r.type === "node")
-          .map((n) => ({ connId: conn.connectionId, connName: conn.name, node: n.node })),
-      ) ?? []
+      .map((conn) => ({ connId: conn.connectionId, connName: conn.name })) ?? []
 
   const taskQueries = useQueries({
-    queries: nodeTargets.map((t) => ({
-      queryKey: ["tasks", t.connId, t.node],
-      queryFn: ({ signal }) => api.get<Task[]>(`/connections/${t.connId}/nodes/${t.node}/tasks`, { signal }),
+    queries: targets.map((t) => ({
+      queryKey: ["cluster-tasks", t.connId],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        api.get<Task[]>(`/connections/${t.connId}/cluster/tasks`, { signal }),
       refetchInterval: 10_000,
     })),
   })
 
-  const tasks: FleetTask[] = nodeTargets.flatMap((t, i) =>
+  const tasks: FleetTask[] = targets.flatMap((t, i) =>
     (taskQueries[i].data ?? []).map((task) => ({ ...task, connId: t.connId, connName: t.connName })),
   )
   tasks.sort((a, b) => b.starttime - a.starttime)

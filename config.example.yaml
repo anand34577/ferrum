@@ -12,6 +12,13 @@ server:
   # marked Secure for requests the proxy reports as https.
   # FERRUM_BEHIND_PROXY
   behindProxy: false
+  # tlsCertFile/tlsKeyFile: set both to have Ferrum terminate TLS itself
+  # (standalone deployments with no reverse proxy in front of it). Leave
+  # both blank (the default) for plain HTTP — the common case, since most
+  # deployments put a TLS-terminating reverse proxy in front of Ferrum.
+  # FERRUM_TLS_CERT_FILE / FERRUM_TLS_KEY_FILE
+  tlsCertFile: ""
+  tlsKeyFile: ""
 
 db:
   driver: sqlite # FERRUM_DB_DRIVER — "sqlite" (default) or "postgres"
@@ -24,6 +31,14 @@ db:
 # secret is generated and persisted next to the SQLite file on first run —
 # fine for a single-node SQLite install. FERRUM_SECRET
 
+# needleBinPath: path to a Needle 2 (https://huggingface.co/Cactus-Compute/needle2)
+# CLI binary, downloaded separately by you — Ferrum does not fetch it — to
+# back an optional zero-config, no-API-key, fully local AI provider. Left
+# blank (the default), that provider is simply unavailable; every other
+# provider configured from Settings > AI Providers is unaffected. See
+# README "Built-in LLM (Needle 2)". FERRUM_NEEDLE_BIN
+needleBinPath: ""
+
 # oidc: optional single sign-on via any standard OpenID Connect provider
 # (Keycloak, Authentik, Entra ID, Okta, ...). Local username/password login
 # keeps working regardless — this adds a "Continue with ..." button next to
@@ -32,6 +47,14 @@ db:
 # automatically. Unverified IdP email addresses never link into existing
 # accounts. The first login requires promoting the user to admin from the
 # Users page.
+#
+# NOTE: this section (and its FERRUM_OIDC_* env equivalents) is a first-boot
+# SEED ONLY — it's copied into the database once, the first time Ferrum ever
+# starts against a fresh database. Every boot after that, and any save from
+# Settings > SSO in the UI, reads and writes the database exclusively; editing
+# this file (or the env vars) later has no effect. Manage OIDC from the
+# Settings UI once the instance is running — this file only exists to
+# pre-seed it for automated/scripted first-time deployment.
 oidc:
   enabled: false # FERRUM_OIDC_ENABLED
   displayName: Keycloak # FERRUM_OIDC_DISPLAY_NAME — shown on the login button

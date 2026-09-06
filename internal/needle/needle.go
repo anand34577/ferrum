@@ -1,0 +1,357 @@
+// Package needle wraps Cactus Compute's Needle 2 (https://huggingface.co/Cactus-Compute/needle2)
+// — a 45M-parameter, tool-calling-focused model that ships as a small
+// self-contained CLI binary — as a zero-config, no-API-key "built-in" AI
+// provider for Ferrum's AI Assistant and MCP tool-calling loop.
+//
+// Ferrum does not download, bundle, or execute this binary automatically:
+// it is a proprietary third-party artifact (CLI binary or WASM component)
+// distributed only from Hugging Face, and Ferrum never fetches executable
+// content from the network on its own. An operator who wants this provider
+// must download the CLI binary for their platform themselves and point
+// FERRUM_NEEDLE_BIN (or the default ./data/needle/needle[.exe]) at it — see
+// README "Built-in LLM (Needle 2)" for the exact steps. Available() reports
+// false, and every call fails with a clear "not installed" error, until
+// that file exists.
+//
+// Needle's own HTTP server (`needle --serve`) is NOT OpenAI-compatible: it
+// takes a single `{"input": "..."}` string per request (no message history,
+// no per-request tool list — tools are fixed for the process's lifetime via
+// `--tools`) and returns a structured function-call/reasoning object, not a
+// chat-completion. This package is the adapter between that shape and the
+// OpenAI chat-completion shape the rest of Ferrum already speaks (see
+// internal/api/ai_chat.go's callChatCompletion), so from the caller's point
+// of view a Needle-backed provider behaves like any other.
+package needle
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+)
+
+// BaseURL is the sentinel value stored in ai_providers.base_url to mean
+// "route through the built-in Needle manager" instead of making a real HTTP
+// call — chosen so the existing provider schema (name/baseURL/apiKey/model)
+// needs no new column or migration to carry a fourth, local provider kind.
+const BaseURL = "needle://local"
+
+// IsBuiltin reports whether baseURL names the built-in Needle provider.
+func IsBuiltin(baseURL string) bool { return baseURL == BaseURL }
+
+// listenAddr is where the Needle CLI's --serve mode listens. The README
+// excerpt Ferrum was built against documents no --port flag (just "runs on
+// localhost:8080"), so this is fixed rather than guessed at — a future
+// Needle build that adds one can have this promoted to a Manager field.
+const listenAddr = "127.0.0.1:8080"
+
+// startTimeout bounds how long ensureRunning waits for a freshly spawned
+// process to answer its first request before giving up and reporting the
+// binary as unusable this run.
+const startTimeout = 10 * time.Second
+
+// Manager owns the lifecycle of at most one Needle CLI subprocess — "each
+// component instance owns one conversation" per the model's own docs, and
+// Ferrum's tool catalog (internal/mcp) is effectively static, so one
+// long-lived process serving every caller is the right shape; a per-request
+// or per-user process would only add startup latency for no real benefit.
+type Manager struct {
+	binPath string
+
+	mu      sync.Mutex
+	cmd     *exec.Cmd
+	running bool
+}
+
+func NewManager(binPath string) *Manager {
+	return &Manager{binPath: binPath}
+}
+
+// Available reports whether the configured binary exists — used to hide/
+// disable the built-in provider in the UI and to fail fast with a clear
+// message instead of an opaque connection error.
+func (m *Manager) Available() bool {
+	if m.binPath == "" {
+		return false
+	}
+	info, err := os.Stat(m.binPath)
+	return err == nil && !info.IsDir()
+}
+
+// Close stops the subprocess, if running. Safe to call even if it was never
+// started. Called once at server shutdown (see cmd/ferrum/main.go).
+func (m *Manager) Close() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.closeLocked()
+}
+
+// closeLocked is Close's body, split out so ensureRunning (which already
+// holds m.mu) can kill a process that failed to become ready without
+// deadlocking on Close's own lock.
+func (m *Manager) closeLocked() {
+	if m.cmd != nil && m.cmd.Process != nil {
+		_ = m.cmd.Process.Kill()
+	}
+	m.running = false
+	m.cmd = nil
+}
+
+// ensureRunning starts the Needle subprocess on first use and waits for it
+// to accept requests. A dead/never-started process is (re)spawned; an
+// already-healthy one is reused — see the mutex-guarded m.running flag.
+//
+// ponytail: no crash-loop/backoff supervision — if the process dies mid-run,
+// the next call's health check fails, running is reset, and one fresh
+// process is spawned. Add real supervision if Needle proves flaky in
+// practice; nothing observed in its docs suggests it will be.
+func (m *Manager) ensureRunning(ctx context.Context) error {
+	if !m.Available() {
+		return fmt.Errorf("needle binary not found at %q — see README \"Built-in LLM (Needle 2)\" for install steps", m.binPath)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.running {
+		return nil
+	}
+
+	toolsPath, err := writeToolsFile()
+	if err != nil {
+		return fmt.Errorf("writing needle tools file: %w", err)
+	}
+
+	cmd := exec.Command(m.binPath, "--tools", toolsPath, "--serve")
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting needle: %w", err)
+	}
+	m.cmd = cmd
+	m.running = true
+	// Tracks the subprocess exiting on its own (crash, or killed externally)
+	// so the next ensureRunning call notices and respawns instead of trying
+	// to reuse a dead process — Signal(0)-style liveness checks aren't
+	// reliably supported cross-platform (notably on Windows), but Wait() is.
+	go func() {
+		_ = cmd.Wait()
+		m.mu.Lock()
+		if m.cmd == cmd {
+			m.running = false
+			m.cmd = nil
+		}
+		m.mu.Unlock()
+	}()
+
+	deadline := time.Now().Add(startTimeout)
+	for time.Now().Before(deadline) {
+		// Any completed HTTP round-trip — even a Needle-side error response
+		// — proves the server is accepting connections; only a transport
+		// failure (connection refused, still starting up) means "not ready".
+		pingCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		_, _, err := doComplete(pingCtx, "ping")
+		cancel()
+		if err == nil {
+			return nil
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	m.closeLocked()
+	return fmt.Errorf("needle did not become ready within %s", startTimeout)
+}
+
+// --- request/response translation ---
+
+// needleTool mirrors the JSON schema Needle's README documents for --tools:
+// {"name", "description", "parameters"} — the same shape as the inner
+// "function" object of an OpenAI tool definition, so converting Ferrum's
+// existing tool catalog is a direct field copy.
+type needleTool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
+}
+
+// writeToolsFile renders Ferrum's MCP tool catalog into the JSON file the
+// Needle CLI expects via --tools, in the OS temp dir. The catalog is static
+// for the process lifetime (see the Manager doc comment), so this only
+// needs to happen once per subprocess start, not per request.
+func writeToolsFile() (string, error) {
+	tools := toolCatalog()
+	out := make([]needleTool, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, needleTool{Name: t.Name, Description: t.Description, Parameters: t.InputSchema})
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(os.TempDir(), "ferrum-needle-tools.json")
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// toolCatalogFunc is overridden by tests (and set by internal/api at init)
+// to avoid an import cycle with internal/mcp — this package only needs the
+// name/description/schema triple, not mcp's handler wiring.
+var toolCatalogFunc func() []ToolDef
+
+// ToolDef is the subset of mcp.Tool this package needs.
+type ToolDef struct {
+	Name        string
+	Description string
+	InputSchema map[string]any
+}
+
+// SetToolCatalog is called once at startup (internal/api/server.go) with
+// mcp.ToolDefinitions adapted to ToolDef, so this package can render
+// --tools.json without importing internal/mcp directly.
+func SetToolCatalog(f func() []ToolDef) { toolCatalogFunc = f }
+
+func toolCatalog() []ToolDef {
+	if toolCatalogFunc == nil {
+		return nil
+	}
+	return toolCatalogFunc()
+}
+
+type needleRequest struct {
+	Input string `json:"input"`
+}
+
+// needleResponse is the shape documented in Needle's README for a completed
+// /complete call — see the package doc comment. Fields beyond FunctionCalls/
+// Reasoning/Error are accepted but unused.
+type needleResponse struct {
+	Type          string           `json:"type"`
+	Success       *bool            `json:"success"`
+	FunctionCalls []needleFuncCall `json:"function_calls"`
+	Reasoning     string           `json:"reasoning"`
+	Text          string           `json:"text"`
+	Error         string           `json:"error"`
+}
+
+type needleFuncCall struct {
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments"`
+}
+
+func doComplete(ctx context.Context, input string) (*needleResponse, int, error) {
+	body, err := json.Marshal(needleRequest{Input: input})
+	if err != nil {
+		return nil, 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+listenAddr+"/complete", bytes.NewReader(body))
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	var parsed needleResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("decoding needle response: %w", err)
+	}
+	return &parsed, resp.StatusCode, nil
+}
+
+// flattenMessages reduces an OpenAI-shaped message history down to the
+// single input string Needle's API accepts. Needle is a short-command
+// tool-router, not a long-context chat model (45M parameters, no documented
+// multi-turn API), so this is a lossy heuristic, not a real substitute for
+// message-array context:
+//
+// ponytail: sends the system prompt plus every message flattened as
+// "role: content" lines. If real usage shows Needle losing track of context
+// on longer conversations, narrow this to (system prompt + last user
+// message + recent tool results) instead of the full transcript — that
+// matches how the model was actually designed to be used.
+func flattenMessages(messages []map[string]any) string {
+	lines := make([]string, 0, len(messages))
+	for _, m := range messages {
+		role, _ := m["role"].(string)
+		content, _ := m["content"].(string)
+		if content == "" {
+			continue
+		}
+		lines = append(lines, role+": "+content)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// toOpenAIMessage converts a parsed Needle response into the same
+// role/content/tool_calls map shape internal/api/ai_chat.go already expects
+// back from callChatCompletion, so the tool-calling loop needs no special
+// case for this provider.
+func toOpenAIMessage(nr *needleResponse) (map[string]any, error) {
+	if nr.Error != "" {
+		return nil, fmt.Errorf("needle: %s", nr.Error)
+	}
+	if len(nr.FunctionCalls) > 0 {
+		calls := make([]any, 0, len(nr.FunctionCalls))
+		for i, fc := range nr.FunctionCalls {
+			args, err := json.Marshal(fc.Arguments)
+			if err != nil {
+				return nil, err
+			}
+			calls = append(calls, map[string]any{
+				"id":   fmt.Sprintf("needle_call_%d", i),
+				"type": "function",
+				"function": map[string]any{
+					"name":      fc.Name,
+					"arguments": string(args),
+				},
+			})
+		}
+		return map[string]any{"role": "assistant", "content": nil, "tool_calls": calls}, nil
+	}
+	content := nr.Text
+	if content == "" {
+		content = nr.Reasoning
+	}
+	return map[string]any{"role": "assistant", "content": content}, nil
+}
+
+// ChatCompletion is Needle's counterpart to internal/api/ai_chat.go's
+// callChatCompletion — same signature shape (minus baseURL/apiKey/model,
+// which are meaningless for a fixed local subprocess), same return shape,
+// so ai_chat.go can call whichever one applies with no other branching.
+func (m *Manager) ChatCompletion(ctx context.Context, messages []map[string]any, _ []map[string]any) (map[string]any, int, error) {
+	if err := m.ensureRunning(ctx); err != nil {
+		return nil, http.StatusBadGateway, err
+	}
+	input := flattenMessages(messages)
+	resp, status, err := doComplete(ctx, input)
+	if err != nil {
+		return nil, status, err
+	}
+	msg, err := toOpenAIMessage(resp)
+	if err != nil {
+		return nil, status, err
+	}
+	return msg, http.StatusOK, nil
+}
+
+// TestConnection is the built-in provider's counterpart to
+// testProviderConnection (internal/api/ai_providers.go) — used by the
+// Settings "test" button and by model discovery, since there's no real
+// GET /models endpoint to call.
+func (m *Manager) TestConnection(ctx context.Context) ([]string, error) {
+	if err := m.ensureRunning(ctx); err != nil {
+		return nil, err
+	}
+	return []string{"needle2"}, nil
+}

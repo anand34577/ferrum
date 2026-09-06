@@ -25,6 +25,23 @@ func (s *Server) clusterStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, status)
 }
 
+// clusterTasks is the cluster-wide task list. It replaces the client-side
+// habit of calling /nodes/{node}/tasks once per node on every poll tick:
+// PVE already aggregates this, so an N-node cluster costs one upstream call.
+func (s *Server) clusterTasks(w http.ResponseWriter, r *http.Request) {
+	client, err := s.clientFor(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	tasks, err := client.ClusterTasks(r.Context(), 200)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, tasks)
+}
+
 func (s *Server) clusterLog(w http.ResponseWriter, r *http.Request) {
 	client, err := s.clientFor(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
@@ -365,6 +382,50 @@ func (s *Server) addHAResource(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
 }
 
+// updateHAResourceRequest uses pointers (unlike addHAResourceRequest) so an
+// omitted field means "leave as-is" — 0 is a legitimate explicit value for
+// MaxRestart/MaxRelocate ("don't restart/relocate"), so a plain int can't
+// tell "not sent" from "sent as zero".
+type updateHAResourceRequest struct {
+	Group       *string `json:"group,omitempty"`
+	MaxRestart  *int    `json:"maxRestart,omitempty"`
+	MaxRelocate *int    `json:"maxRelocate,omitempty"`
+	Comment     *string `json:"comment,omitempty"`
+}
+
+func (s *Server) updateHAResource(w http.ResponseWriter, r *http.Request) {
+	sid := chi.URLParam(r, "sid")
+	var req updateHAResourceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	client, err := s.clientFor(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	group, maxRestart, maxRelocate, comment := "", -1, -1, ""
+	if req.Group != nil {
+		group = *req.Group
+	}
+	if req.MaxRestart != nil {
+		maxRestart = *req.MaxRestart
+	}
+	if req.MaxRelocate != nil {
+		maxRelocate = *req.MaxRelocate
+	}
+	if req.Comment != nil {
+		comment = *req.Comment
+	}
+	if err := client.UpdateHAResource(r.Context(), sid, group, maxRestart, maxRelocate, comment); err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "ha.update-resource", "ha", sid)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func (s *Server) removeHAResource(w http.ResponseWriter, r *http.Request) {
 	sid := chi.URLParam(r, "sid")
 	client, err := s.clientFor(r.Context(), chi.URLParam(r, "id"))
@@ -436,6 +497,12 @@ type backupJobRequest struct {
 	Enabled  bool   `json:"enabled"`
 	Comment  string `json:"comment,omitempty"`
 	Prune    int    `json:"prune,omitempty"`
+
+	NotificationMode   string `json:"notificationMode,omitempty"`
+	MailTo             string `json:"mailTo,omitempty"`
+	MailNotification   string `json:"mailNotification,omitempty"`
+	BandwidthLimitKBps int    `json:"bandwidthLimitKBps,omitempty"`
+	Pigz               *int   `json:"pigz,omitempty"`
 }
 
 func (req backupJobRequest) toOptions() pve.CreateBackupJobOptions {
@@ -443,6 +510,8 @@ func (req backupJobRequest) toOptions() pve.CreateBackupJobOptions {
 		Schedule: req.Schedule, Storage: req.Storage, VMIDs: req.VMIDs,
 		Mode: req.Mode, Compress: req.Compress, Enabled: req.Enabled,
 		Comment: req.Comment, Prune: req.Prune,
+		NotificationMode: req.NotificationMode, MailTo: req.MailTo, MailNotification: req.MailNotification,
+		BandwidthLimitKBps: req.BandwidthLimitKBps, Pigz: req.Pigz,
 	}
 }
 
@@ -614,8 +683,13 @@ func (s *Server) datacenterOptions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, opts)
 }
 
+type updateDatacenterOptionsRequest struct {
+	pve.DatacenterOptions
+	Extra map[string]string `json:"extra,omitempty"`
+}
+
 func (s *Server) updateDatacenterOptions(w http.ResponseWriter, r *http.Request) {
-	var req pve.DatacenterOptions
+	var req updateDatacenterOptionsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, err)
 		return
@@ -625,7 +699,7 @@ func (s *Server) updateDatacenterOptions(w http.ResponseWriter, r *http.Request)
 		s.writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	if err := client.UpdateDatacenterOptions(r.Context(), req); err != nil {
+	if err := client.UpdateDatacenterOptions(r.Context(), req.DatacenterOptions, req.Extra); err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
 	}
@@ -712,5 +786,281 @@ func (s *Server) scheduleReplicationNow(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusBadGateway, err)
 		return
 	}
+	s.audit(r, "replication.run", "node", node+"/"+id)
 	writeJSON(w, http.StatusOK, map[string]string{"upid": upid})
+}
+
+type replicationJobRequest struct {
+	ID       string `json:"id,omitempty"` // required on create only; ignored on update (the path id wins)
+	Guest    int    `json:"guest,omitempty"`
+	Target   string `json:"target"`
+	Schedule string `json:"schedule,omitempty"`
+	Comment  string `json:"comment,omitempty"`
+	Disable  bool   `json:"disable,omitempty"`
+}
+
+func (req replicationJobRequest) toOptions() pve.CreateReplicationJobOptions {
+	return pve.CreateReplicationJobOptions{
+		ID: req.ID, Guest: req.Guest, Target: req.Target,
+		Schedule: req.Schedule, Comment: req.Comment, Disable: req.Disable,
+	}
+}
+
+func (s *Server) createReplicationJob(w http.ResponseWriter, r *http.Request) {
+	var req replicationJobRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.ID == "" || req.Guest == 0 || req.Target == "" {
+		writeErrorMsg(w, http.StatusBadRequest, "id, guest, and target are required")
+		return
+	}
+	client, err := s.clientFor(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if err := client.CreateReplicationJob(r.Context(), req.toOptions()); err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "replication-job.create", "replication", req.ID)
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
+}
+
+func (s *Server) updateReplicationJob(w http.ResponseWriter, r *http.Request) {
+	jobID := chi.URLParam(r, "repId")
+	var req replicationJobRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	client, err := s.clientFor(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if err := client.UpdateReplicationJob(r.Context(), jobID, req.toOptions()); err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "replication-job.update", "replication", jobID)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) deleteReplicationJob(w http.ResponseWriter, r *http.Request) {
+	jobID := chi.URLParam(r, "repId")
+	force := r.URL.Query().Get("force") == "1" || r.URL.Query().Get("force") == "true"
+	client, err := s.clientFor(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if err := client.DeleteReplicationJob(r.Context(), jobID, force); err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "replication-job.delete", "replication", jobID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Firewall security groups ---
+
+func (s *Server) firewallSecurityGroups(w http.ResponseWriter, r *http.Request) {
+	client, err := s.clientFor(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	groups, err := client.FirewallSecurityGroups(r.Context())
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, groups)
+}
+
+type securityGroupRequest struct {
+	Group   string `json:"group"`
+	Comment string `json:"comment,omitempty"`
+}
+
+func (s *Server) createFirewallSecurityGroup(w http.ResponseWriter, r *http.Request) {
+	var req securityGroupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Group == "" {
+		writeErrorMsg(w, http.StatusBadRequest, "group is required")
+		return
+	}
+	client, err := s.clientFor(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if err := client.CreateFirewallSecurityGroup(r.Context(), req.Group, req.Comment); err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "firewall.create-group", "firewall", req.Group)
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
+}
+
+func (s *Server) deleteFirewallSecurityGroup(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	client, err := s.clientFor(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if err := client.DeleteFirewallSecurityGroup(r.Context(), name); err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "firewall.delete-group", "firewall", name)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) securityGroupRules(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	client, err := s.clientFor(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	rules, err := client.SecurityGroupRules(r.Context(), name)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rules)
+}
+
+func (s *Server) addSecurityGroupRule(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	var req newFirewallRuleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Type == "" || req.Action == "" {
+		writeErrorMsg(w, http.StatusBadRequest, "type and action are required")
+		return
+	}
+	client, err := s.clientFor(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	rule := pve.NewFirewallRule{
+		Type: req.Type, Action: req.Action, Source: req.Source, Dest: req.Dest,
+		Proto: req.Proto, Dport: req.Dport, Sport: req.Sport, Macro: req.Macro,
+		Comment: req.Comment, Enable: req.Enable,
+	}
+	if err := client.AddSecurityGroupRule(r.Context(), name, rule); err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "firewall.add-group-rule", "firewall", name)
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
+}
+
+func (s *Server) deleteSecurityGroupRule(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	pos, err := strconv.Atoi(chi.URLParam(r, "pos"))
+	if err != nil {
+		writeErrorMsg(w, http.StatusBadRequest, "pos must be an integer")
+		return
+	}
+	client, err := s.clientFor(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if err := client.DeleteSecurityGroupRule(r.Context(), name, pos); err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "firewall.delete-group-rule", "firewall", name)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Storage configuration (add/edit/remove a storage backend) ---
+
+type storageConfigRequest struct {
+	Storage string            `json:"storage"`
+	Type    string            `json:"type"`
+	Content string            `json:"content,omitempty"`
+	Nodes   string            `json:"nodes,omitempty"`
+	Shared  bool              `json:"shared,omitempty"`
+	Disable bool              `json:"disable,omitempty"`
+	Extra   map[string]string `json:"extra,omitempty"`
+}
+
+func (req storageConfigRequest) toOptions() pve.CreateStorageOptions {
+	return pve.CreateStorageOptions{
+		Storage: req.Storage, Type: req.Type, Content: req.Content,
+		Nodes: req.Nodes, Shared: req.Shared, Disable: req.Disable, Extra: req.Extra,
+	}
+}
+
+func (s *Server) createStorage(w http.ResponseWriter, r *http.Request) {
+	var req storageConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Storage == "" || req.Type == "" {
+		writeErrorMsg(w, http.StatusBadRequest, "storage and type are required")
+		return
+	}
+	client, err := s.clientFor(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if err := client.CreateStorage(r.Context(), req.toOptions()); err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "storage.create", "storage", req.Storage)
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
+}
+
+func (s *Server) updateStorage(w http.ResponseWriter, r *http.Request) {
+	storage := chi.URLParam(r, "storage")
+	var req storageConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	client, err := s.clientFor(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if err := client.UpdateStorage(r.Context(), storage, req.toOptions()); err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "storage.update", "storage", storage)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) deleteStorage(w http.ResponseWriter, r *http.Request) {
+	storage := chi.URLParam(r, "storage")
+	client, err := s.clientFor(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if err := client.DeleteStorage(r.Context(), storage); err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "storage.delete", "storage", storage)
+	w.WriteHeader(http.StatusNoContent)
 }

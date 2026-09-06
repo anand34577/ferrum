@@ -14,6 +14,7 @@ export function TooltipContent({ className, sideOffset = 6, children, ...props }
         className={cn(
           "z-[400] max-w-64 rounded-md border border-[var(--sidebar-border)] bg-[var(--sidebar-bg)] px-2.5 py-1.5 text-xs text-[var(--sidebar-text)] shadow-md",
           "data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in data-[state=delayed-open]:zoom-in-95",
+          "data-[state=closed]:animate-out data-[state=closed]:fade-out data-[state=closed]:zoom-out-95",
           className,
         )}
         {...props}

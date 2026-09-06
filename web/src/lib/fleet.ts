@@ -25,7 +25,7 @@ export function useFleetOverview() {
 /** Full per-guest inventory, scoped to the widget's connection setting. */
 export function useScopedInventory(settings?: Record<string, string>) {
   const connId = scopedConnection(settings)
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError } = useQuery({
     queryKey: ["inventory"],
     queryFn: ({ signal }) => api.get<ConnectionInventory[]>("/inventory/", { signal }),
     refetchInterval: 15_000,
@@ -38,7 +38,7 @@ export function useScopedInventory(settings?: Record<string, string>) {
   const resources = useMemo(() => connections.flatMap((c) => c.resources ?? []), [connections])
   const scopeName = connId === "all" ? "All connections" : (data ?? []).find((c) => c.connectionId === connId)?.name ?? connId
 
-  return { connections, resources, scopeName, connId, isLoading }
+  return { connections, resources, scopeName, connId, isLoading, isError }
 }
 
 /** Connection list for widget scope dropdowns and topology metadata. */

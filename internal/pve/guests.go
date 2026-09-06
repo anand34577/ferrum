@@ -17,7 +17,13 @@ import (
 // NetIn/NetOut/DiskRead/DiskWrite are CUMULATIVE byte counters since the
 // guest started (not rates) — the UI derives rates from successive polls.
 type GuestLiveStatus struct {
-	Status    string  `json:"status"`
+	Status string `json:"status"`
+	// QMPStatus (QEMU only) is the finer-grained hypervisor state:
+	// "running" | "paused" | "prelaunch" | "postmigrate" | ... A VM
+	// suspended without saving state keeps Status=="running", so without
+	// this a paused guest is indistinguishable from a running one.
+	QMPStatus string `json:"qmpstatus,omitempty"`
+
 	Name      string  `json:"name,omitempty"`
 	CPU       float64 `json:"cpu,omitempty"` // 0..1 fraction of allocated CPUs
 	CPUs      int     `json:"cpus,omitempty"`
@@ -49,7 +55,8 @@ func (c *Client) GuestLiveStatus(ctx context.Context, guestType, node string, vm
 	return &out.Data, nil
 }
 
-// GuestPowerAction issues a start/stop/shutdown/reset/suspend/resume action.
+// GuestPowerAction issues a start/stop/shutdown/reboot/reset/suspend/resume
+// action.
 func (c *Client) GuestPowerAction(ctx context.Context, guestType, node string, vmid int, action string) (string, error) {
 	if guestType != "qemu" && guestType != "lxc" {
 		return "", fmt.Errorf("unknown guest type %q", guestType)
@@ -139,7 +146,11 @@ func (c *Client) GuestConfig(ctx context.Context, guestType, node string, vmid i
 	var out struct {
 		Data map[string]any `json:"data"`
 	}
-	if err := c.get(ctx, fmt.Sprintf("/nodes/%s/%s/%d/config", PathEscape(node), PathEscape(guestType), vmid), &out); err != nil {
+	// current=1 is deliberate. PVE defaults this endpoint to the *pending*
+	// config, so a cores/memory edit on a running guest came back as though
+	// it had already taken effect — the UI showed 16 GB while the VM was
+	// still running on 8 until its next full stop/start.
+	if err := c.get(ctx, fmt.Sprintf("/nodes/%s/%s/%d/config?current=1", PathEscape(node), PathEscape(guestType), vmid), &out); err != nil {
 		return nil, err
 	}
 	cfg := &GuestConfig{Raw: out.Data}
@@ -194,6 +205,8 @@ type CloneOptions struct {
 	TargetNode  string // empty = same node
 	Full        bool   // full clone vs linked clone (linked only valid from a template)
 	Storage     string // target storage (full clones only)
+	Format      string // target disk format for full clones: "raw" | "qcow2" | "vmdk"
+	Pool        string // target resource pool
 	Description string
 }
 
@@ -211,6 +224,12 @@ func (c *Client) CloneGuest(ctx context.Context, guestType, node string, vmid in
 	if opts.Storage != "" {
 		form.Set("storage", opts.Storage)
 	}
+	if opts.Format != "" {
+		form.Set("format", opts.Format)
+	}
+	if opts.Pool != "" {
+		form.Set("pool", opts.Pool)
+	}
 	if opts.Description != "" {
 		form.Set("description", opts.Description)
 	}
@@ -223,11 +242,50 @@ func (c *Client) CloneGuest(ctx context.Context, guestType, node string, vmid in
 	return out.Data, nil
 }
 
+// MigrateOptions configures a guest migration. TargetNode and Online are
+// always meaningful; the rest matter mainly for guests with local (non
+// shared-storage) disks — the common case outside Ceph/NFS-backed clusters —
+// which PVE otherwise rejects outright.
+type MigrateOptions struct {
+	TargetNode string
+	Online     bool // qemu: live migration; ignored for lxc (see Restart)
+
+	// WithLocalDisks lets a qemu/lxc guest with storage that isn't shared
+	// across the cluster migrate at all — PVE's migrate call fails with
+	// "storage is not shared" without it. Check MigratePrecondition first to
+	// see whether the guest actually has local disks.
+	WithLocalDisks bool
+	TargetStorage  string // remap all local disks to this storage on the target node
+	Bwlimit        int    // KiB/s cap on migration traffic; 0 = server default
+
+	// Restart requests PVE's "restart migration" for a running LXC container
+	// (stop, move, start on the target) — containers have no live-migration
+	// equivalent to qemu's Online. TimeoutSecs bounds how long PVE waits for
+	// the container to shut down before giving up (0 = PVE default).
+	Restart     bool
+	TimeoutSecs int
+}
+
 // MigrateGuest starts an offline or online (live) migration to another node.
-func (c *Client) MigrateGuest(ctx context.Context, guestType, node string, vmid int, targetNode string, online bool) (string, error) {
-	form := url.Values{"target": {targetNode}}
-	if online {
+func (c *Client) MigrateGuest(ctx context.Context, guestType, node string, vmid int, opts MigrateOptions) (string, error) {
+	form := url.Values{"target": {opts.TargetNode}}
+	if opts.Online && guestType == "qemu" {
 		form.Set("online", "1")
+	}
+	if opts.WithLocalDisks {
+		form.Set("with-local-disks", "1")
+	}
+	if opts.TargetStorage != "" {
+		form.Set("targetstorage", opts.TargetStorage)
+	}
+	if opts.Bwlimit > 0 {
+		form.Set("bwlimit", strconv.Itoa(opts.Bwlimit))
+	}
+	if guestType == "lxc" && opts.Restart {
+		form.Set("restart", "1")
+		if opts.TimeoutSecs > 0 {
+			form.Set("timeout", strconv.Itoa(opts.TimeoutSecs))
+		}
 	}
 	var out struct {
 		Data string `json:"data"`
@@ -236,6 +294,33 @@ func (c *Client) MigrateGuest(ctx context.Context, guestType, node string, vmid 
 		return "", err
 	}
 	return out.Data, nil
+}
+
+// MigratePreconditionResult reports whether/how a guest can migrate — call
+// before MigrateGuest so the UI can warn about local disks or an
+// incompatible target instead of letting PVE reject the migrate call.
+type MigratePreconditionResult struct {
+	// NotAllowedNodes are candidate targets PVE rejects for this guest
+	// (incompatible CPU, missing storage, etc), node -> reason(s).
+	NotAllowedNodes map[string]map[string]any `json:"not_allowed_nodes,omitempty"`
+	// LocalDisks lists this guest's disks that live on non-shared storage —
+	// migration needs WithLocalDisks (and often TargetStorage) set when
+	// this is non-empty.
+	LocalDisks map[string]any `json:"local_disks,omitempty"`
+	LocalResources []string `json:"local_resources,omitempty"` // e.g. passed-through USB/PCI devices — these block migration entirely
+	AllowLiveMigration bool `json:"allow_live_migration,omitempty"`
+}
+
+// MigratePrecondition is the GET /nodes/{node}/{qemu|lxc}/{vmid}/migrate
+// precondition check (qemu only — PVE doesn't expose it for lxc).
+func (c *Client) MigratePrecondition(ctx context.Context, node string, vmid int) (*MigratePreconditionResult, error) {
+	var out struct {
+		Data MigratePreconditionResult `json:"data"`
+	}
+	if err := c.get(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/migrate", PathEscape(node), vmid), &out); err != nil {
+		return nil, err
+	}
+	return &out.Data, nil
 }
 
 // Snapshot describes one point-in-time snapshot of a guest.
@@ -325,9 +410,47 @@ func (c *Client) UpdateGuestConfigRaw(ctx context.Context, guestType, node strin
 
 // ResizeDisk grows a guest's disk. size is a PVE size delta/absolute string,
 // e.g. "+10G" to grow by 10GB or "32G" to set an absolute size.
-func (c *Client) ResizeDisk(ctx context.Context, guestType, node string, vmid int, disk, size string) error {
+// ResizeDisk grows a guest disk in place. Returns a UPID when the target
+// storage backend performs the grow asynchronously (some network storage
+// types); most local backends resize synchronously and return "".
+func (c *Client) ResizeDisk(ctx context.Context, guestType, node string, vmid int, disk, size string) (string, error) {
 	form := url.Values{"disk": {disk}, "size": {size}}
-	return c.put(ctx, fmt.Sprintf("/nodes/%s/%s/%d/resize", PathEscape(node), PathEscape(guestType), vmid), form, nil)
+	var out struct {
+		Data string `json:"data"`
+	}
+	if err := c.put(ctx, fmt.Sprintf("/nodes/%s/%s/%d/resize", PathEscape(node), PathEscape(guestType), vmid), form, &out); err != nil {
+		return "", err
+	}
+	return out.Data, nil
+}
+
+// MoveDisk moves a guest's disk to a different storage (and optionally
+// format), unlike ResizeDisk which only grows a disk in place. For QEMU this
+// is POST .../move_disk; LXC exposes the equivalent operation as
+// POST .../move_volume with a differently-named volume parameter — both are
+// covered here since callers otherwise have to branch on guestType themselves.
+func (c *Client) MoveDisk(ctx context.Context, guestType, node string, vmid int, disk, targetStorage, format string, deleteSource bool) (string, error) {
+	volParam := "disk"
+	action := "move_disk"
+	if guestType == "lxc" {
+		volParam = "volume"
+		action = "move_volume"
+	}
+	form := url.Values{volParam: {disk}, "storage": {targetStorage}}
+	if format != "" {
+		form.Set("format", format)
+	}
+	if deleteSource {
+		form.Set("delete", "1")
+	}
+	var out struct {
+		Data string `json:"data"`
+	}
+	path := fmt.Sprintf("/nodes/%s/%s/%d/%s", PathEscape(node), PathEscape(guestType), vmid, action)
+	if err := c.post(ctx, path, form, &out); err != nil {
+		return "", err
+	}
+	return out.Data, nil
 }
 
 // NextID asks Proxmox for the next free VMID.
@@ -361,16 +484,47 @@ type CreateVMOptions struct {
 	SSHPublicKey string
 	IPConfig     string // e.g. "ip=dhcp" or "ip=10.0.0.5/24,gw=10.0.0.1"
 	Nameserver   string
+
+	// Archive restores the VM from a vzdump backup volume (e.g.
+	// "local:backup/vzdump-qemu-100-2024_01_01-00_00_00.vma.zst") instead of
+	// creating an empty guest — PVE's own restore path is just "create with
+	// archive set". When set, Cores/Memory/etc. are still honored as
+	// overrides; PVE fills in anything unset from the backup's config.
+	Archive string
+	// Force allows Archive to overwrite an existing VMID (PVE's own
+	// "force" flag on restore).
+	Force bool
+
+	// Extra holds additional raw config keys/values sent as-is — additional
+	// disks/NICs beyond the single scsi0/net0 this struct builds (e.g.
+	// "scsi1": "local-lvm:32", "net1": "virtio,bridge=vmbr1"), or any other
+	// PVE create parameter (bios, machine, cpu, ...) this struct doesn't
+	// name. Lets callers use every disk/NIC slot without a Go code change
+	// each time PVE adds one.
+	Extra map[string]string
 }
 
 func (c *Client) CreateVM(ctx context.Context, opts CreateVMOptions) (string, error) {
 	form := url.Values{
-		"vmid":   {strconv.Itoa(opts.VMID)},
-		"cores":  {strconv.Itoa(opts.Cores)},
-		"memory": {strconv.Itoa(opts.Memory)},
+		"vmid": {strconv.Itoa(opts.VMID)},
+	}
+	if opts.Cores > 0 {
+		form.Set("cores", strconv.Itoa(opts.Cores))
+	}
+	if opts.Memory > 0 {
+		form.Set("memory", strconv.Itoa(opts.Memory))
 	}
 	if opts.Name != "" {
 		form.Set("name", opts.Name)
+	}
+	if opts.Archive != "" {
+		form.Set("archive", opts.Archive)
+		if opts.Storage != "" {
+			form.Set("storage", opts.Storage)
+		}
+		if opts.Force {
+			form.Set("force", "1")
+		}
 	}
 	if opts.Bridge != "" {
 		form.Set("net0", "virtio,bridge="+opts.Bridge)
@@ -390,13 +544,19 @@ func (c *Client) CreateVM(ctx context.Context, opts CreateVMOptions) (string, er
 		form.Set("cipassword", opts.CIPassword)
 	}
 	if opts.SSHPublicKey != "" {
-		form.Set("sshkeys", url.QueryEscape(opts.SSHPublicKey))
+		// form.Encode() (used by the transport) already percent-encodes
+		// every value — encoding here too would double-encode the key and
+		// send PVE a mangled sshkeys value.
+		form.Set("sshkeys", opts.SSHPublicKey)
 	}
 	if opts.IPConfig != "" {
 		form.Set("ipconfig0", opts.IPConfig)
 	}
 	if opts.Nameserver != "" {
 		form.Set("nameserver", opts.Nameserver)
+	}
+	for k, v := range opts.Extra {
+		form.Set(k, v)
 	}
 
 	var out struct {
@@ -423,14 +583,35 @@ type CreateLXCOptions struct {
 	SSHPublicKey string
 	IPConfig     string
 	Unprivileged bool
+
+	// Archive restores the container from a vzdump backup volume (e.g.
+	// "local:backup/vzdump-lxc-101-2024_01_01-00_00_00.tar.zst") instead of
+	// unpacking Template. When set, Template is not required.
+	Archive string
+	Force   bool
+
+	// Extra holds additional raw config keys/values sent as-is — extra mount
+	// points/NICs beyond rootfs/net0 (e.g. "mp0": "local-lvm:8,mp=/data",
+	// "net1": "name=eth1,bridge=vmbr1") or any other PVE create parameter.
+	Extra map[string]string
 }
 
 func (c *Client) CreateLXC(ctx context.Context, opts CreateLXCOptions) (string, error) {
-	form := url.Values{
-		"vmid":       {strconv.Itoa(opts.VMID)},
-		"cores":      {strconv.Itoa(opts.Cores)},
-		"memory":     {strconv.Itoa(opts.Memory)},
-		"ostemplate": {opts.Template},
+	form := url.Values{"vmid": {strconv.Itoa(opts.VMID)}}
+	if opts.Cores > 0 {
+		form.Set("cores", strconv.Itoa(opts.Cores))
+	}
+	if opts.Memory > 0 {
+		form.Set("memory", strconv.Itoa(opts.Memory))
+	}
+	if opts.Archive != "" {
+		form.Set("ostemplate", opts.Archive)
+		form.Set("restore", "1")
+		if opts.Force {
+			form.Set("force", "1")
+		}
+	} else {
+		form.Set("ostemplate", opts.Template)
 	}
 	if opts.Hostname != "" {
 		form.Set("hostname", opts.Hostname)
@@ -451,10 +632,14 @@ func (c *Client) CreateLXC(ctx context.Context, opts CreateLXCOptions) (string, 
 		form.Set("password", opts.Password)
 	}
 	if opts.SSHPublicKey != "" {
-		form.Set("ssh-public-keys", url.QueryEscape(opts.SSHPublicKey))
+		// See CreateVM: form.Encode() already percent-encodes values.
+		form.Set("ssh-public-keys", opts.SSHPublicKey)
 	}
 	if opts.Unprivileged {
 		form.Set("unprivileged", "1")
+	}
+	for k, v := range opts.Extra {
+		form.Set(k, v)
 	}
 
 	var out struct {
@@ -571,6 +756,36 @@ func stripCIDR(addr string) string {
 	}
 	ip, _, _ := strings.Cut(addr, "/")
 	return ip
+}
+
+// SendKey sends a key combination to a QEMU guest's display (e.g. "ctrl-alt-delete",
+// "ctrl-alt-f1") — the console toolbar action for keys the browser would
+// otherwise intercept itself. LXC has no equivalent endpoint: containers have
+// no virtual keyboard/display to inject into.
+func (c *Client) SendKey(ctx context.Context, node string, vmid int, key string) error {
+	return c.post(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/sendkey", PathEscape(node), vmid), url.Values{"key": {key}}, nil)
+}
+
+// TermProxy is the ticket/port handed back by a termproxy request — same
+// shape PVE uses for both node-shell and guest-shell websocket consoles.
+type TermProxy struct {
+	Ticket string `json:"ticket"`
+	Port   string `json:"port"`
+	User   string `json:"user"`
+	UPID   string `json:"upid,omitempty"`
+}
+
+// GuestTermProxy requests a short-lived shell (xterm.js) console ticket for a
+// QEMU or LXC guest — distinct from OpenVNCProxy's graphical console.
+func (c *Client) GuestTermProxy(ctx context.Context, guestType, node string, vmid int) (*TermProxy, error) {
+	path := fmt.Sprintf("/nodes/%s/%s/%d/termproxy", PathEscape(node), PathEscape(guestType), vmid)
+	var out struct {
+		Data TermProxy `json:"data"`
+	}
+	if err := c.post(ctx, path, url.Values{}, &out); err != nil {
+		return nil, err
+	}
+	return &out.Data, nil
 }
 
 // VNCWebSocketPath builds the path (relative to the host, port 8006) for the

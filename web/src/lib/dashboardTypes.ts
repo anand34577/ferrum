@@ -51,7 +51,21 @@ export interface DashboardSummary {
 export interface DashboardFull {
   id: string
   name: string
+  /** Grid schema version; absent/0 means a pre-versioning layout whose row
+   * heights are in the old 64px unit and must be doubled. See LAYOUT_VERSION. */
+  version?: number
   widgets: WidgetSpec[]
+}
+
+/** Bump alongside internal/api/dashboard.go's layoutVersion. v2 halved the
+ * row unit (64px -> 32px) so resizing snaps in finer steps and widgets stop
+ * being padded out to the next 76px multiple. */
+export const LAYOUT_VERSION = 2
+
+/** One-time v1 -> v2 conversion: every vertical measure doubles. */
+export function migrateLayout(version: number | undefined, widgets: WidgetSpec[]): WidgetSpec[] {
+  if ((version ?? 1) >= LAYOUT_VERSION) return widgets
+  return widgets.map((w) => ({ ...w, y: w.y * 2, h: w.h * 2 }))
 }
 
 export interface SettingField {
@@ -79,11 +93,11 @@ export const WIDGET_CATALOG: {
   defaultSettings?: WidgetSettings
   settingsFields?: SettingField[]
 }[] = [
-  { type: "fleet-overview", label: "Fleet KPI Matrix", defaultSize: { w: 12, h: 4 } },
+  { type: "fleet-overview", label: "Fleet KPI Matrix", defaultSize: { w: 12, h: 8 } },
   {
     type: "cluster-comparison",
     label: "Cluster Comparison",
-    defaultSize: { w: 12, h: 5 },
+    defaultSize: { w: 12, h: 10 },
     defaultSettings: { sort: "cpu" },
     settingsFields: [
       CONNECTION_FIELD,
@@ -100,40 +114,40 @@ export const WIDGET_CATALOG: {
       },
     ],
   },
-  { type: "fleet-summary", label: "Fleet Summary", defaultSize: { w: 12, h: 2 }, settingsFields: [CONNECTION_FIELD] },
-  { type: "connection-status", label: "Connection Status", defaultSize: { w: 6, h: 4 } },
+  { type: "fleet-summary", label: "Fleet Summary", defaultSize: { w: 12, h: 4 }, settingsFields: [CONNECTION_FIELD] },
+  { type: "connection-status", label: "Connection Status", defaultSize: { w: 6, h: 8 } },
   {
     type: "cpu-by-node",
     label: "CPU by Node",
-    defaultSize: { w: 6, h: 4 },
+    defaultSize: { w: 6, h: 8 },
     defaultSettings: { connection: "all", sort: "usage" },
     settingsFields: [CONNECTION_FIELD],
   },
   {
     type: "memory-by-node",
     label: "Memory by Node",
-    defaultSize: { w: 6, h: 4 },
+    defaultSize: { w: 6, h: 8 },
     defaultSettings: { connection: "all" },
     settingsFields: [CONNECTION_FIELD],
   },
   {
     type: "capacity-planning",
     label: "Capacity & Overcommit",
-    defaultSize: { w: 6, h: 5 },
+    defaultSize: { w: 6, h: 10 },
     defaultSettings: { connection: "all" },
     settingsFields: [CONNECTION_FIELD],
   },
   {
     type: "node-scatter",
     label: "Node Density (CPU × Memory)",
-    defaultSize: { w: 6, h: 5 },
+    defaultSize: { w: 6, h: 10 },
     defaultSettings: { connection: "all" },
     settingsFields: [CONNECTION_FIELD],
   },
   {
     type: "top-consumers",
     label: "Top Resource Consumers",
-    defaultSize: { w: 6, h: 4 },
+    defaultSize: { w: 6, h: 8 },
     defaultSettings: { metric: "cpu" },
     settingsFields: [
       CONNECTION_FIELD,
@@ -150,7 +164,7 @@ export const WIDGET_CATALOG: {
   {
     type: "running-tasks",
     label: "Running Tasks",
-    defaultSize: { w: 6, h: 4 },
+    defaultSize: { w: 6, h: 8 },
     defaultSettings: { limit: "8" },
     settingsFields: [
       CONNECTION_FIELD,
@@ -165,13 +179,13 @@ export const WIDGET_CATALOG: {
       },
     ],
   },
-  { type: "storage-usage", label: "Storage Usage", defaultSize: { w: 6, h: 4 }, settingsFields: [CONNECTION_FIELD] },
-  { type: "storage-treemap", label: "Storage Treemap", defaultSize: { w: 6, h: 4 }, settingsFields: [CONNECTION_FIELD] },
-  { type: "guest-status", label: "Guest Status Distribution", defaultSize: { w: 4, h: 4 }, settingsFields: [CONNECTION_FIELD] },
+  { type: "storage-usage", label: "Storage Usage", defaultSize: { w: 6, h: 8 }, settingsFields: [CONNECTION_FIELD] },
+  { type: "storage-treemap", label: "Storage Treemap", defaultSize: { w: 6, h: 8 }, settingsFields: [CONNECTION_FIELD] },
+  { type: "guest-status", label: "Guest Status Distribution", defaultSize: { w: 4, h: 8 }, settingsFields: [CONNECTION_FIELD] },
   {
     type: "guest-histogram",
     label: "Utilization Distribution",
-    defaultSize: { w: 6, h: 4 },
+    defaultSize: { w: 6, h: 8 },
     defaultSettings: { metric: "cpu" },
     settingsFields: [
       CONNECTION_FIELD,
@@ -188,7 +202,7 @@ export const WIDGET_CATALOG: {
   {
     type: "utilization-heatmap",
     label: "Utilization Heatmap",
-    defaultSize: { w: 12, h: 5 },
+    defaultSize: { w: 12, h: 10 },
     defaultSettings: { timeframe: "day", metric: "cpu" },
     settingsFields: [
       CONNECTION_FIELD,
@@ -214,7 +228,7 @@ export const WIDGET_CATALOG: {
   {
     type: "fleet-trend",
     label: "Fleet Trend (CPU / Memory / Network)",
-    defaultSize: { w: 12, h: 5 },
+    defaultSize: { w: 12, h: 10 },
     defaultSettings: { timeframe: "hour" },
     settingsFields: [
       CONNECTION_FIELD,
@@ -232,7 +246,7 @@ export const WIDGET_CATALOG: {
   {
     type: "node-comparison",
     label: "Node Comparison",
-    defaultSize: { w: 6, h: 4 },
+    defaultSize: { w: 6, h: 8 },
     defaultSettings: { metric: "cpu" },
     settingsFields: [
       CONNECTION_FIELD,
@@ -250,7 +264,7 @@ export const WIDGET_CATALOG: {
   {
     type: "node-composition",
     label: "Node Guest Composition",
-    defaultSize: { w: 6, h: 4 },
+    defaultSize: { w: 6, h: 8 },
     defaultSettings: { sort: "qemu" },
     settingsFields: [
       CONNECTION_FIELD,
@@ -264,12 +278,12 @@ export const WIDGET_CATALOG: {
       },
     ],
   },
-  { type: "alert-activity", label: "Alert Activity", defaultSize: { w: 4, h: 4 }, settingsFields: [CONNECTION_FIELD] },
-  { type: "backup-activity", label: "Backup Activity", defaultSize: { w: 6, h: 4 }, settingsFields: [CONNECTION_FIELD] },
+  { type: "alert-activity", label: "Alert Activity", defaultSize: { w: 4, h: 8 }, settingsFields: [CONNECTION_FIELD] },
+  { type: "backup-activity", label: "Backup Activity", defaultSize: { w: 6, h: 8 }, settingsFields: [CONNECTION_FIELD] },
   {
     type: "uptime-leaderboard",
     label: "Uptime Leaderboard",
-    defaultSize: { w: 4, h: 4 },
+    defaultSize: { w: 4, h: 8 },
     defaultSettings: { scope: "guest" },
     settingsFields: [
       CONNECTION_FIELD,

@@ -1,12 +1,14 @@
 import { Histogram, type HistogramBin } from "@/components/charts/Histogram"
 import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { useScopedInventory } from "@/lib/fleet"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 // Frequency distribution of guest utilization across the whole fleet —
 // shows the shape of the population (most guests idle? a few hot ones?).
 export function UtilizationHistogramWidget({ settings }: { settings: WidgetSettings }) {
   const metric = settings.metric === "mem" ? "mem" : "cpu"
-  const { resources } = useScopedInventory(settings)
+  const { resources, isError } = useScopedInventory(settings)
+  if (isError) return <WidgetError />
 
   const values = resources
     .filter((r) => (r.type === "qemu" || r.type === "lxc") && r.status === "running")

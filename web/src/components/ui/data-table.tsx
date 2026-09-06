@@ -9,7 +9,7 @@ import {
   useReactTable,
 } from "@tanstack/react-table"
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Search, X } from "lucide-react"
-import { type ReactNode, useState } from "react"
+import { type ReactNode, useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
@@ -67,6 +67,16 @@ export function DataTable<T>({
     getPaginationRowModel: getPaginationRowModel(),
     initialState: { pagination: { pageSize } },
   })
+
+  // A match on page 3 is invisible while pagination stays parked on page 1 —
+  // the same "search doesn't lead you to the actual result" gap fixed on
+  // Inventory, generalized to every DataTable (Tasks, Alerts, Backups,
+  // Users, Connections, Audit, ...): jump back to the first page whenever
+  // the search term changes so a new result is never hidden a page away.
+  useEffect(() => {
+    table.setPageIndex(0)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [globalFilter])
 
   const rows = table.getRowModel().rows
   // "Select all" acts on every row matching the current search/filter, not
@@ -129,7 +139,7 @@ export function DataTable<T>({
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id} className="border-b border-[var(--border)] bg-[var(--bg-muted)]/50 backdrop-blur-xs">
                 {selection && (
-                  <th className="w-8 px-3.5 py-2.5">
+                  <th className="dt-cell w-8 px-3.5 py-2.5">
                     <Checkbox checked={allFilteredSelected} onCheckedChange={toggleAll} aria-label="Select all rows" />
                   </th>
                 )}
@@ -147,7 +157,7 @@ export function DataTable<T>({
                       scope="col"
                       aria-sort={ariaSort}
                       className={cn(
-                        "px-3.5 py-2.5 text-left font-mono text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]",
+                        "dt-cell px-3.5 py-2.5 text-left font-mono text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]",
                         hideBelowMd && "hidden md:table-cell",
                       )}
                     >
@@ -178,12 +188,12 @@ export function DataTable<T>({
               Array.from({ length: 6 }).map((_, i) => (
                 <tr key={`skeleton-${i}`} className="border-b border-[var(--border)] last:border-0">
                   {selection && (
-                    <td className="px-3.5 py-2.5">
+                    <td className="dt-cell px-3.5 py-2.5">
                       <Skeleton className="h-4 w-4" />
                     </td>
                   )}
                   {columns.map((col, c) => (
-                    <td key={c} className={cn("px-3.5 py-2.5", (col.meta as { hideBelowMd?: boolean } | undefined)?.hideBelowMd && "hidden md:table-cell")}>
+                    <td key={c} className={cn("dt-cell px-3.5 py-2.5", (col.meta as { hideBelowMd?: boolean } | undefined)?.hideBelowMd && "hidden md:table-cell")}>
                       <Skeleton className="h-4 max-w-32" style={{ width: `${40 + ((i * 13 + c * 29) % 45)}%`, opacity: 1 - i * 0.1 }} />
                     </td>
                   ))}
@@ -202,7 +212,7 @@ export function DataTable<T>({
                     )}
                   >
                     {selection && id && (
-                      <td className="px-3.5 py-2.5">
+                      <td className="dt-cell px-3.5 py-2.5">
                         <Checkbox checked={checked} onCheckedChange={() => toggleRow(id)} aria-label="Select row" />
                       </td>
                     )}
@@ -210,7 +220,7 @@ export function DataTable<T>({
                       <td
                         key={cell.id}
                         className={cn(
-                          "px-3.5 py-2.5 align-middle text-xs",
+                          "dt-cell px-3.5 py-2.5 align-middle text-xs",
                           (cell.column.columnDef.meta as { hideBelowMd?: boolean } | undefined)?.hideBelowMd && "hidden md:table-cell",
                         )}
                       >

@@ -32,7 +32,7 @@ export function TabsTrigger({ className, ...props }: ComponentProps<typeof TabsP
 export function TabsContent({ className, ...props }: ComponentProps<typeof TabsPrimitive.Content>) {
   return (
     <TabsPrimitive.Content
-      className={cn("mt-4 focus-visible:outline-none", className)}
+      className={cn("mt-4 focus-visible:outline-none data-[state=active]:animate-in data-[state=active]:fade-in data-[state=active]:duration-200", className)}
       {...props}
     />
   )

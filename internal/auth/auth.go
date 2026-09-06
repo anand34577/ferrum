@@ -50,6 +50,11 @@ type Service struct {
 
 	sessionTTLMu sync.RWMutex
 	sessionTTL   time.Duration
+
+	// bootstrapMu serializes Bootstrap so two concurrent first-run
+	// /auth/setup requests can't both pass the "no user yet" check and
+	// both create an admin account.
+	bootstrapMu sync.Mutex
 }
 
 func NewService(db *store.DB) *Service {
@@ -89,6 +94,11 @@ func (s *Service) NeedsSetup(ctx context.Context) (bool, error) {
 
 // Bootstrap creates the first admin user. It refuses to run if any user already exists.
 func (s *Service) Bootstrap(ctx context.Context, username, email, password string) (*User, error) {
+	// Serialize check-then-create: without this, two concurrent requests
+	// could both observe an empty users table and both create an admin.
+	s.bootstrapMu.Lock()
+	defer s.bootstrapMu.Unlock()
+
 	needsSetup, err := s.NeedsSetup(ctx)
 	if err != nil {
 		return nil, err

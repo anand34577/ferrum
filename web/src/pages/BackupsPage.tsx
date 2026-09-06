@@ -50,7 +50,12 @@ export function BackupsPage() {
   })
 
   const [scheduleConnId, setScheduleConnId] = useState("")
-  const [scheduleForm, setScheduleForm] = useState({ schedule: "sat 02:00", storage: "", vmids: "", mode: "snapshot", compress: "zstd", prune: "" })
+  const emptyScheduleForm = {
+    schedule: "sat 02:00", storage: "", vmids: "", mode: "snapshot", compress: "zstd", prune: "",
+    notificationMode: "", mailTo: "", mailNotification: "", bwlimit: "", pigz: "",
+  }
+  const [scheduleForm, setScheduleForm] = useState(emptyScheduleForm)
+  const [showAdvanced, setShowAdvanced] = useState(false)
   const createJob = useMutation({
     mutationFn: () =>
       api.post(`/connections/${scheduleConnId}/cluster/backup-jobs`, {
@@ -61,11 +66,16 @@ export function BackupsPage() {
         compress: scheduleForm.compress,
         enabled: true,
         prune: scheduleForm.prune ? Number(scheduleForm.prune) : undefined,
+        notificationMode: scheduleForm.notificationMode || undefined,
+        mailTo: scheduleForm.notificationMode === "legacy-sendmail" ? scheduleForm.mailTo || undefined : undefined,
+        mailNotification: scheduleForm.notificationMode === "legacy-sendmail" ? scheduleForm.mailNotification || undefined : undefined,
+        bandwidthLimitKBps: scheduleForm.bwlimit ? Number(scheduleForm.bwlimit) : undefined,
+        pigz: scheduleForm.pigz !== "" ? Number(scheduleForm.pigz) : undefined,
       }),
     onSuccess: () => {
       toast.success("Backup job scheduled")
       queryClient.invalidateQueries({ queryKey: ["backup-jobs"] })
-      setScheduleForm({ schedule: "sat 02:00", storage: "", vmids: "", mode: "snapshot", compress: "zstd", prune: "" })
+      setScheduleForm(emptyScheduleForm)
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to schedule backup job"),
   })
@@ -129,7 +139,7 @@ export function BackupsPage() {
               <CardTitle>Schedule a backup job</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <div className="space-y-1.5">
                   <Label>Connection</Label>
                   <Select value={scheduleConnId} onValueChange={setScheduleConnId}>
@@ -197,6 +207,78 @@ export function BackupsPage() {
                   />
                 </div>
               </div>
+
+              <Button variant="ghost" size="sm" className="mt-2" onClick={() => setShowAdvanced(!showAdvanced)}>
+                {showAdvanced ? "Hide" : "Show"} advanced options
+              </Button>
+              {showAdvanced && (
+                <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <div className="space-y-1.5">
+                    <Label>Notification mode</Label>
+                    <Select
+                      value={scheduleForm.notificationMode || "default"}
+                      onValueChange={(v) => setScheduleForm({ ...scheduleForm, notificationMode: v === "default" ? "" : v })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="default">Cluster default</SelectItem>
+                        <SelectItem value="notification-system">Notification system</SelectItem>
+                        <SelectItem value="legacy-sendmail">Legacy sendmail</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {scheduleForm.notificationMode === "legacy-sendmail" && (
+                    <>
+                      <div className="space-y-1.5">
+                        <Label>Mail to</Label>
+                        <Input
+                          value={scheduleForm.mailTo}
+                          onChange={(e) => setScheduleForm({ ...scheduleForm, mailTo: e.target.value })}
+                          placeholder="admin@example.com"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Mail on</Label>
+                        <Select
+                          value={scheduleForm.mailNotification || "failure"}
+                          onValueChange={(v) => setScheduleForm({ ...scheduleForm, mailNotification: v })}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="failure">Failure only</SelectItem>
+                            <SelectItem value="always">Always</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </>
+                  )}
+                  <div className="space-y-1.5">
+                    <Label>Bandwidth limit (KB/s, optional)</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={scheduleForm.bwlimit}
+                      onChange={(e) => setScheduleForm({ ...scheduleForm, bwlimit: e.target.value })}
+                      placeholder="unlimited"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Pigz threads (optional)</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={scheduleForm.pigz}
+                      onChange={(e) => setScheduleForm({ ...scheduleForm, pigz: e.target.value })}
+                      placeholder="off"
+                    />
+                  </div>
+                </div>
+              )}
+
               <Button
                 className="mt-3"
                 size="sm"
@@ -214,7 +296,7 @@ export function BackupsPage() {
               <CardTitle>Run a backup now</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="space-y-1.5">
                   <Label>Connection</Label>
                   <Select value={form.connId} onValueChange={(v) => setForm({ ...form, connId: v, node: "", storage: "" })}>
@@ -320,7 +402,7 @@ export function BackupsPage() {
       {connections.length > 0 && (
         <>
           <div className="pt-2">
-            <h2 className="font-display text-xl font-semibold">Replication</h2>
+            <h2 className="font-display text-sm font-semibold">Replication</h2>
             <p className="text-sm text-[var(--text-muted)]">Storage replication (pvesr) jobs — periodic guest-disk sync to another node.</p>
           </div>
           {connections.map((c) => (

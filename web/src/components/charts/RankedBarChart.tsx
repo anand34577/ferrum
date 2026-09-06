@@ -1,7 +1,8 @@
-import { useId } from "react"
 import { Bar, BarChart, Cell, LabelList, Rectangle, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import type { BarShapeProps, LabelProps } from "recharts"
 import { chartTooltip } from "@/components/charts/tooltipTheme"
+import { chartBarRadius } from "@/lib/chartRadius"
+import { useTheme } from "@/lib/theme"
 
 export interface RankedBarRow {
   name: string
@@ -14,7 +15,7 @@ interface RankedBarChartProps<T extends RankedBarRow> {
    * size the axis to the data (e.g. uptime, which has no natural ceiling). */
   domain?: [number, number]
   /** Per-row fill override (e.g. severity coloring: >=90 red, >=75 amber) —
-   * return undefined for a row to keep the default brand gradient. */
+   * return undefined for a row to keep the default flat brand fill. */
   colorFor?: (row: T) => string | undefined
   labelFormatter: (value: number) => string
   tooltipLabel: string | ((row: T) => string)
@@ -37,7 +38,8 @@ export function RankedBarChart<T extends RankedBarRow>({
   rowHeight = 26,
   nameWidth = 90,
 }: RankedBarChartProps<T>) {
-  const gradId = `ranked-bar-${useId().replace(/:/g, "")}`
+  const { look } = useTheme()
+  const r = chartBarRadius(look)
 
   // Recharts' built-in LabelList text wraps onto a second line once the
   // space between the bar's end and the chart edge gets tight — exactly the
@@ -65,12 +67,6 @@ export function RankedBarChart<T extends RankedBarRow>({
   return (
     <ResponsiveContainer width="100%" height={Math.max(100, data.length * rowHeight)}>
       <BarChart data={data} layout="vertical" margin={{ top: 0, right: 56, left: 0, bottom: 0 }}>
-        <defs>
-          <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="var(--color-brand-400)" />
-            <stop offset="100%" stopColor="var(--color-brand-600)" />
-          </linearGradient>
-        </defs>
         <XAxis type="number" domain={domain} hide />
         <YAxis type="category" dataKey="name" width={nameWidth} tick={{ fontSize: 11, fill: "var(--text-muted)" }} axisLine={false} tickLine={false} />
         <Tooltip
@@ -88,7 +84,7 @@ export function RankedBarChart<T extends RankedBarRow>({
             feedback is a 1px outline on the row, not a fill change. */}
         <Bar
           dataKey="value"
-          radius={[4, 4, 4, 4]}
+          radius={[r, r, r, r]}
           barSize={12}
           isAnimationActive={false}
           background={
@@ -100,7 +96,7 @@ export function RankedBarChart<T extends RankedBarRow>({
                     width={p.width}
                     height={p.height}
                     fill="var(--track)"
-                    radius={4}
+                    radius={r}
                     stroke={p.isActive ? "var(--text-faint)" : "none"}
                     strokeWidth={1}
                   />
@@ -110,7 +106,7 @@ export function RankedBarChart<T extends RankedBarRow>({
           activeBar={{ stroke: "var(--text-faint)", strokeWidth: 1 }}
         >
           {data.map((row, i) => (
-            <Cell key={row.name + i} fill={colorFor?.(row) ?? `url(#${gradId})`} />
+            <Cell key={row.name + i} fill={colorFor?.(row) ?? "var(--color-brand-500)"} />
           ))}
           <LabelList dataKey="value" content={valueLabel} />
         </Bar>

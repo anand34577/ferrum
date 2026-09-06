@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
-import { CheckCircle2, CircleSlash, ScrollText, Square, Terminal, XCircle } from "lucide-react"
+import { CheckCircle2, CircleSlash, Loader2, ScrollText, Square, Terminal, XCircle } from "lucide-react"
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
@@ -200,7 +200,7 @@ export function TasksPage() {
         icon={Terminal}
       />
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <SummaryChip label="Running" value={counts.running} tone="warn" icon={<CircleSlash className="h-3.5 w-3.5" />} />
         <SummaryChip label="Finished OK" value={counts.ok} tone="ok" icon={<CheckCircle2 className="h-3.5 w-3.5" />} />
         <SummaryChip label="Failed" value={counts.failed} tone="error" icon={<XCircle className="h-3.5 w-3.5" />} />
@@ -275,7 +275,7 @@ export function TasksPage() {
           </DialogHeader>
           {logQuery.isLoading ? (
             <div className="flex justify-center py-8" aria-busy>
-              <div className="h-6 w-6 animate-spin rounded-full border-2 border-[var(--border)] border-t-brand-500" />
+              <Loader2 className="h-6 w-6 animate-spin text-brand-500" />
             </div>
           ) : (
             <pre className="max-h-96 overflow-y-auto rounded-md bg-[var(--bg-muted)] p-3 font-mono text-xs whitespace-pre-wrap">

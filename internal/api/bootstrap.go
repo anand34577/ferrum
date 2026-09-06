@@ -54,5 +54,11 @@ func (s *Server) BootstrapSettings(ctx context.Context, seedEnabled bool, seedOI
 		return err
 	}
 	s.applySecurityRow(secRow)
+
+	sysRow, err := s.loadSystemRow(ctx)
+	if err != nil {
+		return err
+	}
+	s.applySystemRow(sysRow)
 	return nil
 }

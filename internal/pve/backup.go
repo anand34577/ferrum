@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strconv"
 )
 
 // BackupJob is one scheduled vzdump job (/cluster/backup).
@@ -16,6 +17,12 @@ type BackupJob struct {
 	Mode     string `json:"mode,omitempty"`
 	Compress string `json:"compress,omitempty"`
 	Comment  string `json:"comment,omitempty"`
+
+	NotificationMode string `json:"notification-mode,omitempty"`
+	MailTo           string `json:"mailto,omitempty"`
+	MailNotification string `json:"mailnotification,omitempty"`
+	BWLimit          int    `json:"bwlimit,omitempty"`
+	Pigz             int    `json:"pigz,omitempty"`
 }
 
 func (c *Client) BackupJobs(ctx context.Context) ([]BackupJob, error) {
@@ -65,6 +72,12 @@ type CreateBackupJobOptions struct {
 	Enabled  bool
 	Comment  string
 	Prune    int // keep-last count, 0 = unset
+
+	NotificationMode string // "notification-system" | "legacy-sendmail", "" = unset
+	MailTo           string // comma-separated emails, only used with NotificationMode "legacy-sendmail"
+	MailNotification string // "always" | "failure" (legacy option, form key stays "mailnotification")
+	BandwidthLimitKBps int  // vzdump --bwlimit in KiB/s, 0 = unset
+	Pigz             *int  // parallel gzip threads; nil = unset (0 is itself a valid "disabled" value)
 }
 
 func backupJobForm(opts CreateBackupJobOptions) url.Values {
@@ -91,6 +104,21 @@ func backupJobForm(opts CreateBackupJobOptions) url.Values {
 	}
 	if opts.Prune > 0 {
 		form.Set("prune-backups", fmt.Sprintf("keep-last=%d", opts.Prune))
+	}
+	if opts.NotificationMode != "" {
+		form.Set("notification-mode", opts.NotificationMode)
+	}
+	if opts.MailTo != "" {
+		form.Set("mailto", opts.MailTo)
+	}
+	if opts.MailNotification != "" {
+		form.Set("mailnotification", opts.MailNotification)
+	}
+	if opts.BandwidthLimitKBps > 0 {
+		form.Set("bwlimit", strconv.Itoa(opts.BandwidthLimitKBps))
+	}
+	if opts.Pigz != nil {
+		form.Set("pigz", strconv.Itoa(*opts.Pigz))
 	}
 	form.Set("enabled", boolFlag(opts.Enabled))
 	return form
@@ -132,4 +160,10 @@ func (c *Client) GuestBackups(ctx context.Context, node, storage string, vmid in
 		}
 	}
 	return out, nil
+}
+
+// SetBackupProtected marks (or clears) one backup archive as protected,
+// which exempts it from prune-backups deletion until cleared.
+func (c *Client) SetBackupProtected(ctx context.Context, node, storage, volid string, protected bool) error {
+	return c.UpdateStorageContent(ctx, node, storage, volid, url.Values{"protected": {boolFlag(protected)}})
 }

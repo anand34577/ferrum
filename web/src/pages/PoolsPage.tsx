@@ -143,7 +143,7 @@ export function PoolsPage() {
                   <CardTitle>{c.name}</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-1">
-                  {q.isError && <p className="text-sm text-[var(--text-muted)]">Could not load pools.</p>}
+                  {q.isError && <ErrorState title="Couldn't load pools" onRetry={q.refetch} />}
                   {q.data?.length === 0 && <p className="text-sm text-[var(--text-muted)]">No resource pools yet — create one above.</p>}
                   {q.data?.map((pool) => {
                     const key = `${c.connectionId}/${pool.poolid}`
@@ -190,11 +190,13 @@ function PoolRow({
     enabled: expanded,
   })
   const queryClient = useQueryClient()
+  const confirm = useConfirm()
   const [vmid, setVmid] = useState("")
 
   const addMember = useMutation({
     mutationFn: () => api.put(`/connections/${connId}/pools/${encodeURIComponent(pool.poolid)}/members`, { vmids: [Number(vmid)], remove: false }),
     onSuccess: () => {
+      toast.success("Guest added to pool")
       setVmid("")
       queryClient.invalidateQueries({ queryKey: ["pool-detail", connId, pool.poolid] })
     },
@@ -203,7 +205,10 @@ function PoolRow({
 
   const removeMember = useMutation({
     mutationFn: (id: number) => api.put(`/connections/${connId}/pools/${encodeURIComponent(pool.poolid)}/members`, { vmids: [id], remove: true }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["pool-detail", connId, pool.poolid] }),
+    onSuccess: () => {
+      toast.success("Guest removed from pool")
+      queryClient.invalidateQueries({ queryKey: ["pool-detail", connId, pool.poolid] })
+    },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to remove guest from pool"),
   })
 
@@ -236,6 +241,7 @@ function PoolRow({
               <Skeleton className="h-5 w-52" />
             </div>
           )}
+          {detailQuery.isError && <p className="text-xs text-[var(--text-muted)]">Couldn't load pool members.</p>}
           {detailQuery.data?.members?.length === 0 && <p className="text-xs text-[var(--text-muted)]">No members yet — add a guest below.</p>}
           {detailQuery.data?.members?.map((m) => (
             <div key={m.id} className="flex items-center gap-2 text-xs">
@@ -244,7 +250,16 @@ function PoolRow({
               {m.vmid && <span className="font-mono text-[var(--text-muted)] tabular">#{m.vmid}</span>}
               {m.vmid && (
                 <Hint label="Remove from pool">
-                  <Button size="icon" variant="ghost" className="h-5 w-5" aria-label={`Remove ${m.name ?? m.vmid} from pool`} onClick={() => removeMember.mutate(m.vmid!)}>
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    aria-label={`Remove ${m.name ?? m.vmid} from pool`}
+                    onClick={async () => {
+                      if (await confirm({ title: `Remove ${m.name ?? m.vmid} from pool?`, destructive: false, confirmLabel: "Remove" })) {
+                        removeMember.mutate(m.vmid!)
+                      }
+                    }}
+                  >
                     <Minus className="h-3 w-3" />
                   </Button>
                 </Hint>

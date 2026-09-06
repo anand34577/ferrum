@@ -2,6 +2,7 @@ import { Badge } from "@/components/ui/badge"
 import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { scopedConnection } from "@/lib/fleet"
 import { useClusterTasks } from "@/lib/useClusterTasks"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 function statusVariant(status: string): "ok" | "warn" | "error" | "default" {
   if (status === "OK") return "ok"
@@ -11,8 +12,10 @@ function statusVariant(status: string): "ok" | "warn" | "error" | "default" {
 
 export function RunningTasksWidget({ settings }: { settings: WidgetSettings }) {
   const limit = Number(settings.limit) || 8
-  const { tasks } = useClusterTasks(scopedConnection(settings))
+  const { tasks, isError } = useClusterTasks(scopedConnection(settings))
   const rows = tasks.slice(0, limit)
+
+  if (isError) return <WidgetError />
 
   if (rows.length === 0) {
     return <p className="text-sm text-[var(--text-muted)]">No recent tasks.</p>

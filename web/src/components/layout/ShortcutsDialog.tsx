@@ -51,7 +51,7 @@ export function ShortcutsDialog() {
               <span className="text-[var(--text-muted)]">{s.label}</span>
               <span className="flex shrink-0 gap-1">
                 {s.keys.map((k) => (
-                  <kbd key={k} className="rounded border border-[var(--border)] bg-[var(--bg-muted)] px-1.5 py-0.5 font-mono text-[10px]">
+                  <kbd key={k} className="rounded-sm border border-[var(--border)] bg-[var(--bg-muted)] px-1.5 py-0.5 font-mono text-[10px]">
                     {k}
                   </kbd>
                 ))}

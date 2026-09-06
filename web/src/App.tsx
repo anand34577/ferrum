@@ -13,7 +13,9 @@ import { SetupPage } from "@/pages/SetupPage"
 import { LoginPage } from "@/pages/LoginPage"
 import { ConsolePage } from "@/pages/ConsolePage"
 
+const AIAssistantPage = lazy(() => import("@/pages/AIAssistantPage").then((m) => ({ default: m.AIAssistantPage })))
 const AuditPage = lazy(() => import("@/pages/AuditPage").then((m) => ({ default: m.AuditPage })))
+const ClusterPage = lazy(() => import("@/pages/ClusterPage").then((m) => ({ default: m.ClusterPage })))
 const BackupsPage = lazy(() => import("@/pages/BackupsPage").then((m) => ({ default: m.BackupsPage })))
 const ConnectionsPage = lazy(() => import("@/pages/ConnectionsPage").then((m) => ({ default: m.ConnectionsPage })))
 const DashboardPage = lazy(() => import("@/pages/DashboardPage").then((m) => ({ default: m.DashboardPage })))
@@ -140,9 +142,11 @@ export default function App() {
             <Route path="/pools" element={route(<PoolsPage />)} />
             <Route path="/backups" element={route(<BackupsPage />)} />
             <Route path="/ha" element={route(<HAPage />)} />
+            <Route path="/cluster" element={route(<ClusterPage />, true)} />
             <Route path="/firewall" element={route(<FirewallPage />)} />
             <Route path="/alerts" element={route(<AlertsPage />)} />
             <Route path="/tasks" element={route(<TasksPage />)} />
+            <Route path="/ai-assistant" element={route(<AIAssistantPage />)} />
             <Route path="/connections" element={route(<ConnectionsPage />, true)} />
             <Route path="/users" element={route(<UsersPage />, true)} />
             <Route path="/audit" element={route(<AuditPage />, true)} />

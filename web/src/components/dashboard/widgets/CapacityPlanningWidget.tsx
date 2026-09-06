@@ -1,6 +1,7 @@
 import type { WidgetSettings } from "@/lib/dashboardTypes"
-import { useScopedInventory } from "@/lib/fleet"
+import { useScopedInventory, utilizationTone } from "@/lib/fleet"
 import { cn, formatBytes } from "@/lib/utils"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 interface Row {
   label: string
@@ -13,7 +14,8 @@ interface Row {
 /** Physical vs allocated vs actual usage for CPU and memory — exposes
  * overcommit (allocated > physical) and stranded capacity at a glance. */
 export function CapacityPlanningWidget({ settings }: { settings: WidgetSettings }) {
-  const { resources } = useScopedInventory(settings)
+  const { resources, isError } = useScopedInventory(settings)
+  if (isError) return <WidgetError />
 
   let cores = 0
   let memTotal = 0
@@ -74,12 +76,25 @@ export function CapacityPlanningWidget({ settings }: { settings: WidgetSettings 
               </p>
             </div>
             {/* Physical capacity rail with allocated + used overlays */}
-            <div className="relative h-3.5 overflow-hidden rounded-sm bg-[var(--track)]">
-              <div className="absolute inset-y-0 left-0 bg-brand-200/70 dark:bg-brand-800/60" style={{ width: `${Math.min(100, allocPct)}%` }} title={`Allocated ${row.unit(row.allocated)}`} />
+            <div
+              className="relative h-3.5 overflow-hidden rounded-none bg-[var(--track)]"
+              role="progressbar"
+              aria-valuenow={Math.round(usedPct)}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-label={`${row.label} actual use`}
+            >
+              {/* No title/tooltip here — the header line above already spells
+                  out both numbers ("allocated X / Y physical"), and the
+                  legend below explains the two colors, so a hover tooltip
+                  repeating the same figures would be pure redundancy. */}
+              <div className="absolute inset-y-0 left-0 bg-brand-200/70 dark:bg-brand-800/60" style={{ width: `${Math.min(100, allocPct)}%` }} />
               <div
-                className={cn("absolute inset-y-0 left-0 rounded-sm", usedPct > 90 ? "bg-[var(--status-error)]" : usedPct > 75 ? "bg-[var(--status-warn)]" : "bg-brand-500")}
+                className={cn(
+                  "absolute inset-y-0 left-0",
+                  utilizationTone(usedPct) === "error" ? "bg-[var(--status-error)]" : utilizationTone(usedPct) === "warn" ? "bg-[var(--status-warn)]" : "bg-brand-500",
+                )}
                 style={{ width: `${Math.min(100, usedPct)}%` }}
-                title={`Actual use ${row.unit(row.used)}`}
               />
               {allocPct > 100 && (
                 <div className="absolute inset-y-0 right-0 w-1 bg-[var(--status-warn)]" title="Allocated exceeds physical capacity" />

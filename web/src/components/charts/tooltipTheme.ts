@@ -18,7 +18,7 @@ export const chartTooltip = {
   contentStyle: {
     background: "var(--bg-elevated)",
     border: "1px solid var(--border)",
-    borderRadius: 8,
+    borderRadius: "var(--radius-md)",
     fontSize: 12,
     boxShadow: "var(--shadow-md)",
     color: "var(--text)",

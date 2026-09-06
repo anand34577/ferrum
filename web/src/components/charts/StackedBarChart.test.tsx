@@ -2,6 +2,12 @@ import { render } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { StackedBarChart } from "@/components/charts/StackedBarChart"
 
+// The component reads the active look to pick a corner radius matching that
+// look's boxiness (see lib/chartRadius) — stub it rather than standing up
+// the full ThemeProvider (which itself needs AuthProvider + react-query)
+// just to render a chart in isolation.
+vi.mock("@/lib/theme", () => ({ useTheme: () => ({ look: "enterprise" }) }))
+
 class ResizeObserverMock {
   private cb: ResizeObserverCallback | undefined
   constructor(cb: ResizeObserverCallback) {

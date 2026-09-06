@@ -6,11 +6,14 @@ import { Bar, BarChart, Cell, LabelList, Rectangle, ResponsiveContainer, Tooltip
 import type { BarShapeProps } from "recharts"
 import { DonutChart, type DonutSlice } from "@/components/charts/DonutChart"
 import { chartTooltip } from "@/components/charts/tooltipTheme"
+import { CephDaemonsCard } from "@/components/storage/CephDaemonsCard"
+import { CreateStorageDialog } from "@/components/storage/CreateStorageDialog"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { DataTable } from "@/components/ui/data-table"
 import { EmptyState } from "@/components/ui/empty-state"
 import { ErrorState } from "@/components/ui/error-state"
+import { Meter } from "@/components/ui/meter"
 import { PageHeader } from "@/components/ui/page-header"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusDot } from "@/components/ui/status-dot"
@@ -37,6 +40,11 @@ export function StoragePage() {
     connId: c.connectionId,
     connName: c.name,
     node: (c.resources ?? []).find((r) => r.type === "node")?.node,
+  }))
+  const nodesByConn = connections.map((c) => ({
+    connId: c.connectionId,
+    connName: c.name,
+    nodes: Array.from(new Set((c.resources ?? []).filter((r) => r.type === "node").map((r) => r.node))),
   }))
 
   const cephQueries = useQueries({
@@ -195,9 +203,7 @@ export function StoragePage() {
           const pct = p.maxdisk ? Math.min(100, ((p.disk ?? 0) / p.maxdisk) * 100) : 0
           return (
             <div className="flex items-center gap-2">
-              <div className="h-1.5 w-24 overflow-hidden rounded-sm bg-[var(--track)]">
-                <div className={pct > 85 ? "h-full bg-[var(--status-error)]" : "h-full bg-brand-500"} style={{ width: `${pct}%` }} />
-              </div>
+              <Meter value={pct} label="Storage usage" className="w-24" />
               <span className="whitespace-nowrap text-xs text-[var(--text-muted)]">
                 {formatBytes(p.disk ?? 0)} / {formatBytes(p.maxdisk ?? 0)}
               </span>
@@ -291,11 +297,18 @@ export function StoragePage() {
       )}
 
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <HardDrive className="h-4 w-4" /> Local Storage
-          </CardTitle>
-          <p className="text-xs text-[var(--text-muted)]">Physically attached to one node — dir, LVM, ZFS, and similar. Not shared across the cluster.</p>
+        <CardHeader className="flex-row items-start justify-between space-y-0">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <HardDrive className="h-4 w-4" /> Local Storage
+            </CardTitle>
+            <p className="text-xs text-[var(--text-muted)]">Physically attached to one node — dir, LVM, ZFS, and similar. Not shared across the cluster.</p>
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
+            {nodesByConn.filter((t) => t.nodes.length > 0).map((t) => (
+              <CreateStorageDialog key={t.connId} connId={t.connId} connName={connections.length > 1 ? t.connName : undefined} nodes={t.nodes} />
+            ))}
+          </div>
         </CardHeader>
         <CardContent>
           <DataTable columns={columns} data={localPools} searchPlaceholder="Search local storage..." emptyMessage="No local storage found." />
@@ -412,6 +425,12 @@ export function StoragePage() {
             </Card>
           )
         })}
+
+      {nodesByConn
+        .filter((t) => t.nodes.length > 0)
+        .map((t) => (
+          <CephDaemonsCard key={`ceph-daemons-${t.connId}`} connId={t.connId} connName={t.connName} nodes={t.nodes} />
+        ))}
         </>
       )}
     </div>
@@ -463,8 +482,8 @@ function CapacityCard({ title, capacity }: { title: string; capacity: CapacityRo
                     <span className="truncate font-medium" title={r.name}>{r.name}</span>
                     <span className="shrink-0 text-[var(--text-muted)] tabular">{pctUsed.toFixed(0)}% used</span>
                   </p>
-                  <div className="mt-1 h-1 w-full overflow-hidden rounded-sm bg-[var(--track)]">
-                    <div className="h-full rounded-sm" style={{ width: `${Math.min(100, pctUsed)}%`, background: color }} />
+                  <div className="mt-1 h-1 w-full overflow-hidden rounded-none bg-[var(--track)]">
+                    <div className="h-full" style={{ width: `${Math.min(100, pctUsed)}%`, background: color }} />
                   </div>
                 </div>
                 <div className="shrink-0 text-right tabular">

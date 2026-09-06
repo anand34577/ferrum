@@ -1,5 +1,7 @@
 import { Treemap as RechartsTreemap, ResponsiveContainer, Tooltip } from "recharts"
 import { chartTooltip } from "@/components/charts/tooltipTheme"
+import { chartBarRadius } from "@/lib/chartRadius"
+import { useTheme } from "@/lib/theme"
 
 export interface TreemapDatum {
   name: string
@@ -30,10 +32,11 @@ interface TileProps {
   size?: number
   ratio?: number
   sub?: string
+  cornerRadius?: number
 }
 
 function Tile(props: TileProps) {
-  const { x = 0, y = 0, width, height, name, size, ratio = 0, sub } = props
+  const { x = 0, y = 0, width, height, name, size, ratio = 0, sub, cornerRadius = 4 } = props
   if (width === undefined || height === undefined || width < 4 || height < 4) return null
   const compact = width < 64 || height < 34
   return (
@@ -43,7 +46,7 @@ function Tile(props: TileProps) {
         y={y}
         width={width}
         height={height}
-        rx={4}
+        rx={cornerRadius}
         style={{
           fill: ratioColor(Math.min(1, Math.max(0, ratio))),
           stroke: "var(--bg-surface)",
@@ -76,6 +79,8 @@ function Tile(props: TileProps) {
 /** Proportional-area tiles — the disk-space-analyzer chart. Area encodes
  * usage; color intensity encodes how full each storage is. */
 export function TreemapChart({ data, height = 200, valueFormatter }: TreemapChartProps) {
+  const { look } = useTheme()
+  const r = chartBarRadius(look)
   const filtered = data.filter((d) => d.size > 0)
   if (filtered.length === 0) {
     return <p className="pt-6 text-center text-sm text-[var(--text-muted)]">No storage usage to show.</p>
@@ -87,7 +92,7 @@ export function TreemapChart({ data, height = 200, valueFormatter }: TreemapChar
         dataKey="size"
         nameKey="name"
         aspectRatio={4 / 3}
-        content={<Tile />}
+        content={(props: TileProps) => <Tile {...props} cornerRadius={r} />}
         // No entrance animation — the inventory re-polls every 15s.
         isAnimationActive={false}
       >

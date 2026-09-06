@@ -26,17 +26,45 @@ async function loadRFB(): Promise<RFBConstructor> {
   return candidate as RFBConstructor
 }
 
+// Mints a fresh session for whichever console kind this page is showing —
+// each backend session token is single-use, so reconnecting needs a new one.
+async function openSession(kind: string, connId: string, guestType: string | null, node: string, vmid: string | null) {
+  const isGuestShell = kind === "shell" && guestType && vmid
+  const path = isGuestShell
+    ? `/connections/${connId}/guests/${guestType}/${node}/${vmid}/shell`
+    : kind === "shell"
+      ? `/connections/${connId}/nodes/${node}/shell`
+      : `/connections/${connId}/guests/${guestType}/${node}/${vmid}/console`
+  return api.post<{ wsPath: string; password?: string }>(path)
+}
+
 export function ConsolePage() {
   const [params] = useSearchParams()
+  const kind = params.get("kind") ?? "vnc"
   const initialWsPath = params.get("ws")
   const initialPassword = params.get("pw")
   const name = params.get("name") ?? "Console"
-  // connId/type/node/vmid let us mint a fresh console session on reconnect,
-  // since each session token from the backend is single-use.
+  // connId/type/node/vmid let us mint a fresh session on reconnect, since
+  // each session token from the backend is single-use.
   const connId = params.get("connId")
   const guestType = params.get("type")
   const node = params.get("node")
   const vmid = params.get("vmid")
+  const canReconnect = kind === "shell" ? Boolean(connId && node) : Boolean(connId && guestType && node && vmid)
+
+  // `ws` and `pw` carry a single-use session ticket — strip them from the
+  // address bar immediately after reading so they don't linger in browser
+  // history, crash/session-restore dumps, or extension-visible URL state.
+  // The values are already captured above; reconnects mint a fresh session
+  // instead of reusing these.
+  useEffect(() => {
+    if (!initialWsPath && !initialPassword) return
+    const cleaned = new URLSearchParams(params)
+    cleaned.delete("ws")
+    cleaned.delete("pw")
+    window.history.replaceState(null, "", `${window.location.pathname}?${cleaned.toString()}`)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const containerRef = useRef<HTMLDivElement>(null)
   const rfbRef = useRef<import("@novnc/novnc/lib/rfb.js").default | null>(null)
@@ -50,7 +78,7 @@ export function ConsolePage() {
   const reconnect = useCallback(() => setAttempt((a) => a + 1), [])
 
   useEffect(() => {
-    if (!containerRef.current) return
+    if (!containerRef.current || kind !== "vnc") return
 
     let cancelled = false
     let rfb: import("@novnc/novnc/lib/rfb.js").default | null = null
@@ -67,7 +95,7 @@ export function ConsolePage() {
           }
           return
         }
-        const res = await api.post<{ wsPath: string; password?: string }>(`/connections/${connId}/guests/${guestType}/${node}/${vmid}/console`)
+        const res = await openSession(kind, connId, guestType, node, vmid)
         wsPath = res.wsPath
         passwordRef.current = res.password ?? null
       }
@@ -117,7 +145,7 @@ export function ConsolePage() {
       rfb?.disconnect()
       rfbRef.current = null
     }
-  }, [attempt, initialWsPath, connId, guestType, node, vmid])
+  }, [kind, attempt, initialWsPath, connId, guestType, node, vmid])
 
   function ctrlAltDel() {
     rfbRef.current?.sendCtrlAltDel()
@@ -145,26 +173,38 @@ export function ConsolePage() {
           {state === "error" && "Error"}
         </span>
         <div className="ml-auto flex items-center gap-1">
-          <Button size="sm" variant="ghost" className="text-white/70 hover:bg-white/10 hover:text-white" onClick={ctrlAltDel} disabled={state !== "connected"}>
-            <Keyboard className="h-3.5 w-3.5" /> Ctrl+Alt+Del
-          </Button>
-          <Button size="icon" variant="ghost" className="text-white/70 hover:bg-white/10 hover:text-white" onClick={toggleFullscreen}>
+          {kind === "vnc" && (
+            <Button size="sm" variant="ghost" className="text-white/70 hover:bg-white/10 hover:text-white" onClick={ctrlAltDel} disabled={state !== "connected"}>
+              <Keyboard className="h-3.5 w-3.5" /> Ctrl+Alt+Del
+            </Button>
+          )}
+          <Button size="icon" variant="ghost" aria-label="Toggle fullscreen" className="text-white/70 hover:bg-white/10 hover:text-white" onClick={toggleFullscreen}>
             <Maximize className="h-3.5 w-3.5" />
           </Button>
-          <Button size="icon" variant="ghost" className="text-white/70 hover:bg-white/10 hover:text-white" onClick={() => window.close()}>
+          <Button size="icon" variant="ghost" aria-label="Close console" className="text-white/70 hover:bg-white/10 hover:text-white" onClick={() => window.close()}>
             <X className="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>
 
       <div className="relative min-h-0 flex-1">
-        <div ref={containerRef} className="h-full w-full" />
+        {kind === "shell" ? (
+          <ShellTerminal
+            initialWsPath={attempt === 0 ? initialWsPath : null}
+            reconnectKey={attempt}
+            mintSession={canReconnect ? () => openSession(kind, connId!, guestType, node!, vmid) : null}
+            onState={setState}
+            onError={setErrorMsg}
+          />
+        ) : (
+          <div ref={containerRef} className="h-full w-full" />
+        )}
 
         {state === "error" && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black text-center text-white">
             <AlertTriangle className="h-8 w-8 text-red-500" />
             <p className="max-w-sm text-sm text-white/70">{errorMsg}</p>
-            {(connId && guestType && node && vmid) && (
+            {canReconnect && (
               <Button size="sm" variant="secondary" onClick={reconnect}>
                 <RotateCcw className="h-3.5 w-3.5" /> Try again
               </Button>
@@ -183,4 +223,102 @@ export function ConsolePage() {
       </div>
     </div>
   )
+}
+
+// ShellTerminal renders an xterm.js terminal over the same single-use
+// websocket hand-off the VNC path uses (openGuestShell/openNodeShell mint a
+// termproxy ticket instead of a VNC one; the backend proxies both through
+// the same byte-relay). PVE's own console.js frames terminal I/O as
+// UTF-8 text passed straight through the socket — no separate handshake once
+// the websocket is authenticated by the ticket already embedded server-side.
+function ShellTerminal({
+  initialWsPath,
+  reconnectKey,
+  mintSession,
+  onState,
+  onError,
+}: {
+  initialWsPath: string | null
+  reconnectKey: number
+  mintSession: (() => Promise<{ wsPath: string }>) | null
+  onState: (s: ConnectionState) => void
+  onError: (msg: string) => void
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!containerRef.current) return
+    let cancelled = false
+    let socket: WebSocket | null = null
+    let disposeTerm: (() => void) | null = null
+    onState("connecting")
+
+    async function connect() {
+      const [{ Terminal }, { FitAddon }] = await Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")])
+      await import("@xterm/xterm/css/xterm.css")
+      if (cancelled || !containerRef.current) return
+
+      let wsPath = reconnectKey === 0 ? initialWsPath : null
+      if (!wsPath) {
+        if (!mintSession) {
+          if (!cancelled) {
+            onState("error")
+            onError("Missing shell session — open this from a Shell button.")
+          }
+          return
+        }
+        wsPath = (await mintSession()).wsPath
+      }
+      if (cancelled || !containerRef.current) return
+
+      const term = new Terminal({ cursorBlink: true, theme: { background: "#000000" }, fontSize: 13 })
+      const fit = new FitAddon()
+      term.loadAddon(fit)
+      term.open(containerRef.current)
+      fit.fit()
+      const onResize = () => fit.fit()
+      window.addEventListener("resize", onResize)
+
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+      socket = new WebSocket(`${protocol}//${window.location.host}${wsPath}`)
+      socket.binaryType = "arraybuffer"
+
+      socket.addEventListener("open", () => !cancelled && onState("connected"))
+      socket.addEventListener("close", () => !cancelled && onState("disconnected"))
+      socket.addEventListener("error", () => {
+        if (!cancelled) {
+          onState("error")
+          onError("Shell connection failed.")
+        }
+      })
+      socket.addEventListener("message", (ev) => {
+        const data = ev.data instanceof ArrayBuffer ? new TextDecoder().decode(ev.data) : String(ev.data)
+        term.write(data)
+      })
+      term.onData((data) => {
+        if (socket?.readyState === WebSocket.OPEN) socket.send(data)
+      })
+
+      disposeTerm = () => {
+        window.removeEventListener("resize", onResize)
+        term.dispose()
+      }
+    }
+
+    connect().catch((err: unknown) => {
+      if (!cancelled) {
+        onState("error")
+        onError(err instanceof Error ? err.message : "Failed to open shell session.")
+      }
+    })
+
+    return () => {
+      cancelled = true
+      socket?.close()
+      disposeTerm?.()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reconnectKey])
+
+  return <div ref={containerRef} className="h-full w-full p-1" />
 }

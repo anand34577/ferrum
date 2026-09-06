@@ -9,10 +9,17 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"ferrum/internal/pve"
 	"ferrum/internal/secrets"
 	"ferrum/internal/store"
 )
+
+// loginTimeout bounds a shared login attempt (see Resolver.logins below) —
+// deliberately generous since it only ever runs against a real network
+// round-trip to Proxmox, not a per-request budget.
+const loginTimeout = 30 * time.Second
 
 type Info struct {
 	ID   string
@@ -31,16 +38,23 @@ type Resolver struct {
 
 	mu     sync.Mutex
 	cached map[string]*cachedClient
+
+	// logins coalesces concurrent cache-miss callers for the same connection
+	// id into one login attempt — see ClientFor.
+	logins singleflight.Group
 }
 
 // cachedClient pairs an authenticated client with its login time so
 // password-auth connections don't re-authenticate on every request.
+// Token-auth entries carry a zero loggedIn and never expire — there is no
+// ticket to refresh, only a header to replay.
 type cachedClient struct {
-	client    *pve.Client
-	loggedIn  time.Time
-	isToken   bool // token-auth clients never expire on our side
-	validated bool // has served at least one successful request since login
+	client  *pve.Client
+	expires time.Time // zero == never (token auth)
 }
+
+// live reports whether this cached client can still be handed out.
+func (e *cachedClient) live() bool { return e.expires.IsZero() || time.Now().Before(e.expires) }
 
 func New(db *store.DB, secretBox *secrets.Box) *Resolver {
 	return &Resolver{db: db, secrets: secretBox, cached: map[string]*cachedClient{}}
@@ -104,48 +118,83 @@ func (r *Resolver) credsFor(ctx context.Context, id string) (*connectionCreds, e
 // TTL elapses or the upstream rejects the ticket with 401 (then re-login
 // happens once, on demand).
 func (r *Resolver) ClientFor(ctx context.Context, id string) (*pve.Client, error) {
+	// Cache lookup first, for both auth types. Token auth used to skip the
+	// cache entirely and build a fresh Client per request, which meant a DB
+	// read, a secret decrypt, and (before the shared transport landed in
+	// pve.New) a cold TLS pool on every single upstream call.
+	r.mu.Lock()
+	entry, ok := r.cached[id]
+	r.mu.Unlock()
+	if ok && entry.live() {
+		return entry.client, nil
+	}
+
+	// Cold start (or a just-expired ticket) commonly has a dozen dashboard
+	// widgets all resolving the same connection within milliseconds of each
+	// other — without this, every one of them raced its own login POST to
+	// Proxmox, and whichever caller's own request got cancelled first (a
+	// React Query dedupe abort, a navigated-away tab) took its login down
+	// with it and surfaced as "context canceled" even though nothing was
+	// actually wrong. singleflight collapses them into one login, run on
+	// its own bounded timeout instead of any single caller's ctx, so no
+	// caller's cancellation can take the others' result with it.
+	v, err, _ := r.logins.Do(id, func() (any, error) {
+		loginCtx, cancel := context.WithTimeout(context.Background(), loginTimeout)
+		defer cancel()
+		return r.login(loginCtx, id)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*pve.Client), nil
+}
+
+// login does the actual credential lookup + authentication for id. Callers
+// go through ClientFor's singleflight, not this directly.
+func (r *Resolver) login(ctx context.Context, id string) (*pve.Client, error) {
+	// Re-check the cache: a sequential (not concurrent) call can arrive
+	// after singleflight's previous generation already populated it.
+	r.mu.Lock()
+	entry, ok := r.cached[id]
+	r.mu.Unlock()
+	if ok && entry.live() {
+		return entry.client, nil
+	}
+
 	creds, err := r.credsFor(ctx, id)
 	if err != nil {
 		return nil, err
 	}
+	client := pve.New(creds.host, creds.port, pve.WithInsecureSkipVerify(!creds.verifyTLS))
 
+	var expires time.Time
 	switch creds.authType {
 	case "token":
-		// Token auth is stateless — no login, no caching needed.
-		client := pve.New(creds.host, creds.port, pve.WithInsecureSkipVerify(!creds.verifyTLS))
 		secret, err := r.secrets.Decrypt(creds.tokenSecretEnc)
 		if err != nil {
 			return nil, err
 		}
 		client.WithAPIToken(creds.tokenID, secret)
-		return client, nil
+		// expires stays zero: a token never goes stale on our side. Editing
+		// or deleting the connection calls Invalidate, which evicts it.
 	case "password":
-		// fall through to the ticket cache below
+		password, err := r.secrets.Decrypt(creds.passwordEnc)
+		if err != nil {
+			return nil, err
+		}
+		if err := client.Login(ctx, creds.username, password); err != nil {
+			// A stale cached ticket surfacing as 401 shouldn't poison the
+			// cache entry forever; drop it so the next caller starts fresh.
+			r.invalidate(id)
+			return nil, err
+		}
+		expires = time.Now().Add(ticketTTL)
 	default:
 		return nil, &unknownAuthTypeError{authType: creds.authType}
 	}
 
 	r.mu.Lock()
-	entry, ok := r.cached[id]
-	r.mu.Unlock()
-	if ok && time.Since(entry.loggedIn) < ticketTTL {
-		return entry.client, nil
-	}
-
-	password, err := r.secrets.Decrypt(creds.passwordEnc)
-	if err != nil {
-		return nil, err
-	}
-	client := pve.New(creds.host, creds.port, pve.WithInsecureSkipVerify(!creds.verifyTLS))
-	if err := client.Login(ctx, creds.username, password); err != nil {
-		// A stale cached ticket surfacing as 401 shouldn't poison the cache
-		// entry forever; drop it so the next caller starts fresh.
-		r.invalidate(id)
-		return nil, err
-	}
-
-	r.mu.Lock()
-	r.cached[id] = &cachedClient{client: client, loggedIn: time.Now(), isToken: false}
+	r.cached[id] = &cachedClient{client: client, expires: expires}
 	r.mu.Unlock()
 	return client, nil
 }
@@ -153,6 +202,13 @@ func (r *Resolver) ClientFor(ctx context.Context, id string) (*pve.Client, error
 // OnUpstreamUnauthorized drops the cached ticket for a connection after the
 // upstream rejected it with 401, so the next request re-authenticates.
 func (r *Resolver) OnUpstreamUnauthorized(id string) {
+	r.invalidate(id)
+}
+
+// Invalidate drops the cached ticket for one connection — used when its
+// stored credentials are edited or the connection is deleted, so a
+// previously-authenticated client is never reused after that point.
+func (r *Resolver) Invalidate(id string) {
 	r.invalidate(id)
 }
 

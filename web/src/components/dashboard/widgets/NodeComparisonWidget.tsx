@@ -1,12 +1,14 @@
 import { RankedBarChart } from "@/components/charts/RankedBarChart"
 import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { useScopedInventory } from "@/lib/fleet"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 const metricLabel: Record<string, string> = { cpu: "CPU", mem: "Memory", disk: "Disk" }
 
 export function NodeComparisonWidget({ settings }: { settings: WidgetSettings }) {
   const metric = settings.metric ?? "cpu"
-  const { resources } = useScopedInventory(settings)
+  const { resources, isError } = useScopedInventory(settings)
+  if (isError) return <WidgetError />
 
   const nodes = resources
     .filter((r) => r.type === "node")

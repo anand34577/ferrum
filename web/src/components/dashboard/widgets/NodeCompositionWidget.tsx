@@ -1,12 +1,14 @@
 import { StackedBarChart } from "@/components/charts/StackedBarChart"
 import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { useScopedInventory } from "@/lib/fleet"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 // Composition across categories: what each node's guest fleet is made of
 // (VMs vs containers), stacked so the host mix is visible per node.
 export function NodeCompositionWidget({ settings }: { settings: WidgetSettings }) {
   const sortBy = settings.sort === "total" ? "total" : "qemu"
-  const { resources } = useScopedInventory(settings)
+  const { resources, isError } = useScopedInventory(settings)
+  if (isError) return <WidgetError />
 
   const byNode = new Map<string, { name: string; qemu: number; lxc: number; total: number }>()
   for (const r of resources) {

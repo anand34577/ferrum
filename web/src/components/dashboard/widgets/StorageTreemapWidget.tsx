@@ -2,11 +2,13 @@ import { TreemapChart } from "@/components/charts/TreemapChart"
 import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { useScopedInventory } from "@/lib/fleet"
 import { formatBytes } from "@/lib/utils"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 // Storage-usage treemap — the disk-space-analyzer view: tile area encodes
 // used bytes, color intensity encodes how full each storage is.
 export function StorageTreemapWidget({ settings }: { settings: WidgetSettings }) {
-  const { resources } = useScopedInventory(settings)
+  const { resources, isError } = useScopedInventory(settings)
+  if (isError) return <WidgetError />
 
   const tiles = resources
     .filter((r) => r.type === "storage" && (r.disk ?? 0) > 0)

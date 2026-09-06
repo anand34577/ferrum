@@ -6,6 +6,7 @@ import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { useScopedInventory } from "@/lib/fleet"
 import { api, type RRDPoint } from "@/lib/api"
 import { formatRRDTick } from "@/lib/utils"
+import { WidgetError } from "@/components/dashboard/WidgetChrome"
 
 const COLS = 24
 
@@ -14,7 +15,7 @@ const COLS = 24
 export function UtilizationHeatmapWidget({ settings }: { settings: WidgetSettings }) {
   const timeframe = settings.timeframe ?? "day"
   const metric = settings.metric === "mem" ? "mem" : "cpu"
-  const { connections } = useScopedInventory(settings)
+  const { connections, isError } = useScopedInventory(settings)
 
   const nodePairs: Array<{ connId: string; node: string }> = useMemo(
     () =>
@@ -72,9 +73,11 @@ export function UtilizationHeatmapWidget({ settings }: { settings: WidgetSetting
     return { rows: heatRows, labels: colLabels }
   }, [rrdQueries, nodePairs, metric])
 
+  if (isError) return <WidgetError />
   if (connections.length === 0) return <p className="text-sm text-[var(--text-muted)]">No connections configured yet.</p>
   if (nodePairs.length === 0) return <p className="text-sm text-[var(--text-muted)]">No online nodes yet.</p>
   if (rrdQueries.some((q) => q.isLoading)) return <Loader2 className="h-4 w-4 animate-spin text-[var(--text-muted)]" />
+  if (nodePairs.length > 0 && rrdQueries.every((q) => q.isError)) return <WidgetError />
   if (rows.length === 0) return <p className="text-sm text-[var(--text-muted)]">No historical data available yet.</p>
 
   return (

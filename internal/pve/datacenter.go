@@ -2,6 +2,7 @@ package pve
 
 import (
 	"context"
+	"encoding/json"
 	"net/url"
 )
 
@@ -17,19 +18,36 @@ type DatacenterOptions struct {
 	Description string `json:"description,omitempty"`
 	MacPrefix   string `json:"mac_prefix,omitempty"`
 	MaxWorkers  int    `json:"max_workers,omitempty"`
+
+	// Raw holds every key PVE returned, unfiltered — options this struct
+	// doesn't name (bwlimit, migration, u2f, next-id, tag style, ...).
+	Raw map[string]any `json:"raw,omitempty"`
 }
 
 func (c *Client) DatacenterOptions(ctx context.Context) (*DatacenterOptions, error) {
 	var out struct {
-		Data DatacenterOptions `json:"data"`
+		Data map[string]any `json:"data"`
 	}
 	if err := c.get(ctx, "/cluster/options", &out); err != nil {
 		return nil, err
 	}
-	return &out.Data, nil
+	raw, err := json.Marshal(out.Data)
+	if err != nil {
+		return nil, err
+	}
+	opts := DatacenterOptions{Raw: out.Data}
+	if err := json.Unmarshal(raw, &opts); err != nil {
+		return nil, err
+	}
+	return &opts, nil
 }
 
-func (c *Client) UpdateDatacenterOptions(ctx context.Context, opts DatacenterOptions) error {
+// UpdateDatacenterOptions writes the named fields plus, via extra, any
+// option PVE supports that DatacenterOptions doesn't model by name (e.g.
+// "bwlimit", "u2f", "next-id", "tag-style") — set a key to "" (empty
+// string, not omitted) to delete/reset that option, matching PVE's own
+// delete-by-empty-value convention for this endpoint.
+func (c *Client) UpdateDatacenterOptions(ctx context.Context, opts DatacenterOptions, extra map[string]string) error {
 	form := url.Values{}
 	setIfNonEmptyURL(form, "keyboard", opts.Keyboard)
 	setIfNonEmptyURL(form, "language", opts.Language)
@@ -38,6 +56,9 @@ func (c *Client) UpdateDatacenterOptions(ctx context.Context, opts DatacenterOpt
 	setIfNonEmptyURL(form, "email_from", opts.EmailFrom)
 	setIfNonEmptyURL(form, "description", opts.Description)
 	setIfNonEmptyURL(form, "mac_prefix", opts.MacPrefix)
+	for k, v := range extra {
+		form.Set(k, v)
+	}
 	if len(form) == 0 {
 		return nil
 	}

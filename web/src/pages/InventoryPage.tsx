@@ -6,14 +6,15 @@ import {
   Play,
   Plus,
   Power,
+  RefreshCw,
   RotateCcw,
   Server,
   SquareTerminal,
   Workflow,
   X,
 } from "lucide-react"
-import { useState } from "react"
-import { Link } from "react-router-dom"
+import { useEffect, useRef, useState } from "react"
+import { Link, useLocation } from "react-router-dom"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -49,6 +50,8 @@ import { cn, formatBytes, formatPercent, formatUptime, guestDotStatus } from "@/
 export function InventoryPage() {
   const queryClient = useQueryClient()
   const confirm = useConfirm()
+  const location = useLocation()
+  const focusState = location.state as { focusGuestId?: string; focusGuestName?: string } | null
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [selectedGuest, setSelectedGuest] = useState<{ connId: string; guest: ClusterResource } | null>(null)
   const [createDialogConn, setCreateDialogConn] = useState<{ connId: string; nodes: ClusterResource[] } | null>(null)
@@ -57,10 +60,12 @@ export function InventoryPage() {
   const [statusTypes, setStatusTypes] = useState<string[]>([])
   const [guestTypes, setGuestTypes] = useState<string[]>([])
   const [poolFilter, setPoolFilter] = useState<string[]>([])
-  const [search, setSearch] = useState("")
+  const [search, setSearch] = useState(focusState?.focusGuestName ?? "")
   const [selected, setSelected] = useState<Map<string, { connId: string; guest: ClusterResource }>>(new Map())
   const [migrateDialogOpen, setMigrateDialogOpen] = useState(false)
   const [migrateTarget, setMigrateTarget] = useState("")
+  const [highlightId, setHighlightId] = useState<string | null>(focusState?.focusGuestId ?? null)
+  const guestRefs = useRef<Map<string, HTMLDivElement>>(new Map())
 
   function toggleSelected(connId: string, guest: ClusterResource) {
     setSelected((prev) => {
@@ -214,6 +219,39 @@ export function InventoryPage() {
 
   const allGuests = (data ?? []).flatMap((c) => c.resources ?? []).filter((r) => r.type === "qemu" || r.type === "lxc")
 
+  // A search/filter match hidden inside a collapsed connection or node group
+  // is effectively invisible — the classic "search doesn't find what's
+  // right there" complaint. Whenever a filter is active, force-expand any
+  // group that contains at least one match; clearing the filter restores
+  // whatever the user had manually expanded/collapsed.
+  const filtersActive = !!(search || statusTypes.length || guestTypes.length || poolFilter.length)
+  function guestMatches(r: ClusterResource) {
+    if (statusTypes.length > 0 && !statusTypes.includes(r.status ?? "")) return false
+    if (guestTypes.length > 0 && !guestTypes.includes(r.type)) return false
+    if (poolFilter.length > 0 && !(r.pool && poolFilter.includes(r.pool))) return false
+    if (search && !`${r.name ?? ""} ${r.vmid ?? ""}`.toLowerCase().includes(search.toLowerCase())) return false
+    return true
+  }
+
+  // Jump-to-guest from the command palette: expand the guest's connection
+  // and node, scroll it into view, and pulse-highlight it briefly so it's
+  // unmistakable even in a long list.
+  useEffect(() => {
+    if (!highlightId || !data) return
+    for (const conn of data) {
+      const guest = (conn.resources ?? []).find((r) => r.id === highlightId)
+      if (guest) {
+        setExpanded((prev) => new Set(prev).add(conn.connectionId).add(`${conn.connectionId}/${guest.node}`))
+        const el = guestRefs.current.get(highlightId)
+        el?.scrollIntoView({ behavior: "smooth", block: "center" })
+        break
+      }
+    }
+    const t = setTimeout(() => setHighlightId(null), 2500)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightId, data])
+
   return (
     <div className="space-y-4">
       <PageHeader
@@ -328,15 +366,10 @@ export function InventoryPage() {
       <div className="space-y-3">
         {!isError && data?.map((conn) => {
           const nodes = (conn.resources ?? []).filter((r) => r.type === "node")
-          const guestsByNode = (conn.resources ?? []).filter((r) => {
-            if (r.type !== "qemu" && r.type !== "lxc") return false
-            if (statusTypes.length > 0 && !statusTypes.includes(r.status ?? "")) return false
-            if (guestTypes.length > 0 && !guestTypes.includes(r.type)) return false
-            if (poolFilter.length > 0 && !(r.pool && poolFilter.includes(r.pool))) return false
-            if (search && !`${r.name ?? ""} ${r.vmid ?? ""}`.toLowerCase().includes(search.toLowerCase())) return false
-            return true
-          })
+          const guestsByNode = (conn.resources ?? []).filter((r) => (r.type === "qemu" || r.type === "lxc") && guestMatches(r))
           const connGuestCount = (conn.resources ?? []).filter((r) => r.type === "qemu" || r.type === "lxc").length
+          const connHasMatch = filtersActive && guestsByNode.length > 0
+          const connExpanded = expanded.has(conn.connectionId) || connHasMatch
 
           return (
             <Card key={conn.connectionId}>
@@ -344,10 +377,10 @@ export function InventoryPage() {
                 <button
                   onClick={() => toggle(conn.connectionId)}
                   className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                  aria-expanded={expanded.has(conn.connectionId)}
+                  aria-expanded={connExpanded}
                 >
                   <ChevronRight
-                    className={cn("h-4 w-4 shrink-0 transition-transform", expanded.has(conn.connectionId) && "rotate-90")}
+                    className={cn("h-4 w-4 shrink-0 transition-transform", connExpanded && "rotate-90")}
                   />
                   <Server className="h-4 w-4 shrink-0 text-brand-500" />
                   <span className="truncate font-medium">{conn.name}</span>
@@ -370,17 +403,18 @@ export function InventoryPage() {
                 )}
               </div>
 
-              {expanded.has(conn.connectionId) && (
+              {connExpanded && (
                 <CardContent className="space-y-1 pt-0">
                   {nodes.map((node) => {
                     const nodeKey = `${conn.connectionId}/${node.node}`
                     const guests = guestsByNode.filter((g) => g.node === node.node)
+                    const nodeExpanded = expanded.has(nodeKey) || (filtersActive && guests.length > 0)
                     return (
                       <div key={nodeKey}>
-                        <div className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-md px-2 py-1.5 hover:bg-[var(--bg-surface-hover)]">
-                          <button onClick={() => toggle(nodeKey)} className="flex min-w-0 flex-1 items-center gap-2 text-left" aria-expanded={expanded.has(nodeKey)}>
+                        <div className="inv-row flex w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-md px-2 py-1.5 hover:bg-[var(--bg-surface-hover)]">
+                          <button onClick={() => toggle(nodeKey)} className="flex min-w-0 flex-1 items-center gap-2 text-left" aria-expanded={nodeExpanded}>
                             <ChevronRight
-                              className={cn("h-3.5 w-3.5 shrink-0 transition-transform", expanded.has(nodeKey) && "rotate-90")}
+                              className={cn("h-3.5 w-3.5 shrink-0 transition-transform", nodeExpanded && "rotate-90")}
                             />
                             <Server className="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
                             <span className="truncate text-sm font-medium hover:underline">
@@ -402,7 +436,7 @@ export function InventoryPage() {
                           </span>
                         </div>
 
-                        {expanded.has(nodeKey) && (
+                        {nodeExpanded && (
                           <div className="ml-8 space-y-0.5 border-l border-[var(--border)] pl-3">
                             {guests.length === 0 && (
                               <p className="py-1 text-xs text-[var(--text-muted)]">No guests on this node.</p>
@@ -410,7 +444,14 @@ export function InventoryPage() {
                             {guests.map((guest) => (
                               <div
                                 key={guest.id}
-                                className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md px-2 py-1.5 hover:bg-[var(--bg-surface-hover)]"
+                                ref={(el) => {
+                                  if (el) guestRefs.current.set(guest.id, el)
+                                  else guestRefs.current.delete(guest.id)
+                                }}
+                                className={cn(
+                                  "inv-row flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md px-2 py-1.5 transition-colors duration-500 hover:bg-[var(--bg-surface-hover)]",
+                                  highlightId === guest.id && "bg-[color-mix(in_oklab,var(--color-brand-500)_16%,transparent)] ring-1 ring-[var(--ring)]",
+                                )}
                               >
                                 <Checkbox
                                   checked={selected.has(`${conn.connectionId}:${guest.id}`)}
@@ -505,6 +546,9 @@ export function InventoryPage() {
                                           <DropdownMenuSeparator />
                                           <DropdownMenuItem onSelect={() => guestPower(conn.connectionId, guest, "suspend")}>
                                             <Pause className="h-3.5 w-3.5 text-[var(--text-muted)]" /> Suspend
+                                          </DropdownMenuItem>
+                                          <DropdownMenuItem onSelect={() => guestPower(conn.connectionId, guest, "reboot")}>
+                                            <RefreshCw className="h-3.5 w-3.5 text-[var(--text-muted)]" /> Reboot
                                           </DropdownMenuItem>
                                           <DropdownMenuItem onSelect={() => guestPower(conn.connectionId, guest, "shutdown")}>
                                             <Power className="h-3.5 w-3.5 text-[var(--status-warn)]" /> Shutdown

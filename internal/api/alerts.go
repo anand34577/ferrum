@@ -7,6 +7,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+
+	"ferrum/internal/poller"
 )
 
 type alertRuleDTO struct {
@@ -166,6 +168,24 @@ func (s *Server) alertsSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, summary)
+}
+
+// connectionHealth reports whether each configured Proxmox connection
+// answered on the alert evaluator's last poll — independent of alert_rules,
+// so "is the server even reachable" always shows up regardless of whether
+// the admin configured any metric threshold. Empty (not an error) when the
+// evaluator hasn't ticked yet or isn't wired up.
+func (s *Server) connectionHealth(w http.ResponseWriter, r *http.Request) {
+	if s.evaluator == nil {
+		writeJSON(w, http.StatusOK, []poller.ConnectionHealth{})
+		return
+	}
+	health, err := s.evaluator.ConnectionHealthList(r.Context())
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, health)
 }
 
 func (s *Server) silenceAlert(w http.ResponseWriter, r *http.Request) {
