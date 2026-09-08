@@ -6,6 +6,7 @@ import {
   Bot,
   Check,
   CheckCircle2,
+  ChevronDown,
   Copy,
   History,
   Loader2,
@@ -36,7 +37,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton"
 import { api, type ToolCallRecord, type UsableAIProvider } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
-import { type Conversation, type DisplayMessage, useAIConversations } from "@/lib/useAIConversations"
+import { type Conversation, type DisplayMessage, type ToolCallEntry, useAIConversations } from "@/lib/useAIConversations"
 import { cn, formatRelativeTime } from "@/lib/utils"
 
 function newId() {
@@ -46,6 +47,8 @@ function newId() {
 interface ToolActivity {
   name: string
   status: "running" | "ok" | "error"
+  args?: unknown
+  result?: string
 }
 
 const TOOL_LABELS: Record<string, string> = {
@@ -65,18 +68,36 @@ function toolLabel(name: string) {
   return TOOL_LABELS[name] ?? `Using ${name}`
 }
 
+/** Pretty-prints a raw JSON string for display, falling back to the raw
+ * text if it doesn't parse (defensive only — the server always sends valid
+ * JSON or omits the field entirely). */
+function formatJSON(raw: string): string {
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2)
+  } catch {
+    return raw
+  }
+}
+
 /** Parses one server-sent event line: either an OpenAI-shaped content delta,
  * or one of Ferrum's own envelopes reporting tool-call progress / a mid-
  * stream error (see internal/api/ai_chat.go). */
-function parseSSELine(line: string): { delta?: string; toolCall?: string; toolResult?: { name: string; ok: boolean }; error?: string; done?: boolean } {
+function parseSSELine(line: string): {
+  delta?: string
+  toolCall?: { name: string; args?: unknown }
+  toolResult?: { name: string; ok: boolean; result?: string }
+  error?: string
+  done?: boolean
+} {
   if (!line.startsWith("data:")) return {}
   const payload = line.slice(5).trim()
   if (payload === "[DONE]") return { done: true }
   try {
     const parsed = JSON.parse(payload)
     if (parsed.ferrum_error) return { error: parsed.ferrum_error }
-    if (parsed.ferrum_tool_call) return { toolCall: parsed.ferrum_tool_call.name }
-    if (parsed.ferrum_tool_result) return { toolResult: { name: parsed.ferrum_tool_result.name, ok: !!parsed.ferrum_tool_result.ok } }
+    if (parsed.ferrum_tool_call) return { toolCall: { name: parsed.ferrum_tool_call.name, args: parsed.ferrum_tool_call.args } }
+    if (parsed.ferrum_tool_result)
+      return { toolResult: { name: parsed.ferrum_tool_result.name, ok: !!parsed.ferrum_tool_result.ok, result: parsed.ferrum_tool_result.result } }
     return { delta: parsed.choices?.[0]?.delta?.content ?? undefined }
   } catch {
     return {}
@@ -234,6 +255,12 @@ export function AIAssistantPage() {
     abortRef.current = controller
     let assistantText = ""
     let midStreamError: string | null = null
+    // Mirrors the toolActivity state updates below, but as a plain array so
+    // the finished tool calls can be attached to the committed message —
+    // toolActivity itself is cleared once streaming ends (it's "what's
+    // happening right now"), so without this the evidence for an answer
+    // would vanish the moment the response finished.
+    const toolLog: ToolCallEntry[] = []
 
     try {
       const res = await fetch("/api/v1/ai/chat", {
@@ -266,16 +293,24 @@ export function AIAssistantPage() {
             assistantText += evt.delta
             setStreamingText(assistantText)
           } else if (evt.toolCall) {
-            setToolActivity((prev) => [...prev, { name: evt.toolCall!, status: "running" }])
+            const { name, args } = evt.toolCall
+            setToolActivity((prev) => [...prev, { name, args, status: "running" }])
+            toolLog.push({ name, args, ok: true })
           } else if (evt.toolResult) {
+            const { name, ok, result } = evt.toolResult
             setToolActivity((prev) => {
-              const idx = [...prev].reverse().findIndex((t) => t.name === evt.toolResult!.name && t.status === "running")
+              const idx = [...prev].reverse().findIndex((t) => t.name === name && t.status === "running")
               if (idx === -1) return prev
               const realIdx = prev.length - 1 - idx
               const next = [...prev]
-              next[realIdx] = { ...next[realIdx], status: evt.toolResult!.ok ? "ok" : "error" }
+              next[realIdx] = { ...next[realIdx], status: ok ? "ok" : "error", result }
               return next
             })
+            const logIdx = [...toolLog].reverse().findIndex((t) => t.name === name && t.result === undefined)
+            if (logIdx !== -1) {
+              const realIdx = toolLog.length - 1 - logIdx
+              toolLog[realIdx] = { ...toolLog[realIdx], ok, result }
+            }
           } else if (evt.error) {
             midStreamError = evt.error
           }
@@ -292,9 +327,14 @@ export function AIAssistantPage() {
       setToolActivity([])
       abortRef.current = null
       // Commit whatever came back — including a partial answer if the user
-      // hit Stop midway, same as every mainstream chat product.
-      if (assistantText) {
-        setMessages(convId, [...history, { id: newId(), role: "assistant", content: assistantText }])
+      // hit Stop midway, same as every mainstream chat product. Tool calls
+      // are attached even when there's no final text yet (e.g. aborted
+      // mid-loop) so the evidence of what was checked isn't lost.
+      if (assistantText || toolLog.length > 0) {
+        setMessages(convId, [
+          ...history,
+          { id: newId(), role: "assistant", content: assistantText, toolCalls: toolLog.length > 0 ? toolLog : undefined },
+        ])
       }
     }
   }
@@ -451,7 +491,7 @@ export function AIAssistantPage() {
 
         {/* Chat panel */}
         <Card className="flex flex-1 flex-col overflow-hidden">
-          <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-2.5">
+          <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] bg-[var(--bg-elevated)]/60 px-4 py-2.5 backdrop-blur-sm">
             <Select
               value={modelId}
               onValueChange={(v) => (active ? updateConversation(active.id, { modelId: v }) : undefined)}
@@ -484,9 +524,9 @@ export function AIAssistantPage() {
           <CardContent className="relative flex-1 overflow-hidden p-0">
             <div ref={scrollRef} onScroll={handleScroll} className="h-full space-y-5 overflow-y-auto p-4">
               {displayMessages.length === 0 ? (
-                <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-md bg-[var(--bg-muted)] text-brand-500">
-                    <Sparkles className="h-5 w-5" />
+                <div className="flex h-full animate-in flex-col items-center justify-center gap-4 fade-in text-center duration-500">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-brand-500/20 to-brand-600/5 text-brand-500 shadow-sm ring-1 ring-[var(--border)]">
+                    <Sparkles className="h-6 w-6" />
                   </div>
                   <p className="max-w-sm text-sm text-[var(--text-muted)]">
                     Ask about your Proxmox fleet — nodes, guests, storage, alerts, backups. Type <code className="rounded-sm bg-[var(--bg-muted)] px-1 py-0.5 text-xs">/</code> for quick commands.
@@ -497,7 +537,7 @@ export function AIAssistantPage() {
                         key={s}
                         type="button"
                         onClick={() => setInput(s)}
-                        className="rounded-md border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--text-muted)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text)]"
+                        className="rounded-full border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-1.5 text-xs text-[var(--text-muted)] shadow-sm transition-all hover:-translate-y-0.5 hover:border-brand-500/50 hover:text-[var(--text)] hover:shadow-md"
                       >
                         {s}
                       </button>
@@ -509,56 +549,65 @@ export function AIAssistantPage() {
                   <div
                     key={m.id}
                     data-mid={m.id}
-                    className={cn("group flex scroll-mt-4 gap-3", m.role === "user" && "flex-row-reverse")}
+                    className={cn(
+                      "group flex scroll-mt-4 animate-in gap-3 fade-in slide-in-from-bottom-1 duration-300",
+                      m.role === "user" && "flex-row-reverse",
+                    )}
                   >
                     <div
                       className={cn(
-                        "flex h-7 w-7 shrink-0 items-center justify-center rounded-sm",
-                        m.role === "user" ? "bg-brand-600 text-white" : "bg-[var(--bg-muted)] text-brand-500",
+                        "flex h-7 w-7 shrink-0 items-center justify-center rounded-full shadow-sm ring-1",
+                        m.role === "user"
+                          ? "bg-brand-600 text-white ring-brand-700/50"
+                          : "bg-gradient-to-br from-brand-500/20 to-brand-600/10 text-brand-500 ring-[var(--border)]",
                       )}
                     >
                       {m.role === "user" ? <UserIcon className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
                     </div>
                     <div className={cn("min-w-0 max-w-[75%]", m.role === "user" && "flex flex-col items-end")}>
-                      {/* Live tool-call activity while this message is streaming */}
+                      {/* Live tool-call activity while this message is streaming, or —
+                          once it's committed — the same evidence kept alongside it so
+                          "what did it check" is never lost after the answer lands. */}
                       {m.streaming && toolActivity.length > 0 && (
                         <div className="mb-1.5 space-y-1">
                           {toolActivity.map((t, idx) => (
-                            <div
-                              key={`${t.name}-${idx}`}
-                              className="flex items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1 text-xs text-[var(--text-muted)]"
-                            >
-                              {t.status === "running" ? (
-                                <Loader2 className="h-3 w-3 animate-spin text-brand-500" />
-                              ) : t.status === "ok" ? (
-                                <CheckCircle2 className="h-3 w-3 text-[var(--status-ok)]" />
-                              ) : (
-                                <AlertTriangle className="h-3 w-3 text-[var(--status-error)]" />
-                              )}
-                              <Wrench className="h-3 w-3 opacity-60" />
-                              {toolLabel(t.name)}
-                            </div>
+                            <ToolCallPill key={`${t.name}-${idx}`} name={t.name} status={t.status} args={t.args} result={t.result} />
                           ))}
                         </div>
                       )}
-                      <div
-                        className={cn(
-                          "rounded-lg border px-3.5 py-2.5 text-sm",
-                          m.role === "user"
-                            ? "border-brand-700 bg-brand-600 text-white"
-                            : "border-[var(--border)] bg-[var(--bg-surface)]",
-                        )}
-                      >
-                        {m.role === "assistant" ? (
-                          m.content ? (
-                            <Markdown text={m.content} />
-                          ) : m.streaming && toolActivity.length === 0 ? (
-                            <ThinkingDots />
-                          ) : null
-                        ) : (
-                          <span className="whitespace-pre-wrap">{m.content}</span>
-                        )}
-                      </div>
+                      {!m.streaming && m.toolCalls && m.toolCalls.length > 0 && (
+                        <div className="mb-1.5 space-y-1">
+                          {m.toolCalls.map((t, idx) => (
+                            <ToolCallPill key={`${t.name}-${idx}`} name={t.name} status={t.ok ? "ok" : "error"} args={t.args} result={t.result} />
+                          ))}
+                        </div>
+                      )}
+                      {/* An assistant message with no text (e.g. Stop hit before the
+                          model produced any) has nothing to show beyond its tool
+                          pills above — skip the bubble instead of rendering an empty box. */}
+                      {(m.role !== "assistant" || m.content || m.streaming) && (
+                        <div
+                          className={cn(
+                            "rounded-2xl border px-3.5 py-2.5 text-sm",
+                            m.role === "user"
+                              ? "border-brand-700 bg-brand-600 text-white shadow-sm"
+                              : "border-[var(--border)] bg-[var(--bg-surface)] shadow-sm",
+                          )}
+                        >
+                          {m.role === "assistant" ? (
+                            m.content ? (
+                              <>
+                                <Markdown text={m.content} />
+                                {m.streaming && <span className="ml-0.5 inline-block h-3.5 w-[2px] translate-y-0.5 animate-pulse bg-brand-500" aria-hidden />}
+                              </>
+                            ) : m.streaming && toolActivity.length === 0 ? (
+                              <ThinkingDots />
+                            ) : null
+                          ) : (
+                            <span className="whitespace-pre-wrap">{m.content}</span>
+                          )}
+                        </div>
+                      )}
                       {m.role === "assistant" && !m.streaming && m.content && (
                         <div className="mt-1 flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100">
                           <CopyMessageButton content={m.content} onCopy={copyMessage} />
@@ -612,7 +661,7 @@ export function AIAssistantPage() {
                 ))}
               </div>
             )}
-            <div className="flex items-end gap-2">
+            <div className="flex items-end gap-2 rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] p-1.5 pl-3.5 shadow-sm transition-colors focus-within:border-brand-500/60 focus-within:ring-2 focus-within:ring-[var(--ring)]">
               <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -645,14 +694,14 @@ export function AIAssistantPage() {
                 }}
                 placeholder="Ask about your fleet, or type / for commands… (Shift+Enter for a new line)"
                 rows={1}
-                className="max-h-32 flex-1 resize-none rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+                className="max-h-32 flex-1 resize-none bg-transparent py-1.5 text-sm outline-none"
               />
               {streaming ? (
-                <Button variant="destructive" onClick={stop}>
-                  <Square className="h-3.5 w-3.5" /> Stop
+                <Button variant="destructive" className="shrink-0 rounded-full" size="icon" onClick={stop} title="Stop">
+                  <Square className="h-3.5 w-3.5" />
                 </Button>
               ) : (
-                <Button onClick={() => send()} disabled={!input.trim()}>
+                <Button className="shrink-0 rounded-full" size="icon" onClick={() => send()} disabled={!input.trim()} title="Send">
                   <Send className="h-3.5 w-3.5" />
                 </Button>
               )}
@@ -698,17 +747,26 @@ function ActivityPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (o
             <p className="py-6 text-center text-sm text-[var(--text-muted)]">No tool calls yet — anything the assistant looks up or does on your behalf will show up here.</p>
           ) : (
             records.map((r) => (
-              <div key={r.id} className="flex items-start gap-2.5 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
-                {r.ok ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--status-ok)]" /> : <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--status-error)]" />}
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="font-mono text-xs">{toolLabel(r.tool)}</span>
-                    <Badge variant={r.source === "mcp" ? "brand" : "outline"}>{r.source === "mcp" ? "MCP" : "Chat"}</Badge>
+              <details key={r.id} className="group rounded-md border border-[var(--border)] px-3 py-2 text-sm">
+                <summary className="flex cursor-pointer list-none items-start gap-2.5 [&::-webkit-details-marker]:hidden">
+                  {r.ok ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--status-ok)]" /> : <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--status-error)]" />}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-mono text-xs">{toolLabel(r.tool)}</span>
+                      <Badge variant={r.source === "mcp" ? "brand" : "outline"}>{r.source === "mcp" ? "MCP" : "Chat"}</Badge>
+                      {r.username && <span className="text-xs text-[var(--text-muted)]">{r.username}</span>}
+                    </div>
+                    {r.error && <p className="mt-0.5 truncate text-xs text-[var(--status-error)]">{r.error}</p>}
+                    <p className="mt-0.5 text-xs text-[var(--text-muted)]">{formatRelativeTime(r.createdAt)}</p>
                   </div>
-                  {r.error && <p className="mt-0.5 truncate text-xs text-[var(--status-error)]">{r.error}</p>}
-                  <p className="mt-0.5 text-xs text-[var(--text-muted)]">{formatRelativeTime(r.createdAt)}</p>
-                </div>
-              </div>
+                  {r.args && <ChevronDown className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-50 transition-transform group-open:rotate-180" />}
+                </summary>
+                {r.args && (
+                  <pre className="mt-2 max-h-40 overflow-auto rounded-sm bg-[var(--bg-muted)] p-1.5 font-mono text-[11px] whitespace-pre-wrap break-all">
+                    {formatJSON(r.args)}
+                  </pre>
+                )}
+              </details>
             ))
           )}
         </div>
@@ -741,10 +799,11 @@ function ConversationList({
           type="button"
           onClick={() => onSelect(c.id)}
           className={cn(
-            "group flex w-full items-center justify-between gap-1 rounded-md px-2.5 py-2 text-left text-sm transition-colors",
+            "group relative flex w-full items-center justify-between gap-1 rounded-lg py-2 pr-2.5 pl-3.5 text-left text-sm transition-colors",
             c.id === activeId ? "bg-[var(--bg-muted)] text-[var(--text)]" : "text-[var(--text-muted)] hover:bg-[var(--bg-surface-hover)]",
           )}
         >
+          {c.id === activeId && <span className="absolute top-1.5 bottom-1.5 left-0 w-[3px] rounded-full bg-brand-500" aria-hidden />}
           <span className="min-w-0 flex-1">
             <span className="block truncate">{c.title}</span>
             <span className="block text-[10px] text-[var(--text-muted)]">{formatRelativeTime(c.updatedAt)}</span>
@@ -759,6 +818,53 @@ function ConversationList({
         </button>
       ))}
     </>
+  )
+}
+
+/** A single tool-call's status, expandable to its arguments and result —
+ * used both for the live in-progress list and for the ones persisted onto a
+ * finished message, so "what did it check and what came back" is never a
+ * dead end. Uses a native <details> element rather than a controlled-state
+ * accordion: no JS needed to track which pill is open. */
+function ToolCallPill({ name, status, args, result }: { name: string; status: "running" | "ok" | "error"; args?: unknown; result?: string }) {
+  const hasDetails = args !== undefined || !!result
+  const body = (
+    <summary className="flex cursor-pointer list-none items-center gap-1.5 px-2.5 py-1 marker:content-none [&::-webkit-details-marker]:hidden">
+      {status === "running" ? (
+        <Loader2 className="h-3 w-3 shrink-0 animate-spin text-brand-500" />
+      ) : status === "ok" ? (
+        <CheckCircle2 className="h-3 w-3 shrink-0 text-[var(--status-ok)]" />
+      ) : (
+        <AlertTriangle className="h-3 w-3 shrink-0 text-[var(--status-error)]" />
+      )}
+      <Wrench className="h-3 w-3 shrink-0 opacity-60" />
+      <span className="flex-1 truncate">{toolLabel(name)}</span>
+      {hasDetails && <ChevronDown className="h-3 w-3 shrink-0 opacity-50 transition-transform group-open:rotate-180" />}
+    </summary>
+  )
+  if (!hasDetails) {
+    return <div className="group w-fit animate-in rounded-full border border-[var(--border)] bg-[var(--bg-surface)] fade-in text-xs text-[var(--text-muted)]">{body}</div>
+  }
+  return (
+    <details className="group w-fit animate-in overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] fade-in text-xs text-[var(--text-muted)] open:w-full">
+      {body}
+      <div className="space-y-2 border-t border-[var(--border)] px-2.5 py-2">
+        {args !== undefined && (
+          <div>
+            <div className="mb-0.5 font-medium text-[var(--text-muted)]">Arguments</div>
+            <pre className="max-h-40 overflow-auto rounded-md bg-[var(--bg-muted)] p-1.5 font-mono text-[11px] whitespace-pre-wrap break-all">
+              {JSON.stringify(args, null, 2)}
+            </pre>
+          </div>
+        )}
+        {result && (
+          <div>
+            <div className="mb-0.5 font-medium text-[var(--text-muted)]">Result</div>
+            <pre className="max-h-40 overflow-auto rounded-md bg-[var(--bg-muted)] p-1.5 font-mono text-[11px] whitespace-pre-wrap break-all">{result}</pre>
+          </div>
+        )}
+      </div>
+    </details>
   )
 }
 

@@ -1,8 +1,20 @@
 import { useCallback, useEffect, useState } from "react"
 import type { AIChatMessage } from "@/lib/api"
 
+/** One completed tool call, kept alongside the assistant message it belongs
+ * to so the evidence for an answer (what was checked, and what it returned)
+ * survives after streaming ends — not just visible transiently while the
+ * response is still typing out. */
+export interface ToolCallEntry {
+  name: string
+  ok: boolean
+  args?: unknown
+  result?: string
+}
+
 export interface DisplayMessage extends AIChatMessage {
   id: string
+  toolCalls?: ToolCallEntry[]
 }
 
 export interface Conversation {

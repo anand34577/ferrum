@@ -1,10 +1,12 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -51,9 +53,23 @@ type toolResultEnvelope struct {
 	ToolResult *toolActivity `json:"ferrum_tool_result,omitempty"`
 }
 type toolActivity struct {
-	Name string `json:"name"`
-	Args any    `json:"args,omitempty"`
-	OK   bool   `json:"ok,omitempty"`
+	Name   string `json:"name"`
+	Args   any    `json:"args,omitempty"`
+	OK     bool   `json:"ok,omitempty"`
+	Result string `json:"result,omitempty"`
+}
+
+// toolResultDisplayLimit caps how much of a tool's result text is sent to
+// the browser for display in the tool-activity pill — the full untruncated
+// text still goes to the model via messages below; this only bounds what a
+// human has to scroll through in the UI.
+const toolResultDisplayLimit = 4000
+
+func truncateForDisplay(s string) string {
+	if len(s) <= toolResultDisplayLimit {
+		return s
+	}
+	return s[:toolResultDisplayLimit] + "… (truncated)"
 }
 
 // aiChat runs the Ferrum-scoped assistant: a bounded tool-calling loop
@@ -114,6 +130,22 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	user := userFromContext(r)
 
+	// context.WithoutCancel above deliberately rides out the global 30s
+	// timeout, but that also threw away real client-disconnect detection —
+	// hitting Stop in the browser aborted the fetch, yet the tool-calling
+	// loop and any in-flight upstream call kept running on the server to
+	// completion. Watch the ORIGINAL request context ourselves and forward
+	// only a genuine disconnect to our own cancel: net/http cancels a
+	// request's context with context.Canceled when the client goes away,
+	// versus context.DeadlineExceeded when it's merely the 30s middleware
+	// timeout firing — exactly the signal we're intentionally ignoring.
+	go func() {
+		<-r.Context().Done()
+		if errors.Is(r.Context().Err(), context.Canceled) {
+			cancel()
+		}
+	}()
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -128,14 +160,22 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 	tools := buildToolDefs()
 	toolsSupported := true
 	var finalContent string
+	var finalAlreadyStreamed bool
 
 	for i := 0; i < agentSettings.maxToolIterations; i++ {
 		reqTools := tools
 		if !toolsSupported {
 			reqTools = nil
 		}
-		respMsg, status, err := s.callChatCompletion(ctx, baseURL, apiKey, model, messages, reqTools)
+		// The leak check only matters while tools are still on the table —
+		// once we've fallen back to plain-text mode, JSON-shaped content is
+		// just as likely to be a legitimate answer as a leaked tool call.
+		allowLeakCheck := toolsSupported
+		respMsg, status, streamedLive, err := s.callChatCompletion(ctx, w, flusher, baseURL, apiKey, model, messages, reqTools, allowLeakCheck)
 		if err != nil {
+			if ctx.Err() != nil {
+				return // client disconnected or the request's own timeout hit — nothing left to report
+			}
 			writeSSEError(w, flusher, "could not reach AI provider: "+err.Error())
 			return
 		}
@@ -159,13 +199,15 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 			// implement structured function-calling — instead of populating
 			// tool_calls, they echo a fake call as plain text. Never show
 			// that to the user: disable tools and let the model answer in
-			// plain language instead.
-			if toolsSupported && i == 0 && looksLikeLeakedToolCall(content) {
+			// plain language instead. Only possible to retry cleanly when
+			// nothing has been streamed to the browser yet.
+			if toolsSupported && i == 0 && !streamedLive && looksLikeLeakedToolCall(content) {
 				toolsSupported = false
 				i--
 				continue
 			}
 			finalContent = content
+			finalAlreadyStreamed = streamedLive
 			break
 		}
 
@@ -182,7 +224,7 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 			writeSSEJSON(w, flusher, toolCallEnvelope{ToolCall: &toolActivity{Name: name, Args: argsParsed}})
 
 			resultText, isErr := s.mcp.CallTool(ctx, user, "chat", name, json.RawMessage(argsStr))
-			writeSSEJSON(w, flusher, toolResultEnvelope{ToolResult: &toolActivity{Name: name, OK: !isErr}})
+			writeSSEJSON(w, flusher, toolResultEnvelope{ToolResult: &toolActivity{Name: name, OK: !isErr, Result: truncateForDisplay(resultText)}})
 
 			messages = append(messages, map[string]any{"role": "tool", "tool_call_id": id, "content": resultText})
 		}
@@ -193,12 +235,26 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 			"I wasn't able to finish this within the current limit of %d tool calls — try breaking your question into smaller steps, or ask an admin to raise the limit under Settings > Agent & MCP.",
 			agentSettings.maxToolIterations,
 		)
-	} else if looksLikeLeakedToolCall(finalContent) {
+	} else if !finalAlreadyStreamed && looksLikeLeakedToolCall(finalContent) {
 		// The retry above already tried disabling tools once; if the model
 		// is still emitting tool-call-shaped text, showing it as-is would
-		// just put broken JSON in front of the user. Be honest instead.
+		// just put broken JSON in front of the user. Be honest instead. Only
+		// possible when nothing has reached the browser yet — real streaming
+		// below can't be un-sent.
 		finalContent = "This model attempted to use a tool but doesn't reliably support function-calling, so I can't confirm real data from your infrastructure this way. Try rephrasing without asking it to \"use tools,\" or switch to a model/provider known to support function-calling (e.g. GPT-4o-mini, or a larger Qwen2.5/Llama 3.1 build) for questions that need live fleet data."
 	}
+
+	if finalAlreadyStreamed {
+		// Already flushed to the browser token-by-token as the provider
+		// produced it — just close out the stream.
+		writeSSEDone(w, flusher)
+		return
+	}
+	// No real streaming happened for this content — either it's the
+	// synthesized "ran out of iterations"/leak-fallback message, or it came
+	// from a provider that doesn't stream (Needle) or fell back to a plain
+	// JSON response. Type it out for a live feel rather than dumping it all
+	// at once.
 	streamText(w, flusher, finalContent)
 }
 
@@ -235,31 +291,62 @@ func buildToolDefs() []map[string]any {
 	return out
 }
 
-// callChatCompletion makes one non-streaming chat completion request and
-// returns the assistant's message (role/content/tool_calls, as a generic
-// map so tool_calls round-trip untouched back into the next request).
+// leakPrefixWindow bounds how much content callChatCompletion buffers
+// before deciding whether an iteration's answer looks like a leaked tool
+// call (see looksLikeLeakedToolCall) — large enough to catch the documented
+// shapes (which all appear at or near the very start of a leak), small
+// enough that the common case (a real answer) starts streaming to the
+// browser almost immediately instead of waiting for the whole response.
+const leakPrefixWindow = 96
+
+// callChatCompletion makes one chat-completion round-trip and returns the
+// assistant's message (role/content/tool_calls, as a generic map so
+// tool_calls round-trip untouched back into the next request) — plus
+// whether any of its content was already flushed live to the browser as it
+// arrived (see streamedLive below).
+//
 // baseURL == needle.BaseURL routes through the built-in Needle provider
 // (internal/needle) instead of making a real HTTP call — see that
-// package's doc comment for why it needs its own request/response shape.
-func (s *Server) callChatCompletion(ctx context.Context, baseURL, apiKey, model string, messages []map[string]any, tools []map[string]any) (map[string]any, int, error) {
+// package's doc comment for why it needs its own request/response shape;
+// Needle has no token-streaming protocol of its own, so its full response
+// always comes back with streamedLive == false and the caller types it out
+// afterward (see streamText).
+//
+// Every other provider is asked to stream ("stream": true) so a long final
+// answer reaches the browser token-by-token as the model actually produces
+// it, instead of the old behavior of waiting for the entire response and
+// then just simulating a typing effect. Content is buffered only up to
+// leakPrefixWindow runes (or the first newline) before flushing starts, so
+// allowLeakCheck can still catch — and fully suppress — the tool-call-shaped
+// text some non-function-calling models emit instead of real answers; once
+// that checkpoint passes clean, the rest streams live and can no longer be
+// retracted if a leak pattern somehow shows up later in the same answer
+// (rare in practice: the documented shapes all start right at the top).
+func (s *Server) callChatCompletion(
+	ctx context.Context, w http.ResponseWriter, flusher http.Flusher,
+	baseURL, apiKey, model string, messages []map[string]any, tools []map[string]any, allowLeakCheck bool,
+) (respMsg map[string]any, status int, streamedLive bool, err error) {
 	if needle.IsBuiltin(baseURL) {
-		return s.needle.ChatCompletion(ctx, messages, tools)
+		respMsg, status, err = s.needle.ChatCompletion(ctx, messages, tools)
+		return respMsg, status, false, err
 	}
-	payload := map[string]any{"model": model, "messages": messages, "stream": false}
+
+	payload := map[string]any{"model": model, "messages": messages, "stream": true}
 	if len(tools) > 0 {
 		payload["tools"] = tools
 		payload["tool_choice"] = "auto"
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
 	if apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	}
@@ -267,36 +354,164 @@ func (s *Server) callChatCompletion(ctx context.Context, baseURL, apiKey, model 
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 300 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 		slog.Warn("ai chat completion failed", "status", resp.StatusCode, "body", strings.TrimSpace(string(msg)))
-		return nil, resp.StatusCode, nil
+		return nil, resp.StatusCode, false, nil
 	}
 
-	var parsed struct {
-		Choices []struct {
-			Message map[string]any `json:"message"`
-		} `json:"choices"`
+	// A runtime that doesn't actually honor "stream": true (some older
+	// LocalAI/LM Studio builds) may just return one normal JSON body
+	// instead of an event-stream — fall back to parsing it the plain way.
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
+		var parsed struct {
+			Choices []struct {
+				Message map[string]any `json:"message"`
+			} `json:"choices"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+			return nil, 0, false, err
+		}
+		if len(parsed.Choices) == 0 {
+			return nil, 0, false, fmt.Errorf("provider returned no choices")
+		}
+		return parsed.Choices[0].Message, resp.StatusCode, false, nil
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return nil, 0, err
-	}
-	if len(parsed.Choices) == 0 {
-		return nil, 0, fmt.Errorf("provider returned no choices")
-	}
-	return parsed.Choices[0].Message, resp.StatusCode, nil
+
+	respMsg, streamedLive = parseChatCompletionStream(resp.Body, w, flusher, allowLeakCheck)
+	return respMsg, resp.StatusCode, streamedLive, nil
 }
 
-// streamText "types out" the final answer to the client in small chunks
-// using the same OpenAI streaming-chunk shape the frontend already parses —
-// used instead of true upstream streaming because the tool-calling loop
-// above requires non-streaming round-trips (a model's tool_calls can't be
-// known until its response is complete), but a long final answer landing
-// all at once still reads worse than even a simulated typing effect.
+// streamChunkDelta mirrors the OpenAI streaming-chunk "delta" shape enough
+// to reconstruct both plain content and function-calling tool_calls, which
+// arrive as index-addressed fragments (id/name/arguments each build up
+// across multiple chunks) rather than as one complete object.
+type streamChunkDelta struct {
+	Content   string `json:"content"`
+	ToolCalls []struct {
+		Index    int    `json:"index"`
+		ID       string `json:"id"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	} `json:"tool_calls"`
+}
+
+// parseChatCompletionStream reads an OpenAI-shaped SSE response body,
+// forwarding content deltas to the browser as they arrive (real streaming)
+// while reconstructing any tool_calls from their streamed fragments, and
+// returns the equivalent of a full, non-streaming response message plus
+// whether any content actually reached the browser this way.
+func parseChatCompletionStream(body io.Reader, w http.ResponseWriter, flusher http.Flusher, allowLeakCheck bool) (respMsg map[string]any, streamedLive bool) {
+	type accTool struct{ id, name, args strings.Builder }
+	toolAcc := map[int]*accTool{}
+	toolOrder := []int{}
+	var full, pending strings.Builder
+	flushing := false
+	leakSuppressed := false
+
+	flush := func(s string) {
+		if s == "" {
+			return
+		}
+		streamedLive = true
+		writeSSEJSON(w, flusher, map[string]any{"choices": []map[string]any{{"delta": map[string]any{"content": s}}}})
+	}
+
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 0, 64<<10), 1<<20)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "[DONE]" {
+			break
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta streamChunkDelta `json:"delta"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal([]byte(payload), &chunk) != nil || len(chunk.Choices) == 0 {
+			continue
+		}
+		delta := chunk.Choices[0].Delta
+		for _, tc := range delta.ToolCalls {
+			acc, ok := toolAcc[tc.Index]
+			if !ok {
+				acc = &accTool{}
+				toolAcc[tc.Index] = acc
+				toolOrder = append(toolOrder, tc.Index)
+			}
+			acc.id.WriteString(tc.ID)
+			acc.name.WriteString(tc.Function.Name)
+			acc.args.WriteString(tc.Function.Arguments)
+		}
+		if delta.Content == "" {
+			continue
+		}
+		full.WriteString(delta.Content)
+		switch {
+		case flushing:
+			flush(delta.Content)
+		case leakSuppressed:
+			// Already decided this iteration is a leak — keep accumulating
+			// into `full` (the caller still needs it for the retry/honest-
+			// message logic) but never show it to the user.
+		default:
+			pending.WriteString(delta.Content)
+			if pending.Len() >= leakPrefixWindow || strings.Contains(pending.String(), "\n") {
+				if allowLeakCheck && looksLikeLeakedToolCall(pending.String()) {
+					leakSuppressed = true
+				} else {
+					flushing = true
+					flush(pending.String())
+				}
+				pending.Reset()
+			}
+		}
+	}
+	// A short answer that never reached the flush checkpoint is still
+	// sitting in `pending` — resolve it the same way now that the stream
+	// has ended.
+	if !flushing && !leakSuppressed && pending.Len() > 0 {
+		if !(allowLeakCheck && looksLikeLeakedToolCall(pending.String())) {
+			flush(pending.String())
+		}
+	}
+
+	respMsg = map[string]any{"role": "assistant", "content": full.String()}
+	if len(toolAcc) > 0 {
+		calls := make([]any, 0, len(toolAcc))
+		for _, idx := range toolOrder {
+			acc := toolAcc[idx]
+			calls = append(calls, map[string]any{
+				"id":   acc.id.String(),
+				"type": "function",
+				"function": map[string]any{
+					"name":      acc.name.String(),
+					"arguments": acc.args.String(),
+				},
+			})
+		}
+		respMsg["tool_calls"] = calls
+	}
+	return respMsg, streamedLive
+}
+
+// streamText "types out" text to the client in small chunks using the same
+// OpenAI streaming-chunk shape the frontend already parses — used only for
+// text that was never actually streamed by a provider: Needle's response
+// (no streaming protocol of its own), a provider that fell back to a plain
+// JSON response, or a message Ferrum synthesized itself (the tool-limit or
+// leaked-tool-call fallback text above).
 func streamText(w http.ResponseWriter, flusher http.Flusher, text string) {
 	const chunkRunes = 4
 	runes := []rune(text)
@@ -306,6 +521,10 @@ func streamText(w http.ResponseWriter, flusher http.Flusher, text string) {
 		writeSSEJSON(w, flusher, chunk)
 		time.Sleep(8 * time.Millisecond)
 	}
+	writeSSEDone(w, flusher)
+}
+
+func writeSSEDone(w http.ResponseWriter, flusher http.Flusher) {
 	fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
 }

@@ -461,9 +461,12 @@ func toOpenAIMessage(nr *needleResponse) (map[string]any, error) {
 }
 
 // ChatCompletion is Needle's counterpart to internal/api/ai_chat.go's
-// callChatCompletion — same signature shape (minus baseURL/apiKey/model,
-// which are meaningless for a fixed local subprocess), same return shape,
-// so ai_chat.go can call whichever one applies with no other branching.
+// callChatCompletion — same (message, status, error) return shape (minus
+// baseURL/apiKey/model, which are meaningless for a fixed local subprocess,
+// and minus the streaming plumbing real HTTP providers get, since Needle has
+// no token-streaming protocol of its own), so ai_chat.go can call whichever
+// one applies with no other branching; its caller always treats the result
+// as a complete, non-streamed response and types it out itself.
 func (m *Manager) ChatCompletion(ctx context.Context, messages []map[string]any, _ []map[string]any) (map[string]any, int, error) {
 	if err := m.ensureRunning(ctx); err != nil {
 		return nil, http.StatusBadGateway, err

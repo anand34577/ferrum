@@ -19,17 +19,17 @@ import (
 	"ferrum/internal/needle"
 )
 
-// seedBuiltinNeedleProvider makes the built-in Needle 2 provider Ferrum's
-// default AI assistant, unconditionally, on every startup where a binary is
-// available for the running platform (bundled — see internal/needle's
-// go:embed — or FERRUM_NEEDLE_BIN) — not just on a fresh install. It is
-// idempotent (matches the existing row by base_url = needle.BaseURL rather
-// than inserting a duplicate on every restart) and always (re)asserts its
-// model as THE global default, demoting whatever else held that spot: the
-// point of a *built-in* assistant is that it's always there and always
-// selected, with zero setup, on any install that has a binary for its
-// platform — that's a deliberate, standing product decision, not a
-// one-time fallback for an empty database.
+// seedBuiltinNeedleProvider makes sure the built-in Needle 2 provider exists
+// and is enabled on every startup where a binary is available for the
+// running platform (bundled — see internal/needle's go:embed — or
+// FERRUM_NEEDLE_BIN), and — only if nothing else has been chosen yet — makes
+// its model the initial default so a fresh install has a working assistant
+// with zero setup. It is idempotent (matches the existing row by
+// base_url = needle.BaseURL rather than inserting a duplicate on every
+// restart). It deliberately does NOT re-assert the default on every restart
+// once an admin has picked one: doing so silently demoted an explicitly
+// configured external provider (e.g. OpenAI) back to the local model on
+// every server restart, which is not what "built-in fallback" should mean.
 func (s *Server) seedBuiltinNeedleProvider(ctx context.Context) {
 	if !s.needle.Available() {
 		return
@@ -78,6 +78,17 @@ func (s *Server) seedBuiltinNeedleProvider(ctx context.Context) {
 		return
 	}
 
+	// Only claim the default slot if nothing holds it yet (fresh install, or
+	// the previous default model row was deleted) — never override a default
+	// an admin already set, including on every subsequent restart.
+	var anyDefault int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ai_provider_models WHERE is_default = 1`).Scan(&anyDefault); err != nil {
+		slog.Error("checking for an existing default AI model", "error", err)
+		return
+	}
+	if anyDefault > 0 {
+		return
+	}
 	if err := s.clearOtherDefaultModels(ctx, modelID); err != nil {
 		slog.Error("clearing other default AI models", "error", err)
 		return
