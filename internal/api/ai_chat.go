@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -70,6 +71,120 @@ func truncateForDisplay(s string) string {
 		return s
 	}
 	return s[:toolResultDisplayLimit] + "… (truncated)"
+}
+
+// toolRoundResult is one tool call's outcome, kept just long enough to build
+// a fallback answer (see formatToolRoundAsAnswer) if the model never
+// produces one of its own — unlike toolActivity, result here is the full
+// text, not the display-truncated copy sent to the browser as a pill.
+type toolRoundResult struct {
+	name   string
+	result string
+	isErr  bool
+}
+
+// formatToolRoundAsAnswer turns a batch of tool results into a readable
+// markdown summary, for providers — Needle chief among them, see
+// internal/needle's doc comment — that call tools but never narrate the
+// outcome in prose. It knows nothing about what any particular tool means:
+// it just renders each tool's already-JSON result as a bullet list, so a
+// newly added tool is summarized for free.
+func formatToolRoundAsAnswer(round []toolRoundResult) string {
+	var b strings.Builder
+	for i, r := range round {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		label := humanizeToolName(r.name)
+		if r.isErr {
+			fmt.Fprintf(&b, "**%s** failed: %s", label, r.result)
+			continue
+		}
+		fmt.Fprintf(&b, "**%s**\n\n%s", label, formatJSONResult(r.result))
+	}
+	return b.String()
+}
+
+// humanizeToolName renders a snake_case tool name ("list_guests") as a
+// title-cased label ("List Guests") for display.
+func humanizeToolName(name string) string {
+	words := strings.Split(name, "_")
+	for i, w := range words {
+		if w != "" {
+			words[i] = strings.ToUpper(w[:1]) + w[1:]
+		}
+	}
+	return strings.Join(words, " ")
+}
+
+// formatJSONResult renders a tool's raw result text as a markdown bullet
+// list — one bullet per array element, or one list for a single object —
+// falling back to the raw text unchanged when it isn't JSON at all (e.g.
+// guest_power_action's plain confirmation sentence).
+func formatJSONResult(raw string) string {
+	var v any
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		return raw
+	}
+	switch val := v.(type) {
+	case []any:
+		if len(val) == 0 {
+			return "_(none)_"
+		}
+		var b strings.Builder
+		for _, item := range val {
+			fmt.Fprintf(&b, "- %s\n", formatJSONItem(item))
+		}
+		return strings.TrimRight(b.String(), "\n")
+	case map[string]any:
+		return "- " + formatJSONItem(val)
+	default:
+		return raw
+	}
+}
+
+// formatJSONItem renders one JSON object as "key: value, key: value" (keys
+// sorted for stable output), or via formatJSONValue for anything else — used
+// both for each element of an array result and, via formatJSONResult, for a
+// single top-level object result.
+func formatJSONItem(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return formatJSONValue(v)
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s: %s", k, formatJSONValue(m[k])))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// formatJSONValue renders one JSON value inline — recursing into nested
+// objects/arrays instead of falling through to Go's raw "map[k:v]" %v
+// syntax. Several real tool results nest structs a level or two deep
+// (get_node_status's cpuinfo/memory/swap/rootfs, cluster_status's per-member
+// fields), so without this they'd render unreadably despite the top level
+// looking fine.
+func formatJSONValue(v any) string {
+	switch val := v.(type) {
+	case map[string]any:
+		return "{" + formatJSONItem(val) + "}"
+	case []any:
+		parts := make([]string, len(val))
+		for i, item := range val {
+			parts[i] = formatJSONValue(item)
+		}
+		return "[" + strings.Join(parts, ", ") + "]"
+	case nil:
+		return "null"
+	default:
+		return fmt.Sprintf("%v", val)
+	}
 }
 
 // aiChat runs the Ferrum-scoped assistant: a bounded tool-calling loop
@@ -161,6 +276,14 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 	toolsSupported := true
 	var finalContent string
 	var finalAlreadyStreamed bool
+	// lastToolRound holds the most recent batch of tool calls/results — used
+	// as a fallback answer when a provider (Needle, in practice: it's a pure
+	// tool-router with no narrative output of its own) finishes calling tools
+	// but comes back with nothing to say. Overwritten each round rather than
+	// accumulated across the whole conversation, so it only ever describes
+	// "what just happened" going into the empty final reply.
+	var lastToolRound []toolRoundResult
+	ranOutOfIterations := true
 
 	for i := 0; i < agentSettings.maxToolIterations; i++ {
 		reqTools := tools
@@ -219,10 +342,12 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 			}
 			finalContent = content
 			finalAlreadyStreamed = streamedLive
+			ranOutOfIterations = false
 			break
 		}
 
 		messages = append(messages, respMsg)
+		lastToolRound = lastToolRound[:0]
 		for _, raw := range toolCalls {
 			tc, _ := raw.(map[string]any)
 			id, _ := tc["id"].(string)
@@ -236,12 +361,21 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 
 			resultText, isErr := s.mcp.CallTool(ctx, user, "chat", name, json.RawMessage(argsStr))
 			writeSSEJSON(w, flusher, toolResultEnvelope{ToolResult: &toolActivity{Name: name, OK: !isErr, Result: truncateForDisplay(resultText)}})
+			lastToolRound = append(lastToolRound, toolRoundResult{name: name, result: resultText, isErr: isErr})
 
 			messages = append(messages, map[string]any{"role": "tool", "tool_call_id": id, "content": resultText})
 		}
 	}
 
-	if finalContent == "" {
+	if finalContent == "" && !ranOutOfIterations && len(lastToolRound) > 0 {
+		// The model completed its tool calls and then had nothing further to
+		// say — expected from Needle (a tool-router, not a chat model; see
+		// internal/needle's doc comment) and possible from any provider.
+		// Rather than the misleading "ran out of tool calls" message below
+		// (nothing ran out — this finished successfully), turn the tool
+		// results themselves into the answer.
+		finalContent = formatToolRoundAsAnswer(lastToolRound)
+	} else if finalContent == "" {
 		finalContent = fmt.Sprintf(
 			"I wasn't able to finish this within the current limit of %d tool calls — try breaking your question into smaller steps, or ask an admin to raise the limit under Settings > Agent & MCP.",
 			agentSettings.maxToolIterations,

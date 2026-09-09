@@ -80,6 +80,17 @@ type Manager struct {
 	mu      sync.Mutex
 	cmd     *exec.Cmd
 	running bool
+	log     syncBuffer // subprocess's combined stdout/stderr for its whole lifetime — see crashInfo.
+
+	// reqMu serializes every /complete call against the subprocess — Needle
+	// serves one request at a time ("each component instance owns one
+	// conversation" per its own docs), and it is shared across every caller
+	// (see the Manager doc comment above). Without this, two overlapping
+	// chats — two users, or a client retry racing a still-in-flight request
+	// — hit the same subprocess at once; observed in practice as the
+	// subprocess crashing mid-response ("read: connection reset by peer")
+	// rather than queuing or rejecting the second one.
+	reqMu sync.Mutex
 }
 
 func NewManager(binPath string) *Manager {
@@ -88,8 +99,9 @@ func NewManager(binPath string) *Manager {
 
 // syncBuffer is bytes.Buffer plus a mutex, so it's safe as an exec.Cmd's
 // Stdout/Stderr (written from the subprocess-reading goroutines the os/exec
-// package spawns internally) while ensureRunning's own goroutine reads it
-// via String() to build an error message.
+// package spawns internally) while ensureRunning or crashInfo reads it via
+// String() to build an error message — for the subprocess's entire
+// lifetime, not just during startup.
 type syncBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -208,11 +220,12 @@ func (m *Manager) ensureRunning(ctx context.Context) error {
 	// starts and immediately exits (bad args, missing runtime dep, port
 	// already taken from outside our own bookkeeping) fails completely
 	// silently — ensureRunning just spins until startTimeout with no clue
-	// why. logBuf is small (Needle logs one line on startup) so keeping it
-	// in memory for the process's lifetime is fine.
-	var logBuf syncBuffer
-	cmd.Stdout = &logBuf
-	cmd.Stderr = &logBuf
+	// why. Kept on the Manager (not a local var) so a crash well after
+	// startup — see ChatCompletion's crashInfo check — can be explained too,
+	// not just a startup failure; reset here for the new process.
+	m.log = syncBuffer{}
+	cmd.Stdout = &m.log
+	cmd.Stderr = &m.log
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting needle: %w", err)
 	}
@@ -246,7 +259,7 @@ func (m *Manager) ensureRunning(ctx context.Context) error {
 	select {
 	case <-waitForListener(ctx, listenAddr, startTimeout):
 	case <-exited:
-		return fmt.Errorf("needle exited immediately: %s", logBuf.String())
+		return fmt.Errorf("needle exited immediately: %s", m.log.String())
 	}
 
 	pingCtx, cancel := context.WithTimeout(ctx, startTimeout)
@@ -263,14 +276,14 @@ func (m *Manager) ensureRunning(ctx context.Context) error {
 			return nil
 		}
 		m.closeLocked()
-		return fmt.Errorf("needle did not become ready within %s (%v): %s", startTimeout, err, logBuf.String())
+		return fmt.Errorf("needle did not become ready within %s (%v): %s", startTimeout, err, m.log.String())
 	case <-exited:
 		cancel()
 		// Crashed (or exited) before ever answering a request — no point
-		// waiting out the rest of startTimeout. logBuf carries whatever it
+		// waiting out the rest of startTimeout. m.log carries whatever it
 		// printed (its own error, a missing dependency, license/arch
 		// mismatch, ...) so this isn't a bare "not ready".
-		return fmt.Errorf("needle exited immediately: %s", logBuf.String())
+		return fmt.Errorf("needle exited immediately: %s", m.log.String())
 	}
 }
 
@@ -468,12 +481,27 @@ func toOpenAIMessage(nr *needleResponse) (map[string]any, error) {
 // one applies with no other branching; its caller always treats the result
 // as a complete, non-streamed response and types it out itself.
 func (m *Manager) ChatCompletion(ctx context.Context, messages []map[string]any, _ []map[string]any) (map[string]any, int, error) {
+	// Needle handles one request at a time (see reqMu's doc comment) — hold
+	// this for the whole round-trip so a second caller queues behind this
+	// one instead of racing it against the same subprocess.
+	m.reqMu.Lock()
+	defer m.reqMu.Unlock()
+
 	if err := m.ensureRunning(ctx); err != nil {
 		return nil, http.StatusBadGateway, err
 	}
 	input := flattenMessages(messages)
 	resp, status, err := doComplete(ctx, input)
 	if err != nil {
+		if died, log := m.crashInfo(); died {
+			detail := "no output captured"
+			if log != "" {
+				detail = log
+			}
+			return nil, http.StatusBadGateway, fmt.Errorf(
+				"needle process exited unexpectedly while handling this request (%s) — on a memory-constrained host this usually means it was killed for using too much memory (OOM); check `dmesg`/`journalctl -k` for an oom-kill message: %w",
+				detail, err)
+		}
 		return nil, status, err
 	}
 	msg, err := toOpenAIMessage(resp)
@@ -481,6 +509,16 @@ func (m *Manager) ChatCompletion(ctx context.Context, messages []map[string]any,
 		return nil, status, err
 	}
 	return msg, http.StatusOK, nil
+}
+
+// crashInfo reports whether the subprocess has died since it was last
+// confirmed healthy, plus whatever it printed before doing so — used by
+// ChatCompletion to explain a request that failed with a bare network error
+// (e.g. "connection reset by peer") that carries no hint of why on its own.
+func (m *Manager) crashInfo() (died bool, log string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return !m.running, m.log.String()
 }
 
 // TestConnection is the built-in provider's counterpart to

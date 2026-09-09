@@ -2,8 +2,10 @@ name: Release
 
 # Cross-compiles ferrum for Linux/Windows/macOS and publishes the archives
 # (plus a checksums.txt) as GitHub Release assets whenever a "vX.Y.Z" tag is
-# pushed. Everything here is a thin wrapper around scripts/build.sh, so a
-# local `scripts/build.sh all` produces the exact same artifacts.
+# pushed — a thin wrapper around scripts/build.sh, so a local
+# `scripts/build.sh all` produces the exact same artifacts. Also builds and
+# pushes a multi-arch (amd64/arm64) Docker image straight from the repo's own
+# Dockerfile to ghcr.io, tagged with the same version and "latest".
 on:
   push:
     tags:
@@ -18,6 +20,49 @@ permissions:
   contents: write
 
 jobs:
+  docker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # to push to ghcr.io
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Resolve tag and image name
+        id: vars
+        run: |
+          echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+          # ghcr.io requires a lowercase image name; github.repository is
+          # already lowercase for this repo, but this keeps the workflow
+          # correct if it's ever forked under a mixed-case owner/name.
+          echo "image=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.tag }}
+            ${{ steps.vars.outputs.image }}:latest
+
   build:
     runs-on: ubuntu-latest
     steps:

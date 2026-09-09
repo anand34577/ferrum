@@ -7,6 +7,49 @@ import (
 	"testing"
 )
 
+func TestFormatToolRoundAsAnswerRendersArrayResult(t *testing.T) {
+	round := []toolRoundResult{
+		{name: "list_nodes", result: `[{"node":"pve1","status":"online"},{"node":"pve2","status":"offline"}]`},
+	}
+	got := formatToolRoundAsAnswer(round)
+	want := "**List Nodes**\n\n- node: pve1, status: online\n- node: pve2, status: offline"
+	if got != want {
+		t.Fatalf("formatToolRoundAsAnswer() = %q, want %q", got, want)
+	}
+}
+
+func TestFormatToolRoundAsAnswerRendersError(t *testing.T) {
+	round := []toolRoundResult{{name: "guest_power_action", result: "admin access required", isErr: true}}
+	got := formatToolRoundAsAnswer(round)
+	if got != "**Guest Power Action** failed: admin access required" {
+		t.Fatalf("formatToolRoundAsAnswer() = %q", got)
+	}
+}
+
+func TestFormatJSONResultFallsBackToRawTextForNonJSON(t *testing.T) {
+	raw := `action "start" submitted for pve1/qemu/100 — task UPID:...`
+	if got := formatJSONResult(raw); got != raw {
+		t.Fatalf("formatJSONResult() = %q, want raw text unchanged", got)
+	}
+}
+
+func TestFormatJSONResultRendersNestedObjects(t *testing.T) {
+	// Mirrors get_node_status's real shape: top-level scalars plus nested
+	// cpuinfo/memory objects — the case formatJSONValue exists for.
+	raw := `{"cpu":0.05,"cpuinfo":{"cores":4,"model":"Intel"},"loadavg":["0.1","0.2"]}`
+	got := formatJSONResult(raw)
+	want := "- cpu: 0.05, cpuinfo: {cores: 4, model: Intel}, loadavg: [0.1, 0.2]"
+	if got != want {
+		t.Fatalf("formatJSONResult() = %q, want %q", got, want)
+	}
+}
+
+func TestFormatJSONResultHandlesEmptyArray(t *testing.T) {
+	if got := formatJSONResult(`[]`); got != "_(none)_" {
+		t.Fatalf("formatJSONResult() = %q, want \"_(none)_\"", got)
+	}
+}
+
 // sseBody builds a fake OpenAI-style streaming response body out of raw
 // chunk JSON strings, terminated with the usual [DONE] sentinel.
 func sseBody(chunks ...string) *strings.Reader {
