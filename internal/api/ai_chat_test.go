@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -24,8 +25,11 @@ func TestParseChatCompletionStreamForwardsContentLive(t *testing.T) {
 		`{"choices":[{"delta":{"content":", world"}}]}`,
 	)
 
-	msg, streamedLive := parseChatCompletionStream(body, rec, rec, true)
+	msg, streamedLive, err := parseChatCompletionStream(body, rec, rec, true)
 
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if !streamedLive {
 		t.Fatal("expected content to be flagged as streamed live")
 	}
@@ -48,8 +52,11 @@ func TestParseChatCompletionStreamReconstructsFragmentedToolCall(t *testing.T) {
 		`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"ectionId\":\"a\"}"}}]}}]}`,
 	)
 
-	msg, streamedLive := parseChatCompletionStream(body, rec, rec, true)
+	msg, streamedLive, err := parseChatCompletionStream(body, rec, rec, true)
 
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if streamedLive {
 		t.Fatal("a tool-call-only response has no content to stream")
 	}
@@ -77,8 +84,11 @@ func TestParseChatCompletionStreamSuppressesLeakedToolCallText(t *testing.T) {
 	// checking is enabled, even though it arrives as ordinary content deltas.
 	body := sseBody(`{"choices":[{"delta":{"content":"{\"name\": \"list_nodes\", \"arguments\": {}}"}}]}`)
 
-	msg, streamedLive := parseChatCompletionStream(body, rec, rec, true)
+	msg, streamedLive, err := parseChatCompletionStream(body, rec, rec, true)
 
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if streamedLive {
 		t.Fatal("a leaked tool call must never be forwarded to the browser")
 	}
@@ -88,5 +98,70 @@ func TestParseChatCompletionStreamSuppressesLeakedToolCallText(t *testing.T) {
 	// The caller still needs the full text to run its retry/fallback logic.
 	if !looksLikeLeakedToolCall(msg["content"].(string)) {
 		t.Fatalf("expected the reconstructed content to still be available to the caller, got %v", msg["content"])
+	}
+}
+
+// TestParseChatCompletionStreamSurfacesMidStreamError reproduces what a
+// local LM Studio runtime sends when its model crashes/unloads partway
+// through a response: a `data:` line carrying an "error" object instead of
+// the usual "choices" — observed as `{"error":{"message":"terminated"}}`
+// after a run of "reasoning_content"-only chunks. Before this test, that
+// line had no "choices" key so it was silently skipped, and the caller got
+// back an empty, no-error response — reported to the user as "ran out of
+// tool-call iterations" instead of the real failure.
+func TestParseChatCompletionStreamSurfacesMidStreamError(t *testing.T) {
+	rec := httptest.NewRecorder()
+	body := sseBody(
+		`{"choices":[{"delta":{"reasoning_content":"thinking..."}}]}`,
+		`{"error":{"message":"terminated"}}`,
+	)
+
+	_, _, err := parseChatCompletionStream(body, rec, rec, true)
+
+	if err == nil {
+		t.Fatal("expected the mid-stream error to be surfaced, got nil")
+	}
+	if !strings.Contains(err.Error(), "terminated") {
+		t.Fatalf("expected the error to carry the provider's message, got %v", err)
+	}
+	var se *streamError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected a *streamError (so the caller reports it as a provider error, not an unreachable one), got %T", err)
+	}
+}
+
+// errReader fails every Read after emitting some valid bytes, simulating a
+// dropped connection mid-stream.
+type errReader struct {
+	data []byte
+	err  error
+}
+
+func (r *errReader) Read(p []byte) (int, error) {
+	if len(r.data) == 0 {
+		return 0, r.err
+	}
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	return n, nil
+}
+
+// TestParseChatCompletionStreamSurfacesScanError reproduces a connection
+// dropping mid-stream: bufio.Scanner gives up silently (Scan returns false,
+// no more lines) on a read error, which used to look identical to a clean
+// [DONE] and hand back whatever partial answer had accumulated as if
+// nothing had gone wrong.
+func TestParseChatCompletionStreamSurfacesScanError(t *testing.T) {
+	rec := httptest.NewRecorder()
+	wantErr := errors.New("connection reset")
+	body := &errReader{data: []byte(`data: {"choices":[{"delta":{"content":"partial"}}]}` + "\n\n"), err: wantErr}
+
+	_, _, err := parseChatCompletionStream(body, rec, rec, true)
+
+	if err == nil {
+		t.Fatal("expected the scan error to be surfaced, got nil")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected the underlying read error to be wrapped in, got %v", err)
 	}
 }

@@ -176,7 +176,18 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 			if ctx.Err() != nil {
 				return // client disconnected or the request's own timeout hit — nothing left to report
 			}
-			writeSSEError(w, flusher, "could not reach AI provider: "+err.Error())
+			// A streamError means we connected fine and the provider was
+			// already responding (possibly with some content already
+			// flushed live — the browser keeps whatever arrived before this
+			// point, see streamError's doc comment) before it failed; say
+			// so instead of the misleading "could not reach" framing that
+			// belongs to an actual connection failure below.
+			var se *streamError
+			if errors.As(err, &se) {
+				writeSSEError(w, flusher, "AI provider error: "+se.Error())
+			} else {
+				writeSSEError(w, flusher, "could not reach AI provider: "+err.Error())
+			}
 			return
 		}
 		if status >= 300 {
@@ -382,8 +393,8 @@ func (s *Server) callChatCompletion(
 		return parsed.Choices[0].Message, resp.StatusCode, false, nil
 	}
 
-	respMsg, streamedLive = parseChatCompletionStream(resp.Body, w, flusher, allowLeakCheck)
-	return respMsg, resp.StatusCode, streamedLive, nil
+	respMsg, streamedLive, err = parseChatCompletionStream(resp.Body, w, flusher, allowLeakCheck)
+	return respMsg, resp.StatusCode, streamedLive, err
 }
 
 // streamChunkDelta mirrors the OpenAI streaming-chunk "delta" shape enough
@@ -407,7 +418,28 @@ type streamChunkDelta struct {
 // while reconstructing any tool_calls from their streamed fragments, and
 // returns the equivalent of a full, non-streaming response message plus
 // whether any content actually reached the browser this way.
-func parseChatCompletionStream(body io.Reader, w http.ResponseWriter, flusher http.Flusher, allowLeakCheck bool) (respMsg map[string]any, streamedLive bool) {
+//
+// A provider that fails mid-stream (crash, OOM, model unload) doesn't
+// re-send an HTTP error status — headers are already committed to 200 by
+// then — it instead emits one more `data:` line carrying an "error" object
+// in place of the usual "choices" (observed from a local LM Studio runtime:
+// `data: {"error":{"message":"terminated"}}`). That line has no "choices"
+// key, so decoding it into the chunk struct below silently produces zero
+// choices and used to just be skipped — the loop would then hit EOF and
+// return an empty, no-error response, which the caller reported as "ran out
+// of tool-call iterations". Detect it and report the real failure instead.
+// streamError marks a failure that happened after the connection to the
+// provider already succeeded — mid-stream, possibly after some content was
+// already flushed live to the browser — as opposed to callChatCompletion's
+// other error returns (dial/timeout/marshal failures), which mean the
+// provider was never reached at all. The two need different wording to the
+// user; see the check in aiChat.
+type streamError struct{ err error }
+
+func (e *streamError) Error() string { return e.err.Error() }
+func (e *streamError) Unwrap() error { return e.err }
+
+func parseChatCompletionStream(body io.Reader, w http.ResponseWriter, flusher http.Flusher, allowLeakCheck bool) (respMsg map[string]any, streamedLive bool, err error) {
 	type accTool struct{ id, name, args strings.Builder }
 	toolAcc := map[int]*accTool{}
 	toolOrder := []int{}
@@ -438,8 +470,21 @@ func parseChatCompletionStream(body io.Reader, w http.ResponseWriter, flusher ht
 			Choices []struct {
 				Delta streamChunkDelta `json:"delta"`
 			} `json:"choices"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
 		}
-		if json.Unmarshal([]byte(payload), &chunk) != nil || len(chunk.Choices) == 0 {
+		if json.Unmarshal([]byte(payload), &chunk) != nil {
+			continue
+		}
+		if chunk.Error != nil {
+			msg := chunk.Error.Message
+			if msg == "" {
+				msg = "provider reported an error mid-stream"
+			}
+			return respMsg, streamedLive, &streamError{fmt.Errorf("%s", msg)}
+		}
+		if len(chunk.Choices) == 0 {
 			continue
 		}
 		delta := chunk.Choices[0].Delta
@@ -478,6 +523,13 @@ func parseChatCompletionStream(body io.Reader, w http.ResponseWriter, flusher ht
 			}
 		}
 	}
+	// bufio.Scanner silently gives up (Scan returns false with no line) on a
+	// read error or a line past its 1MB buffer — both would otherwise look
+	// like a clean [DONE] and hand back a truncated answer as if nothing
+	// went wrong. Surface it instead of pretending the stream finished.
+	if scanErr := scanner.Err(); scanErr != nil {
+		return respMsg, streamedLive, &streamError{fmt.Errorf("reading provider stream: %w", scanErr)}
+	}
 	// A short answer that never reached the flush checkpoint is still
 	// sitting in `pending` — resolve it the same way now that the stream
 	// has ended.
@@ -503,7 +555,7 @@ func parseChatCompletionStream(body io.Reader, w http.ResponseWriter, flusher ht
 		}
 		respMsg["tool_calls"] = calls
 	}
-	return respMsg, streamedLive
+	return respMsg, streamedLive, nil
 }
 
 // streamText "types out" text to the client in small chunks using the same
@@ -541,6 +593,10 @@ func writeSSEJSON(w http.ResponseWriter, flusher http.Flusher, v any) {
 // writeSSEError reports a failure mid-stream — headers are already flushed
 // by the time this can be called, so a normal writeErrorMsg JSON body isn't
 // an option; the client's SSE reader watches for this same envelope shape.
+// This carries no separate signal for content-delta events sent before it —
+// the browser doesn't discard them, it keeps whatever text already streamed
+// in and appends this as a toast, same as hitting Stop mid-answer (see
+// runCompletion's catch/finally in AIAssistantPage.tsx).
 func writeSSEError(w http.ResponseWriter, flusher http.Flusher, message string) {
 	writeSSEJSON(w, flusher, map[string]any{"ferrum_error": message})
 	fmt.Fprint(w, "data: [DONE]\n\n")
