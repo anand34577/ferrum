@@ -440,7 +440,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
               {controllersQuery.data?.length === 0 && <p className="text-sm text-[var(--text-muted)]">No SDN controllers configured.</p>}
             </div>
           )}
-          <div className="flex flex-wrap items-end gap-2 border-t border-[var(--border)] pt-3">
+          <div className="flex flex-wrap items-start gap-2 border-t border-[var(--border)] pt-3">
             <div className="space-y-1.5">
               <Label>Controller name</Label>
               <Input value={controllerForm.controller} onChange={(e) => setControllerForm((f) => ({ ...f, controller: e.target.value }))} className="w-32" />
@@ -462,13 +462,20 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
                 placeholder={"asn=65000\npeers=10.0.0.1,10.0.0.2"}
                 value={controllerForm.extra}
                 onChange={(e) => setControllerForm((f) => ({ ...f, extra: e.target.value }))}
-                className="w-64 rounded-md border border-[var(--border)] bg-transparent px-2 py-1.5 text-sm"
+                className="block w-64 rounded-md border border-[var(--border)] bg-transparent px-2 py-1.5 text-sm"
                 rows={2}
               />
             </div>
-            <Button size="sm" disabled={!controllerForm.controller || createController.isPending} onClick={() => createController.mutate()}>
-              <Plus className="h-3.5 w-3.5" /> Add controller
-            </Button>
+            {/* Invisible label spacer — matches every other column's Label-then-control
+                stack so the button sits at the same top edge as the inputs beside it,
+                instead of jumping to the row's vertical center once the textarea makes
+                this row taller than a single-line field. */}
+            <div className="space-y-1.5">
+              <Label className="invisible" aria-hidden>Add</Label>
+              <Button size="sm" disabled={!controllerForm.controller || createController.isPending} onClick={() => createController.mutate()}>
+                <Plus className="h-3.5 w-3.5" /> Add controller
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -497,7 +504,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
               {ipamsQuery.data?.length === 0 && <p className="text-sm text-[var(--text-muted)]">No IPAM plugins configured.</p>}
             </div>
           )}
-          <div className="flex flex-wrap items-end gap-2 border-t border-[var(--border)] pt-3">
+          <div className="flex flex-wrap items-start gap-2 border-t border-[var(--border)] pt-3">
             <div className="space-y-1.5">
               <Label>IPAM name</Label>
               <Input value={ipamForm.ipam} onChange={(e) => setIpamForm((f) => ({ ...f, ipam: e.target.value }))} className="w-32" />
@@ -518,13 +525,16 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
                 placeholder={"url=https://netbox.example.com\ntoken=..."}
                 value={ipamForm.extra}
                 onChange={(e) => setIpamForm((f) => ({ ...f, extra: e.target.value }))}
-                className="w-64 rounded-md border border-[var(--border)] bg-transparent px-2 py-1.5 text-sm"
+                className="block w-64 rounded-md border border-[var(--border)] bg-transparent px-2 py-1.5 text-sm"
                 rows={2}
               />
             </div>
-            <Button size="sm" disabled={!ipamForm.ipam || createIpam.isPending} onClick={() => createIpam.mutate()}>
-              <Plus className="h-3.5 w-3.5" /> Add IPAM
-            </Button>
+            <div className="space-y-1.5">
+              <Label className="invisible" aria-hidden>Add</Label>
+              <Button size="sm" disabled={!ipamForm.ipam || createIpam.isPending} onClick={() => createIpam.mutate()}>
+                <Plus className="h-3.5 w-3.5" /> Add IPAM
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>

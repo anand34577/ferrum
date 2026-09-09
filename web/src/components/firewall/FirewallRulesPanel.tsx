@@ -31,6 +31,12 @@ export function FirewallRulesPanel({ basePath, queryKey }: { basePath: string; q
   const [showForm, setShowForm] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
+  // An unscoped rule (no source, dest, or macro) matches everything — almost
+  // never what someone meant to create by leaving every field blank, and
+  // every sibling create-form in this feature (aliases, IP sets) already
+  // guards its required fields the same way.
+  const addRuleInvalid = !form.source.trim() && !form.dest.trim() && !form.macro.trim()
+
   function invalidate() {
     queryClient.invalidateQueries({ queryKey })
   }
@@ -191,10 +197,11 @@ export function FirewallRulesPanel({ basePath, queryKey }: { basePath: string; q
             <Label>Comment</Label>
             <Input value={form.comment} onChange={(e) => setForm({ ...form, comment: e.target.value })} />
           </div>
-          <div className="col-span-2 flex items-end">
-            <Button size="sm" loading={addRule.isPending} onClick={() => addRule.mutate()}>
+          <div className="col-span-2 flex items-end gap-2">
+            <Button size="sm" disabled={addRuleInvalid} loading={addRule.isPending} onClick={() => addRule.mutate()}>
               Add rule
             </Button>
+            {addRuleInvalid && <p className="text-xs text-[var(--text-muted)]">Set at least a source, dest, or macro.</p>}
           </div>
         </div>
       )}

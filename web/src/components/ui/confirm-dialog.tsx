@@ -19,7 +19,11 @@ type ConfirmFn = (options: ConfirmOptions) => Promise<boolean>
 const ConfirmContext = createContext<ConfirmFn | null>(null)
 
 /** App-wide replacement for `window.confirm`: `if (await confirm({ title: "Delete connection?" })) …`.
- * Focus lands on Cancel (the safe choice), Escape/overlay click also cancel. */
+ * Focus lands on Cancel (the safe choice), Escape/overlay click also cancel.
+ * `destructive` defaults to true (red icon, destructive button) since most
+ * confirms here guard real data loss — pass `destructive: false` for a
+ * confirm that doesn't lose anything, so it doesn't read as more alarming
+ * than it is. */
 export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false)
   const [options, setOptions] = useState<ConfirmOptions | null>(null)

@@ -525,7 +525,7 @@ export function AIAssistantPage() {
             <div ref={scrollRef} onScroll={handleScroll} className="h-full space-y-5 overflow-y-auto p-4">
               {displayMessages.length === 0 ? (
                 <div className="flex h-full animate-in flex-col items-center justify-center gap-4 fade-in text-center duration-500">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-brand-500/20 to-brand-600/5 text-brand-500 shadow-sm ring-1 ring-[var(--border)]">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-md bg-gradient-to-br from-brand-500/20 to-brand-600/5 text-brand-500 shadow-sm ring-1 ring-[var(--border)]">
                     <Sparkles className="h-6 w-6" />
                   </div>
                   <p className="max-w-sm text-sm text-[var(--text-muted)]">
@@ -537,7 +537,7 @@ export function AIAssistantPage() {
                         key={s}
                         type="button"
                         onClick={() => setInput(s)}
-                        className="rounded-full border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-1.5 text-xs text-[var(--text-muted)] shadow-sm transition-all hover:-translate-y-0.5 hover:border-brand-500/50 hover:text-[var(--text)] hover:shadow-md"
+                        className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-1.5 text-xs text-[var(--text-muted)] shadow-sm transition-all hover:-translate-y-0.5 hover:border-brand-500/50 hover:text-[var(--text)] hover:shadow-md"
                       >
                         {s}
                       </button>
@@ -556,7 +556,7 @@ export function AIAssistantPage() {
                   >
                     <div
                       className={cn(
-                        "flex h-7 w-7 shrink-0 items-center justify-center rounded-full shadow-sm ring-1",
+                        "flex h-7 w-7 shrink-0 items-center justify-center rounded-md shadow-sm ring-1",
                         m.role === "user"
                           ? "bg-brand-600 text-white ring-brand-700/50"
                           : "bg-gradient-to-br from-brand-500/20 to-brand-600/10 text-brand-500 ring-[var(--border)]",
@@ -588,7 +588,7 @@ export function AIAssistantPage() {
                       {(m.role !== "assistant" || m.content || m.streaming) && (
                         <div
                           className={cn(
-                            "rounded-2xl border px-3.5 py-2.5 text-sm",
+                            "rounded-xl border px-3.5 py-2.5 text-sm",
                             m.role === "user"
                               ? "border-brand-700 bg-brand-600 text-white shadow-sm"
                               : "border-[var(--border)] bg-[var(--bg-surface)] shadow-sm",
@@ -661,7 +661,7 @@ export function AIAssistantPage() {
                 ))}
               </div>
             )}
-            <div className="flex items-end gap-2 rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] p-1.5 pl-3.5 shadow-sm transition-colors focus-within:border-brand-500/60 focus-within:ring-2 focus-within:ring-[var(--ring)]">
+            <div className="flex items-end gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1.5 pl-3.5 shadow-sm transition-colors focus-within:border-brand-500/60 focus-within:ring-2 focus-within:ring-[var(--ring)]">
               <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -697,11 +697,11 @@ export function AIAssistantPage() {
                 className="max-h-32 flex-1 resize-none bg-transparent py-1.5 text-sm outline-none"
               />
               {streaming ? (
-                <Button variant="destructive" className="shrink-0 rounded-full" size="icon" onClick={stop} title="Stop">
+                <Button variant="destructive" className="shrink-0" size="icon" onClick={stop} title="Stop">
                   <Square className="h-3.5 w-3.5" />
                 </Button>
               ) : (
-                <Button className="shrink-0 rounded-full" size="icon" onClick={() => send()} disabled={!input.trim()} title="Send">
+                <Button className="shrink-0" size="icon" onClick={() => send()} disabled={!input.trim()} title="Send">
                   <Send className="h-3.5 w-3.5" />
                 </Button>
               )}
@@ -843,10 +843,10 @@ function ToolCallPill({ name, status, args, result }: { name: string; status: "r
     </summary>
   )
   if (!hasDetails) {
-    return <div className="group w-fit animate-in rounded-full border border-[var(--border)] bg-[var(--bg-surface)] fade-in text-xs text-[var(--text-muted)]">{body}</div>
+    return <div className="group w-fit animate-in rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] fade-in text-xs text-[var(--text-muted)]">{body}</div>
   }
   return (
-    <details className="group w-fit animate-in overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] fade-in text-xs text-[var(--text-muted)] open:w-full">
+    <details className="group w-fit animate-in overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] fade-in text-xs text-[var(--text-muted)] open:w-full">
       {body}
       <div className="space-y-2 border-t border-[var(--border)] px-2.5 py-2">
         {args !== undefined && (

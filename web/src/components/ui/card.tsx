@@ -42,7 +42,7 @@ export function CardTitle({
 }: HTMLAttributes<HTMLHeadingElement> & { as?: "h1" | "h2" | "h3" | "h4" }) {
   return (
     <Heading
-      className={cn("font-display text-sm font-semibold tracking-tight text-[var(--text)]", className)}
+      className={cn("font-display text-[15px] font-semibold tracking-tight text-[var(--text)]", className)}
       {...props}
     />
   )
