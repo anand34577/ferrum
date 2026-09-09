@@ -120,6 +120,10 @@ export function AlertsPage() {
   )
   const totalActive = (summaryQuery.data?.critical ?? 0) + (summaryQuery.data?.warning ?? 0)
 
+  const thresholdNum = Number(form.threshold)
+  const thresholdInvalid = form.threshold.trim() === "" || !Number.isFinite(thresholdNum) || thresholdNum <= 0 || thresholdNum > 100
+  const ruleFormInvalid = !form.name.trim() || thresholdInvalid
+
   const alertColumns = useMemo<ColumnDef<AlertInstance>[]>(
     () => [
       {
@@ -332,8 +336,11 @@ export function AlertsPage() {
                 </Select>
               </div>
             </div>
+            {thresholdInvalid && form.threshold.trim() !== "" && (
+              <p className="text-xs text-[var(--text-muted)]">Threshold must be a number between 1 and 100.</p>
+            )}
             <div className="flex gap-2">
-              <Button disabled={!form.name} loading={createRuleMutation.isPending} onClick={() => createRuleMutation.mutate()}>
+              <Button disabled={ruleFormInvalid} loading={createRuleMutation.isPending} onClick={() => createRuleMutation.mutate()}>
                 Create rule
               </Button>
               <Button variant="ghost" onClick={() => setShowForm(false)}>Cancel</Button>

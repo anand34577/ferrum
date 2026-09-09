@@ -10,6 +10,7 @@ import { EmptyState } from "@/components/ui/empty-state"
 import { ErrorState } from "@/components/ui/error-state"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { MultiSelect } from "@/components/ui/multi-select"
 import { PageHeader } from "@/components/ui/page-header"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -34,13 +35,13 @@ export function BackupsPage() {
     })),
   })
 
-  const [form, setForm] = useState({ connId: "", node: "", storage: "", vmid: "" })
+  const [form, setForm] = useState({ connId: "", node: "", storage: "", vmid: [] as string[] })
   const runNow = useMutation({
     mutationFn: () =>
       api.post(`/connections/${form.connId}/cluster/backup-jobs/run`, {
         node: form.node,
         storage: form.storage,
-        vmids: form.vmid ? [form.vmid] : undefined,
+        vmids: form.vmid.length ? form.vmid : undefined,
       }),
     onSuccess: () => {
       toast.success("Backup started — watch it in the Task Center")
@@ -51,7 +52,7 @@ export function BackupsPage() {
 
   const [scheduleConnId, setScheduleConnId] = useState("")
   const emptyScheduleForm = {
-    schedule: "sat 02:00", storage: "", vmids: "", mode: "snapshot", compress: "zstd", prune: "",
+    schedule: "sat 02:00", storage: "", vmids: [] as string[], mode: "snapshot", compress: "zstd", prune: "",
     notificationMode: "", mailTo: "", mailNotification: "", bwlimit: "", pigz: "",
   }
   const [scheduleForm, setScheduleForm] = useState(emptyScheduleForm)
@@ -61,7 +62,7 @@ export function BackupsPage() {
       api.post(`/connections/${scheduleConnId}/cluster/backup-jobs`, {
         schedule: scheduleForm.schedule,
         storage: scheduleForm.storage,
-        vmids: scheduleForm.vmids || undefined,
+        vmids: scheduleForm.vmids.length ? scheduleForm.vmids.join(",") : undefined,
         mode: scheduleForm.mode,
         compress: scheduleForm.compress,
         enabled: true,
@@ -110,6 +111,16 @@ export function BackupsPage() {
   const schedStorages = scheduleConnId
     ? Array.from(new Set((connections.find((c) => c.connectionId === scheduleConnId)?.resources ?? []).filter((r) => r.type === "storage" && r.storage).map((r) => r.storage!)))
     : []
+  // Guest pick-lists sourced from the inventory already in cache — a typo'd
+  // VMID can't reach the Proxmox API, matching the pattern GuestDetailDialog
+  // already uses for disk/node/storage fields.
+  function guestOptions(connId: string) {
+    return (connections.find((c) => c.connectionId === connId)?.resources ?? [])
+      .filter((r) => r.type === "qemu" || r.type === "lxc")
+      .map((r) => ({ value: String(r.vmid), label: `${r.name ?? `#${r.vmid}`} (#${r.vmid})` }))
+  }
+  const runGuestOptions = form.connId ? guestOptions(form.connId) : []
+  const schedGuestOptions = scheduleConnId ? guestOptions(scheduleConnId) : []
 
   return (
     <div className="space-y-4">
@@ -142,7 +153,13 @@ export function BackupsPage() {
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <div className="space-y-1.5">
                   <Label>Connection</Label>
-                  <Select value={scheduleConnId} onValueChange={setScheduleConnId}>
+                  <Select
+                    value={scheduleConnId}
+                    onValueChange={(v) => {
+                      setScheduleConnId(v)
+                      setScheduleForm({ ...scheduleForm, vmids: [] })
+                    }}
+                  >
                     <SelectTrigger>
                       <SelectValue placeholder="Select..." />
                     </SelectTrigger>
@@ -176,11 +193,13 @@ export function BackupsPage() {
                 </div>
                 <div className="space-y-1.5">
                   <Label>Guests (blank = all)</Label>
-                  <Input
-                    value={scheduleForm.vmids}
-                    onChange={(e) => setScheduleForm({ ...scheduleForm, vmids: e.target.value })}
-                    placeholder="100,101"
-                    inputMode="numeric"
+                  <MultiSelect
+                    options={schedGuestOptions}
+                    selected={scheduleForm.vmids}
+                    onChange={(v) => setScheduleForm({ ...scheduleForm, vmids: v })}
+                    allLabel={scheduleConnId ? "All guests" : "Pick a connection first"}
+                    label="Guests"
+                    className="w-full"
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -299,7 +318,7 @@ export function BackupsPage() {
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="space-y-1.5">
                   <Label>Connection</Label>
-                  <Select value={form.connId} onValueChange={(v) => setForm({ ...form, connId: v, node: "", storage: "" })}>
+                  <Select value={form.connId} onValueChange={(v) => setForm({ ...form, connId: v, node: "", storage: "", vmid: [] })}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select..." />
                     </SelectTrigger>
@@ -337,8 +356,15 @@ export function BackupsPage() {
                   </Select>
                 </div>
                 <div className="space-y-1.5">
-                  <Label>VMID (optional)</Label>
-                  <Input value={form.vmid} onChange={(e) => setForm({ ...form, vmid: e.target.value })} placeholder="all" inputMode="numeric" />
+                  <Label>Guests (blank = all)</Label>
+                  <MultiSelect
+                    options={runGuestOptions}
+                    selected={form.vmid}
+                    onChange={(v) => setForm({ ...form, vmid: v })}
+                    allLabel={form.connId ? "All guests" : "Pick a connection first"}
+                    label="Guests"
+                    className="w-full"
+                  />
                 </div>
               </div>
               <Button

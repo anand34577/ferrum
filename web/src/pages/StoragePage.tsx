@@ -18,6 +18,8 @@ import { PageHeader } from "@/components/ui/page-header"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusDot } from "@/components/ui/status-dot"
 import { api, type CephOSD, type CephPool, type CephStatus, type ClusterResource, type ConnectionInventory } from "@/lib/api"
+import { chartBarRadius } from "@/lib/chartRadius"
+import { useTheme } from "@/lib/theme"
 import { formatBytes, formatPercentFine } from "@/lib/utils"
 
 const TYPE_COLORS = [
@@ -30,6 +32,8 @@ const TYPE_COLORS = [
 ]
 
 export function StoragePage() {
+  const { look } = useTheme()
+  const barRadius = chartBarRadius(look)
   const { data: inventory, isLoading, isError, refetch } = useQuery({
     queryKey: ["inventory"],
     queryFn: () => api.get<ConnectionInventory[]>("/inventory/"),
@@ -268,7 +272,7 @@ export function StoragePage() {
                       feedback is a 1px outline on the hovered row's track. */}
                   <Bar
                     dataKey="pct"
-                    radius={[4, 4, 4, 4]}
+                    radius={[barRadius, barRadius, barRadius, barRadius]}
                     barSize={12}
                     background={(p: BarShapeProps) => (
                       <Rectangle
@@ -277,7 +281,7 @@ export function StoragePage() {
                         width={p.width}
                         height={p.height}
                         fill="var(--track)"
-                        radius={4}
+                        radius={barRadius}
                         stroke={p.isActive ? "var(--text-faint)" : "none"}
                         strokeWidth={1}
                       />

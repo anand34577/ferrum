@@ -112,7 +112,26 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { effectiveTheme, toggle } = useTheme()
   const navigate = useNavigate()
   const location = useLocation()
-  const [collapsed, setCollapsed] = useState(false)
+  // Persisted across reloads — an admin who collapses the rail for screen
+  // space shouldn't have to redo it every session.
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem("ferrum:sidebar-collapsed") === "1"
+    } catch {
+      return false
+    }
+  })
+  function toggleCollapsed() {
+    setCollapsed((c) => {
+      const next = !c
+      try {
+        localStorage.setItem("ferrum:sidebar-collapsed", next ? "1" : "0")
+      } catch {
+        // private browsing / storage blocked — collapse still works, just doesn't persist
+      }
+      return next
+    })
+  }
   const [mobileOpen, setMobileOpen] = useState(false)
   // The AI Assistant page fills main's h-full with a fixed-height chat panel
   // instead of scrolling content, so main's usual bottom padding (sized for
@@ -188,7 +207,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
         <SidebarContent groups={groups} collapsed={collapsed} />
         <button
-          onClick={() => setCollapsed((c) => !c)}
+          onClick={toggleCollapsed}
           className="hidden shrink-0 items-center gap-2 border-t border-[var(--sidebar-border)] px-4 py-2.5 text-xs font-medium text-[var(--sidebar-text-muted)] transition-colors hover:text-[var(--sidebar-text)] md:flex"
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         >

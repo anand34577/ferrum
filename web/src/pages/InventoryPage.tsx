@@ -14,7 +14,7 @@ import {
   X,
 } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
-import { Link, useLocation } from "react-router-dom"
+import { Link, useLocation, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -55,12 +55,31 @@ export function InventoryPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [selectedGuest, setSelectedGuest] = useState<{ connId: string; guest: ClusterResource } | null>(null)
   const [createDialogConn, setCreateDialogConn] = useState<{ connId: string; nodes: ClusterResource[] } | null>(null)
+  // Filters live in the URL (not just component state) so a search/filter
+  // stays put across a drill-in-and-back navigation, and so a filtered view
+  // is shareable/bookmarkable — useful for pointing a teammate at "these
+  // guests" during an incident.
+  const [searchParams, setSearchParams] = useSearchParams()
   // Multi-select filters: an empty array means "all", so predicates stay a
   // plain Set lookup without a magic "all" value.
-  const [statusTypes, setStatusTypes] = useState<string[]>([])
-  const [guestTypes, setGuestTypes] = useState<string[]>([])
-  const [poolFilter, setPoolFilter] = useState<string[]>([])
-  const [search, setSearch] = useState(focusState?.focusGuestName ?? "")
+  const [statusTypes, setStatusTypes] = useState<string[]>(() => searchParams.get("status")?.split(",").filter(Boolean) ?? [])
+  const [guestTypes, setGuestTypes] = useState<string[]>(() => searchParams.get("type")?.split(",").filter(Boolean) ?? [])
+  const [poolFilter, setPoolFilter] = useState<string[]>(() => searchParams.get("pool")?.split(",").filter(Boolean) ?? [])
+  const [search, setSearch] = useState(focusState?.focusGuestName ?? searchParams.get("q") ?? "")
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams)
+    if (search) next.set("q", search)
+    else next.delete("q")
+    if (statusTypes.length) next.set("status", statusTypes.join(","))
+    else next.delete("status")
+    if (guestTypes.length) next.set("type", guestTypes.join(","))
+    else next.delete("type")
+    if (poolFilter.length) next.set("pool", poolFilter.join(","))
+    else next.delete("pool")
+    setSearchParams(next, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, statusTypes, guestTypes, poolFilter])
   const [selected, setSelected] = useState<Map<string, { connId: string; guest: ClusterResource }>>(new Map())
   const [migrateDialogOpen, setMigrateDialogOpen] = useState(false)
   const [migrateTarget, setMigrateTarget] = useState("")
@@ -135,14 +154,26 @@ export function InventoryPage() {
     onError: () => toast.error("Bulk action failed"),
   })
 
+  // First 5 names + overflow count — enough to catch "wait, that's not who I
+  // meant to select" without turning the confirm into a scrollable list.
+  function selectedNameList() {
+    const names = Array.from(selected.values()).map(({ guest }) => guest.name)
+    return names.length <= 5 ? names.join(", ") : `${names.slice(0, 5).join(", ")} and ${names.length - 5} more`
+  }
+
   async function bulkPower(action: string) {
     if (action === "stop" || action === "reset") {
       const ok = await confirm({
         title: `Bulk ${action} ${selected.size} guests?`,
-        description:
-          action === "stop"
-            ? "Each selected guest is killed immediately — unsaved data inside the guests is lost."
-            : "Each selected guest is hard-reset, like pressing the hardware reset button.",
+        description: (
+          <>
+            {action === "stop"
+              ? "Each selected guest is killed immediately — unsaved data inside the guests is lost."
+              : "Each selected guest is hard-reset, like pressing the hardware reset button."}
+            <br />
+            <span className="mt-1.5 block text-[var(--text-muted)]">{selectedNameList()}</span>
+          </>
+        ),
         confirmLabel: action === "stop" ? "Hard-stop all" : "Hard-reset all",
       })
       if (!ok) return
@@ -483,22 +514,28 @@ export function InventoryPage() {
                                       HA: {guest.hastate}
                                     </Badge>
                                   )}
-                                  {guest.tags && (
-                                    <span className="flex flex-wrap items-center gap-1" aria-label={`Tags: ${guest.tags.split(/[,;]/).filter(Boolean).join(", ")}`}>
-                                      {guest.tags.split(/[,;]/).filter(Boolean).map((t) => (
-                                        <Badge key={t} variant="default" aria-hidden>{t}</Badge>
-                                      ))}
-                                    </span>
-                                  )}
+                                  {guest.tags && (() => {
+                                    const tags = guest.tags.split(/[,;]/).filter(Boolean)
+                                    const shown = tags.slice(0, 3)
+                                    const overflow = tags.length - shown.length
+                                    return (
+                                      <span className="flex flex-wrap items-center gap-1" aria-label={`Tags: ${tags.join(", ")}`}>
+                                        {shown.map((t) => (
+                                          <Badge key={t} variant="outline" aria-hidden>{t}</Badge>
+                                        ))}
+                                        {overflow > 0 && <Badge variant="outline" aria-hidden>+{overflow}</Badge>}
+                                      </span>
+                                    )
+                                  })()}
                                 </div>
                                 {guest.status === "running" && (
-                                  <span className="hidden shrink-0 items-center gap-3 text-xs text-[var(--text-muted)] tabular xl:flex">
+                                  <span className="hidden shrink-0 items-center gap-3 text-xs text-[var(--text-muted)] tabular md:flex">
                                     <span>CPU {formatPercent(guest.cpu ?? 0)}</span>
                                     <span>Mem {formatBytes(guest.mem ?? 0)} / {formatBytes(guest.maxmem ?? 0)}</span>
                                     {(guest.maxdisk ?? 0) > 0 && (
-                                      <span>Disk {formatBytes(guest.disk ?? 0)} / {formatBytes(guest.maxdisk ?? 0)}</span>
+                                      <span className="hidden xl:inline">Disk {formatBytes(guest.disk ?? 0)} / {formatBytes(guest.maxdisk ?? 0)}</span>
                                     )}
-                                    <span>{formatUptime(guest.uptime ?? 0)}</span>
+                                    <span className="hidden xl:inline">{formatUptime(guest.uptime ?? 0)}</span>
                                   </span>
                                 )}
                                 <span className="ml-auto flex shrink-0 items-center gap-1">
@@ -554,13 +591,13 @@ export function InventoryPage() {
                                             <Power className="h-3.5 w-3.5 text-[var(--status-warn)]" /> Shutdown
                                           </DropdownMenuItem>
                                           <DropdownMenuItem onSelect={() => guestPower(conn.connectionId, guest, "reset")}>
-                                            <RotateCcw className="h-3.5 w-3.5 text-[var(--status-warn)]" /> Reset…
+                                            <RotateCcw className="h-3.5 w-3.5 text-[var(--status-warn)]" /> Reset
                                           </DropdownMenuItem>
                                           <DropdownMenuItem
                                             onSelect={() => guestPower(conn.connectionId, guest, "stop")}
                                             className="text-[var(--status-error)] data-[highlighted]:bg-[color-mix(in_oklab,var(--status-error)_10%,transparent)]"
                                           >
-                                            <X className="h-3.5 w-3.5" /> Hard stop…
+                                            <X className="h-3.5 w-3.5" /> Hard stop
                                           </DropdownMenuItem>
                                         </>
                                       )}

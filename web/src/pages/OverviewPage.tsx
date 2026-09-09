@@ -26,11 +26,13 @@ import { Link } from "react-router-dom"
 import { Heatmap, type HeatmapRow } from "@/components/charts/Heatmap"
 import { KpiCard } from "@/components/charts/KpiCard"
 import { Button } from "@/components/ui/button"
+import { EmptyState } from "@/components/ui/empty-state"
 import { ErrorState } from "@/components/ui/error-state"
 import { Meter, SplitMeter } from "@/components/ui/meter"
 import { PageHeader } from "@/components/ui/page-header"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusDot } from "@/components/ui/status-dot"
+import { Hint } from "@/components/ui/tooltip"
 import { api, type AlertInstance, type FleetOverviewConn } from "@/lib/api"
 import { summarizeFleet, useScopedInventory, utilizationTone } from "@/lib/fleet"
 import { cn, formatBytes, formatPercentFine, formatRelativeTime } from "@/lib/utils"
@@ -216,11 +218,13 @@ export function OverviewPage() {
         description={`${totals.serversOnline}/${totals.serversTotal} Proxmox ${totals.serversTotal === 1 ? "server" : "servers"} online · ${totals.clusters} cluster${totals.clusters === 1 ? "" : "s"} · auto-refreshes every 15s`}
         icon={Waypoints}
         actions={
-          <Link to="/dashboard">
-            <Button variant="secondary" size="sm" className="gap-2 shadow-xs">
-              <LayoutDashboard className="h-4 w-4" /> Custom dashboard
-            </Button>
-          </Link>
+          <Hint label="Build your own layout from these widgets">
+            <Link to="/dashboard">
+              <Button variant="secondary" size="sm" className="gap-2 shadow-xs">
+                <LayoutDashboard className="h-4 w-4" /> Custom dashboard
+              </Button>
+            </Link>
+          </Hint>
         }
       />
 
@@ -290,6 +294,21 @@ export function OverviewPage() {
               </p>
               <p className="text-[10px] text-[var(--text-faint)]">Click a header to sort · nodes drill through to host detail</p>
             </div>
+            {sorted.length === 0 && !isLoading ? (
+              <EmptyState
+                icon={Waypoints}
+                title="No Proxmox connections yet"
+                description="Add a host or cluster to see it compared here."
+                className="rounded-none border-0"
+                action={
+                  <Link to="/connections">
+                    <Button variant="secondary" size="sm" className="gap-2">
+                      <ChevronRight className="h-3.5 w-3.5" /> Add connection
+                    </Button>
+                  </Link>
+                }
+              />
+            ) : (
             <div className="overflow-x-auto">
               {/* min-w keeps the nine columns readable — below it the table
                   would crush its bar cells instead of scrolling. */}
@@ -304,7 +323,7 @@ export function OverviewPage() {
                     <th className="w-36 px-3 py-2">{sortButton("memory", "Memory")}</th>
                     <th className="w-36 px-3 py-2">{sortButton("storage", "Storage")}</th>
                     <th className="px-3 py-2 text-right">{sortButton("alerts", "Alerts")}</th>
-                    <th className="px-3 py-2 text-right">{sortButton("latency", "Latency")}</th>
+                    <th className="px-3 py-2 text-right" title="Round-trip time of the last fleet poll — orange at 300ms, red at 800ms">{sortButton("latency", "Latency")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -357,16 +376,10 @@ export function OverviewPage() {
                       </td>
                     </tr>
                   ))}
-                  {sorted.length === 0 && !isLoading && (
-                    <tr>
-                      <td colSpan={9} className="px-4 py-8 text-center text-sm text-[var(--text-muted)]">
-                        No Proxmox connections yet — add one under <Link to="/connections" className="underline">Connections</Link>.
-                      </td>
-                    </tr>
-                  )}
                 </tbody>
               </table>
             </div>
+            )}
           </div>
 
           {/* --- Hottest guests: the whole estate's busiest workloads, so the

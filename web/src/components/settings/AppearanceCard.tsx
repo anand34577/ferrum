@@ -192,7 +192,7 @@ export function AppearanceCard() {
                   aria-label={a.label}
                   onClick={() => setAccent(a.value)}
                   className={cn(
-                    "flex h-9 w-9 items-center justify-center rounded-full ring-2 ring-offset-2 ring-offset-[var(--bg-surface)] transition-transform hover:scale-105",
+                    "flex h-11 w-11 items-center justify-center rounded-full ring-2 ring-offset-2 ring-offset-[var(--bg-surface)] transition-transform hover:scale-105",
                     active ? "ring-[var(--text)]" : "ring-transparent",
                   )}
                 >

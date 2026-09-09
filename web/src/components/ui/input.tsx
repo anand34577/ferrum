@@ -1,6 +1,10 @@
 import { type InputHTMLAttributes, forwardRef } from "react"
 import { cn } from "@/lib/utils"
 
+/** Every text input sets in mono deliberately — part of the app's technical-
+ * instrument register (tracked-caps badges, mono metrics elsewhere). Prose
+ * fields (Description/Notes) opt back into the body font at the call site
+ * the same way DatacenterOptionsForm's textarea already does. */
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
   ({ className, ...props }, ref) => (
     <input

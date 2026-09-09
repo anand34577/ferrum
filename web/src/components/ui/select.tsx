@@ -17,9 +17,14 @@ export function SelectTrigger({ className, children, ...props }: ComponentProps<
       )}
       {...props}
     >
-      {children}
+      {/* min-w-0 lets this shrink below its content's natural width inside
+          the flex row — without it, a long selected value (a long connection
+          name, e.g.) has nowhere to go but wrap the trigger onto multiple
+          lines instead of eliding with "…", which grows the box and pushes
+          whatever sits below it. */}
+      <span className="min-w-0 flex-1 truncate text-left">{children}</span>
       <SelectPrimitive.Icon>
-        <ChevronDown className="h-3.5 w-3.5 text-[var(--text-muted)]" />
+        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
       </SelectPrimitive.Icon>
     </SelectPrimitive.Trigger>
   )
@@ -60,7 +65,9 @@ export function SelectItem({ className, children, ...props }: ComponentProps<typ
           <Check className="h-3.5 w-3.5" />
         </SelectPrimitive.ItemIndicator>
       </span>
-      <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+      <SelectPrimitive.ItemText asChild>
+        <span className="block truncate">{children}</span>
+      </SelectPrimitive.ItemText>
     </SelectPrimitive.Item>
   )
 }

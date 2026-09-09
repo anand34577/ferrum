@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -48,6 +48,19 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
   })
   const isos = templatesQuery.data?.filter((t) => t.content === "iso") ?? []
   const vztmpls = templatesQuery.data?.filter((t) => t.content === "vztmpl") ?? []
+
+  // Single-node connections are the common case — don't make the admin pick
+  // the only option that exists. Only fills the field when it's still blank,
+  // so it never clobbers a deliberate choice.
+  useEffect(() => {
+    if (!open || nodes.length !== 1) return
+    const only = nodes[0].node!
+    setVmForm((f) => (f.node ? f : { ...f, node: only }))
+    setLxcForm((f) => (f.node ? f : { ...f, node: only }))
+  }, [open, nodes])
+
+  const vmInvalid = vmForm.cores < 1 || vmForm.memoryMb < 16 || vmForm.diskGb < 1
+  const lxcInvalid = lxcForm.cores < 1 || lxcForm.memoryMb < 16 || lxcForm.diskGb < 1
 
   const createVM = useMutation({
     mutationFn: () => api.post(`/connections/${connId}/vms`, { ...vmForm, extraText: undefined, extra: parseExtraLines(vmForm.extraText) }),
@@ -121,11 +134,11 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
               </div>
               <div className="space-y-1.5">
                 <Label>Cores</Label>
-                <Input type="number" value={vmForm.cores} onChange={(e) => setVmForm({ ...vmForm, cores: Number(e.target.value) })} />
+                <Input type="number" min={1} value={vmForm.cores} onChange={(e) => setVmForm({ ...vmForm, cores: Number(e.target.value) })} />
               </div>
               <div className="space-y-1.5">
                 <Label>Memory (MB)</Label>
-                <Input type="number" value={vmForm.memoryMb} onChange={(e) => setVmForm({ ...vmForm, memoryMb: Number(e.target.value) })} />
+                <Input type="number" min={16} value={vmForm.memoryMb} onChange={(e) => setVmForm({ ...vmForm, memoryMb: Number(e.target.value) })} />
               </div>
               <div className="space-y-1.5">
                 <Label>Storage</Label>
@@ -133,7 +146,7 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
               </div>
               <div className="space-y-1.5">
                 <Label>Disk (GB)</Label>
-                <Input type="number" value={vmForm.diskGb} onChange={(e) => setVmForm({ ...vmForm, diskGb: Number(e.target.value) })} />
+                <Input type="number" min={1} value={vmForm.diskGb} onChange={(e) => setVmForm({ ...vmForm, diskGb: Number(e.target.value) })} />
               </div>
               <div className="space-y-1.5">
                 <Label>Network bridge</Label>
@@ -192,8 +205,12 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
             </div>
             <FormError message={createVM.error instanceof ApiError ? createVM.error.message : createVM.error ? "Failed to create VM" : undefined} />
             <DialogFooter className="flex-col items-end gap-1">
-              {!vmForm.node && <p className="text-xs text-[var(--text-muted)]">Select a node to continue.</p>}
-              <Button loading={createVM.isPending} disabled={!vmForm.node} onClick={() => void submitVM()}>
+              {!vmForm.node ? (
+                <p className="text-xs text-[var(--text-muted)]">Select a node to continue.</p>
+              ) : vmInvalid ? (
+                <p className="text-xs text-[var(--text-muted)]">Cores, memory (min 16 MB) and disk (min 1 GB) must be at least 1.</p>
+              ) : null}
+              <Button loading={createVM.isPending} disabled={!vmForm.node || vmInvalid} onClick={() => void submitVM()}>
                 Create VM
               </Button>
             </DialogFooter>
@@ -239,11 +256,11 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
               </div>
               <div className="space-y-1.5">
                 <Label>Cores</Label>
-                <Input type="number" value={lxcForm.cores} onChange={(e) => setLxcForm({ ...lxcForm, cores: Number(e.target.value) })} />
+                <Input type="number" min={1} value={lxcForm.cores} onChange={(e) => setLxcForm({ ...lxcForm, cores: Number(e.target.value) })} />
               </div>
               <div className="space-y-1.5">
                 <Label>Memory (MB)</Label>
-                <Input type="number" value={lxcForm.memoryMb} onChange={(e) => setLxcForm({ ...lxcForm, memoryMb: Number(e.target.value) })} />
+                <Input type="number" min={16} value={lxcForm.memoryMb} onChange={(e) => setLxcForm({ ...lxcForm, memoryMb: Number(e.target.value) })} />
               </div>
               <div className="space-y-1.5">
                 <Label>Storage</Label>
@@ -251,7 +268,7 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
               </div>
               <div className="space-y-1.5">
                 <Label>Disk (GB)</Label>
-                <Input type="number" value={lxcForm.diskGb} onChange={(e) => setLxcForm({ ...lxcForm, diskGb: Number(e.target.value) })} />
+                <Input type="number" min={1} value={lxcForm.diskGb} onChange={(e) => setLxcForm({ ...lxcForm, diskGb: Number(e.target.value) })} />
               </div>
               <div className="space-y-1.5">
                 <Label>Network bridge</Label>
@@ -282,8 +299,10 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
                 <p className="text-xs text-[var(--text-muted)]">Select a node to continue.</p>
               ) : !lxcForm.template ? (
                 <p className="text-xs text-[var(--text-muted)]">Select a container template to continue.</p>
+              ) : lxcInvalid ? (
+                <p className="text-xs text-[var(--text-muted)]">Cores, memory (min 16 MB) and disk (min 1 GB) must be at least 1.</p>
               ) : null}
-              <Button loading={createLXC.isPending} disabled={!lxcForm.node || !lxcForm.template} onClick={() => void submitLXC()}>
+              <Button loading={createLXC.isPending} disabled={!lxcForm.node || !lxcForm.template || lxcInvalid} onClick={() => void submitLXC()}>
                 Create Container
               </Button>
             </DialogFooter>

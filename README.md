@@ -82,6 +82,14 @@ On first run, open the UI and create the initial admin account, then add a Proxm
 
 ### Docker
 
+Prebuilt multi-arch (amd64/arm64) images are published to GHCR on every release:
+
+```bash
+docker run -p 8080:8080 -v ferrum-data:/app/data ghcr.io/anand34577/ferrum:latest
+```
+
+Or build locally from source:
+
 ```bash
 docker build -t ferrum .
 docker run -p 8080:8080 -v ferrum-data:/app/data ferrum

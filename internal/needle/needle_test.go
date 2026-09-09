@@ -5,6 +5,31 @@ import (
 	"testing"
 )
 
+func TestCrashInfoReportsProcessDeath(t *testing.T) {
+	m := NewManager("")
+
+	// Never started: running defaults false, so crashInfo must say "died"
+	// (there's nothing to be healthy) rather than silently returning false.
+	if died, _ := m.crashInfo(); !died {
+		t.Fatal("expected crashInfo to report died=true for a never-started manager")
+	}
+
+	m.running = true
+	m.log.Write([]byte("panic: out of memory\n"))
+	if died, log := m.crashInfo(); died {
+		t.Fatalf("expected died=false while running=true, got died=%v log=%q", died, log)
+	}
+
+	m.running = false
+	died, log := m.crashInfo()
+	if !died {
+		t.Fatal("expected died=true once running is false")
+	}
+	if log != "panic: out of memory" {
+		t.Fatalf("log = %q, want the captured subprocess output", log)
+	}
+}
+
 func TestIsBuiltin(t *testing.T) {
 	if !IsBuiltin(BaseURL) {
 		t.Fatal("expected the sentinel URL to be recognized as built-in")
