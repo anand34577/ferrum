@@ -2,6 +2,7 @@ import type { ComponentType } from "react"
 import type { WidgetSettings, WidgetType } from "@/lib/dashboardTypes"
 import { AlertActivityWidget } from "./widgets/AlertActivityWidget"
 import { BackupActivityWidget } from "./widgets/BackupActivityWidget"
+import { CapacityForecastWidget } from "./widgets/CapacityForecastWidget"
 import { CapacityPlanningWidget } from "./widgets/CapacityPlanningWidget"
 import { ClusterComparisonWidget } from "./widgets/ClusterComparisonWidget"
 import { ConnectionStatusWidget } from "./widgets/ConnectionStatusWidget"
@@ -10,6 +11,7 @@ import { FleetOverviewWidget } from "./widgets/FleetOverviewWidget"
 import { FleetSummaryWidget } from "./widgets/FleetSummaryWidget"
 import { FleetTrendWidget } from "./widgets/FleetTrendWidget"
 import { GuestStatusWidget } from "./widgets/GuestStatusWidget"
+import { HealthScoreWidget } from "./widgets/HealthScoreWidget"
 import { MemoryByNodeWidget } from "./widgets/MemoryByNodeWidget"
 import { NodeCompositionWidget } from "./widgets/NodeCompositionWidget"
 import { NodeComparisonWidget } from "./widgets/NodeComparisonWidget"
@@ -44,4 +46,6 @@ export const widgetRegistry: Record<WidgetType, ComponentType<{ settings: Widget
   "alert-activity": AlertActivityWidget,
   "backup-activity": BackupActivityWidget,
   "uptime-leaderboard": UptimeLeaderboardWidget,
+  "capacity-forecast": CapacityForecastWidget,
+  "health-score": HealthScoreWidget,
 }

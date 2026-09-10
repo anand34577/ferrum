@@ -285,6 +285,7 @@ func (s *Server) Router() http.Handler {
 					r.Post("/lxc", s.createLXC)
 					r.Get("/nextid", s.nextGuestID)
 					r.Get("/templates", s.listTemplates)
+					r.Get("/health-score", s.connectionHealthScore)
 
 					// PBS (Proxmox Backup Server) remote — mounted on a
 					// connection whose stored type is "pbs" rather than
@@ -373,6 +374,7 @@ func (s *Server) Router() http.Handler {
 					r.Route("/nodes/{node}", func(r chi.Router) {
 						r.Get("/status", s.nodeStatus)
 						r.Get("/rrddata", s.nodeRRDData)
+						r.Get("/forecast", s.nodeForecast)
 						r.Post("/reboot", s.rebootNode)
 						r.Post("/shutdown", s.shutdownNode)
 						r.Post("/wakeonlan", s.wakeOnLan)
@@ -591,6 +593,12 @@ func (s *Server) Router() http.Handler {
 			r.Get("/search", s.globalSearch)
 			r.Route("/bulk", func(r chi.Router) {
 				r.With(s.requireAdmin).Post("/guests/action", s.bulkGuestAction)
+			})
+
+			r.Get("/health-score", s.fleetHealthScore)
+
+			r.Route("/forecast", func(r chi.Router) {
+				r.Get("/capacity-warnings", s.fleetCapacityWarnings)
 			})
 
 			r.Route("/dashboards", func(r chi.Router) {
