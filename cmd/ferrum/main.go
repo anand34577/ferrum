@@ -21,6 +21,8 @@ import (
 	"ferrum/internal/auth"
 	"ferrum/internal/config"
 	"ferrum/internal/connections"
+	"ferrum/internal/events"
+	"ferrum/internal/notify"
 	"ferrum/internal/poller"
 	"ferrum/internal/secrets"
 	"ferrum/internal/store"
@@ -143,8 +145,19 @@ func runServer(ctx context.Context, cfg config.Config) {
 	// oidc.* block is only ever used to seed that database row on the very
 	// first boot after upgrading, so an existing config.yaml-based deployment
 	// keeps working unchanged.
+	// eventBus fans out state changes the poller detects (alert
+	// triggers/resolutions, connection health flips) to the SSE endpoint and
+	// the outgoing webhook dispatcher — see internal/events, internal/api/events.go,
+	// and internal/notify/webhooks.go.
+	eventBus := events.New()
+	srv.SetEventBus(eventBus)
+
 	evaluator := poller.NewAlertEvaluator(db, connections.New(db, secretBox))
+	evaluator.SetBus(eventBus)
 	srv.SetAlertEvaluator(evaluator)
+
+	webhookDispatcher := notify.NewWebhookDispatcher(db)
+	srv.SetWebhookDispatcher(webhookDispatcher)
 	if err := srv.BootstrapSettings(ctx, cfg.OIDC.Enabled, auth.OIDCConfig{
 		DisplayName:  cfg.OIDC.DisplayName,
 		IssuerURL:    cfg.OIDC.IssuerURL,
@@ -163,6 +176,7 @@ func runServer(ctx context.Context, cfg config.Config) {
 	pollerCtx, stopPoller := context.WithCancel(ctx)
 	defer stopPoller()
 	go evaluator.Run(pollerCtx, srv.AlertPollInterval(ctx))
+	go webhookDispatcher.Run(pollerCtx, eventBus)
 
 	distFS, err := web.DistFS()
 	if err != nil {

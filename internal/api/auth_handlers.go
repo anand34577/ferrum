@@ -51,7 +51,7 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, token, err := s.auth.Login(r.Context(), req.Username, req.Password)
+	user, token, err := s.auth.Login(r.Context(), req.Username, req.Password, r.RemoteAddr, r.UserAgent())
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -98,7 +98,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := s.auth.CreateSession(r.Context(), user.ID)
+	token, err := s.auth.CreateSession(r.Context(), user.ID, r.RemoteAddr, r.UserAgent())
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -145,7 +145,7 @@ func (s *Server) authLoginTOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logins.RecordSuccess(totpKey)
 
-	token, err := s.auth.CreateSession(r.Context(), userID)
+	token, err := s.auth.CreateSession(r.Context(), userID, r.RemoteAddr, r.UserAgent())
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return

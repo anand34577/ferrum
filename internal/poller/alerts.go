@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"ferrum/internal/connections"
+	"ferrum/internal/events"
 	"ferrum/internal/notify"
 	"ferrum/internal/pve"
 	"ferrum/internal/store"
@@ -33,9 +34,16 @@ type AlertEvaluator struct {
 	db       *store.DB
 	conns    *connections.Resolver
 	notifier *notify.Notifier // nil until SetNotifier is called — every send site is nil-checked
+	bus      *events.Bus      // nil until SetBus is called — every publish site is nil-checked
 
 	tickerMu sync.Mutex
 	ticker   *time.Ticker // nil until Run starts it; guarded so SetInterval (an HTTP handler goroutine) can reset it safely
+
+	// certCheckMu/lastCertCheck throttle the (network-heavy) per-node
+	// certificate fetch independently of the alert poll interval — see
+	// checkCertificateExpiry in certificates.go.
+	certCheckMu   sync.Mutex
+	lastCertCheck time.Time
 }
 
 func NewAlertEvaluator(db *store.DB, conns *connections.Resolver) *AlertEvaluator {
@@ -48,6 +56,14 @@ func NewAlertEvaluator(db *store.DB, conns *connections.Resolver) *AlertEvaluato
 // place rather than swapped.
 func (e *AlertEvaluator) SetNotifier(n *notify.Notifier) {
 	e.notifier = n
+}
+
+// SetBus attaches the in-process event bus (see internal/events) that the
+// SSE endpoint and outgoing webhook dispatcher subscribe to. Mirrors
+// SetNotifier: call it once at startup; every publish site below is
+// nil-checked so it's optional.
+func (e *AlertEvaluator) SetBus(b *events.Bus) {
+	e.bus = b
 }
 
 // SetInterval changes how often Run re-evaluates rules, effective on the
@@ -69,6 +85,7 @@ func (e *AlertEvaluator) Run(ctx context.Context, interval time.Duration) {
 	e.tickerMu.Unlock()
 	defer ticker.Stop()
 
+	e.ensureSystemAlertRules(ctx)
 	e.evaluateOnce(ctx)
 	for {
 		select {
@@ -149,10 +166,24 @@ func (e *AlertEvaluator) evaluateOnce(ctx context.Context) {
 			continue
 		}
 		polled[f.conn.ID] = true
+		// Smallest viable "this credential still works" signal: a
+		// successful cluster/resources call already IS a successful
+		// authenticated request, so there is no separate probe to add.
+		if _, err := e.db.ExecContext(ctx, `UPDATE connections SET last_verified_at = ? WHERE id = ?`,
+			time.Now().UTC().Format(time.RFC3339), f.conn.ID,
+		); err != nil {
+			slog.Error("alert evaluator: recording last_verified_at failed", "connectionId", f.conn.ID, "error", err)
+		}
 		e.evaluateConnection(ctx, f.conn, f.resources, rules, seen)
 	}
 
 	e.reconcileMissing(ctx, rules, polled, seen)
+
+	// Certificate expiry and connection-staleness are surfaced through the
+	// same alert_rules/alert_instances tables as metric-threshold rules
+	// above (see certificates.go) — no parallel alerting mechanism.
+	e.checkConnectionStaleness(ctx, conns)
+	e.checkCertificateExpiry(ctx, conns)
 }
 
 func (e *AlertEvaluator) evaluateConnection(ctx context.Context, conn connections.Info, resources []pve.ClusterResource, rules []rule, seen map[string]map[string]bool) {
@@ -306,6 +337,13 @@ func (e *AlertEvaluator) reconcileMissing(ctx context.Context, rules []rule, pol
 				continue
 			}
 			slog.Info("alert resolved (resource vanished)", "ruleId", ru.ID, "resourceId", inst.resourceID)
+			if e.bus != nil {
+				e.bus.Publish(events.Event{
+					Type:       events.TypeAlertResolved,
+					ResourceID: inst.resourceID,
+					Payload:    map[string]any{"ruleId": ru.ID, "reason": "resource vanished"},
+				})
+			}
 		}
 	}
 }
@@ -332,6 +370,22 @@ func (e *AlertEvaluator) upsertActive(ctx context.Context, ru rule, conn connect
 	}
 	if isNew {
 		slog.Warn("alert triggered", "rule", ru.Metric, "connection", conn.Name, "resource", resourceName, "value", value, "threshold", ru.Threshold, "severity", ru.Severity)
+		if e.bus != nil {
+			e.bus.Publish(events.Event{
+				Type:         events.TypeAlertTriggered,
+				ConnectionID: conn.ID,
+				ResourceID:   resourceID,
+				Payload: map[string]any{
+					"ruleId":         ru.ID,
+					"metric":         ru.Metric,
+					"connectionName": conn.Name,
+					"resourceName":   resourceName,
+					"value":          value,
+					"threshold":      ru.Threshold,
+					"severity":       ru.Severity,
+				},
+			})
+		}
 		if e.notifier != nil {
 			title := fmt.Sprintf("[%s] %s", strings.ToUpper(ru.Severity), resourceName)
 			message := fmt.Sprintf("%s on %s is at %.0f%% (threshold %.0f%%)", ru.Metric, conn.Name, value, ru.Threshold)
@@ -436,6 +490,17 @@ func (e *AlertEvaluator) recordConnectionHealth(ctx context.Context, conn connec
 		return // first-ever poll of a healthy connection isn't a "recovery" worth announcing
 	}
 	slog.Warn("connection health changed", "connectionId", conn.ID, "name", conn.Name, "status", status)
+	if e.bus != nil {
+		evtType := events.TypeConnectionUp
+		if status == "down" {
+			evtType = events.TypeConnectionDown
+		}
+		e.bus.Publish(events.Event{
+			Type:         evtType,
+			ConnectionID: conn.ID,
+			Payload:      map[string]any{"connectionName": conn.Name, "status": status, "lastError": lastError},
+		})
+	}
 	if e.notifier == nil {
 		return
 	}
@@ -473,5 +538,12 @@ func (e *AlertEvaluator) resolveIfActive(ctx context.Context, ruleID, resourceID
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
 		slog.Info("alert resolved", "ruleId", ruleID, "resourceId", resourceID)
+		if e.bus != nil {
+			e.bus.Publish(events.Event{
+				Type:       events.TypeAlertResolved,
+				ResourceID: resourceID,
+				Payload:    map[string]any{"ruleId": ruleID},
+			})
+		}
 	}
 }

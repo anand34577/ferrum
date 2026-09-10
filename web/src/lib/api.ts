@@ -854,6 +854,19 @@ export interface CreatedApiKey extends ApiKey {
   key: string
 }
 
+// Mirrors auth.Session (internal/auth/sessions.go) — one signed-in device,
+// for the Sessions panel on ProfilePage and its admin equivalent on the
+// Users page. The session token itself is never exposed.
+export interface Session {
+  id: string
+  createdAt: string
+  lastSeenAt?: string
+  expiresAt: string
+  ip?: string
+  userAgent?: string
+  current: boolean
+}
+
 // Mirrors api.aiModelDTO — one selectable model under a provider. label is
 // the friendly display name; modelId is the exact identifier sent to the
 // provider's API (frequently different, e.g. "GPT-4o mini" vs "gpt-4o-mini").

@@ -128,7 +128,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := s.auth.CreateOIDCSession(r.Context(), user.ID, claims.RawIDToken)
+	token, err := s.auth.CreateOIDCSession(r.Context(), user.ID, claims.RawIDToken, r.RemoteAddr, r.UserAgent())
 	if err != nil {
 		slog.Error("creating session for OIDC user", "error", err)
 		http.Redirect(w, r, "/login?sso_error=1", http.StatusFound)

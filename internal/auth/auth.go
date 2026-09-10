@@ -253,13 +253,15 @@ func (s *Service) uniqueUsername(ctx context.Context, base string) string {
 // Login verifies credentials and, on success, creates a new session and
 // returns the session token to be set as a cookie. It is a convenience
 // wrapper for the common case (no TOTP) — see VerifyPassword + CreateSession
-// for the two-step flow used when TOTP is enabled.
-func (s *Service) Login(ctx context.Context, username, password string) (*User, string, error) {
+// for the two-step flow used when TOTP is enabled. ip/userAgent are stored
+// on the session row so the account owner can later recognize (and revoke)
+// it from the Sessions panel — see ListSessions.
+func (s *Service) Login(ctx context.Context, username, password, ip, userAgent string) (*User, string, error) {
 	user, err := s.VerifyPassword(ctx, username, password)
 	if err != nil {
 		return nil, "", err
 	}
-	token, err := s.CreateSession(ctx, user.ID)
+	token, err := s.CreateSession(ctx, user.ID, ip, userAgent)
 	if err != nil {
 		return nil, "", err
 	}
@@ -268,35 +270,47 @@ func (s *Service) Login(ctx context.Context, username, password string) (*User, 
 
 // CreateSession mints a new session for an already-authenticated user.
 // Opportunistically purges expired rows so the table doesn't grow forever.
-func (s *Service) CreateSession(ctx context.Context, userID string) (string, error) {
-	return s.createSession(ctx, userID, "")
+func (s *Service) CreateSession(ctx context.Context, userID, ip, userAgent string) (string, error) {
+	return s.createSession(ctx, userID, "", ip, userAgent)
 }
 
 // CreateOIDCSession is CreateSession plus the verified ID token from the SSO
 // login, kept so Logout can hand it back to the provider as id_token_hint
 // for RP-Initiated Logout (see OIDCClient.EndSessionURL).
-func (s *Service) CreateOIDCSession(ctx context.Context, userID, idToken string) (string, error) {
-	return s.createSession(ctx, userID, idToken)
+func (s *Service) CreateOIDCSession(ctx context.Context, userID, idToken, ip, userAgent string) (string, error) {
+	return s.createSession(ctx, userID, idToken, ip, userAgent)
 }
 
-func (s *Service) createSession(ctx context.Context, userID, oidcIDToken string) (string, error) {
+func (s *Service) createSession(ctx context.Context, userID, oidcIDToken, ip, userAgent string) (string, error) {
 	token := randomToken()
 	now := time.Now().UTC()
 	var idTokenCol any
 	if oidcIDToken != "" {
 		idTokenCol = oidcIDToken
 	}
+	nowStr := now.Format(time.RFC3339)
 	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO sessions (id, user_id, token_hash, created_at, expires_at, oidc_id_token) VALUES (?, ?, ?, ?, ?, ?)`,
-		uuid.NewString(), userID, hashToken(token), now.Format(time.RFC3339), now.Add(s.getSessionTTL()).Format(time.RFC3339), idTokenCol,
+		`INSERT INTO sessions (id, user_id, token_hash, ip, user_agent, created_at, expires_at, oidc_id_token, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		uuid.NewString(), userID, hashToken(token), nullableString(ip), nullableString(userAgent), nowStr, now.Add(s.getSessionTTL()).Format(time.RFC3339), idTokenCol, nowStr,
 	); err != nil {
 		return "", err
 	}
-	_, _ = s.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at < ?`, now.Format(time.RFC3339))
+	_, _ = s.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at < ?`, nowStr)
 	return token, nil
 }
 
+func nullableString(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 // Authenticate resolves a session cookie value into the user that owns it.
+// On success it opportunistically bumps the session's last_seen_at so the
+// Sessions panel (ListSessions) reflects recent activity — best-effort,
+// fire-and-forget like AuthenticateAPIKey's last_used_at bump, since a
+// failed timestamp write must never fail the request riding along with it.
 func (s *Service) Authenticate(ctx context.Context, token string) (*User, error) {
 	if token == "" {
 		return nil, ErrInvalidCredentials
@@ -320,6 +334,9 @@ func (s *Service) Authenticate(ctx context.Context, token string) (*User, error)
 		_, _ = s.db.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = ?`, hashToken(token))
 		return nil, ErrInvalidCredentials
 	}
+	go func() {
+		_, _ = s.db.Exec(`UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?`, time.Now().UTC().Format(time.RFC3339), hashToken(token))
+	}()
 	return &User{ID: id, Username: username, Email: email, IsAdmin: isAdmin == 1, TOTPEnabled: totpEnabled == 1}, nil
 }
 
