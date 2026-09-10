@@ -4,11 +4,13 @@ import {
   AlertTriangle,
   ArrowDown,
   Bot,
+  BrainCircuit,
   Check,
   CheckCircle2,
   ChevronDown,
   Copy,
   History,
+  ListChecks,
   Loader2,
   MessageSquarePlus,
   RotateCcw,
@@ -19,6 +21,7 @@ import {
   Trash2,
   User as UserIcon,
   Wrench,
+  X,
   XCircle,
 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
@@ -28,6 +31,7 @@ import { Markdown } from "@/components/ai/Markdown"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { EmptyState } from "@/components/ui/empty-state"
@@ -84,6 +88,7 @@ function formatJSON(raw: string): string {
  * stream error (see internal/api/ai_chat.go). */
 function parseSSELine(line: string): {
   delta?: string
+  reasoning?: string
   toolCall?: { name: string; args?: unknown }
   toolResult?: { name: string; ok: boolean; result?: string }
   error?: string
@@ -95,12 +100,23 @@ function parseSSELine(line: string): {
   try {
     const parsed = JSON.parse(payload)
     if (parsed.ferrum_error) return { error: parsed.ferrum_error }
+    if (typeof parsed.ferrum_reasoning === "string") return { reasoning: parsed.ferrum_reasoning }
     if (parsed.ferrum_tool_call) return { toolCall: { name: parsed.ferrum_tool_call.name, args: parsed.ferrum_tool_call.args } }
     if (parsed.ferrum_tool_result)
       return { toolResult: { name: parsed.ferrum_tool_result.name, ok: !!parsed.ferrum_tool_result.ok, result: parsed.ferrum_tool_result.result } }
     return { delta: parsed.choices?.[0]?.delta?.content ?? undefined }
   } catch {
     return {}
+  }
+}
+
+const SHOW_THINKING_KEY = "ferrum.ai-assistant.show-thinking"
+
+function loadShowThinking(): boolean {
+  try {
+    return localStorage.getItem(SHOW_THINKING_KEY) !== "0"
+  } catch {
+    return true
   }
 }
 
@@ -162,14 +178,58 @@ export function AIAssistantPage() {
   const flatModels = useMemo(() => flattenModels(providers), [providers])
   const defaultModelId = flatModels.find((m) => m.isDefault)?.modelRowId ?? flatModels[0]?.modelRowId ?? ""
 
-  const { conversations, active, activeId, setActiveId, createConversation, deleteConversation, updateConversation, setMessages } =
+  const { conversations, active, activeId, setActiveId, createConversation, deleteConversation, deleteConversations, updateConversation, setMessages } =
     useAIConversations(defaultModelId)
 
   const [input, setInput] = useState("")
   const [streamingText, setStreamingText] = useState<string | null>(null)
+  const [streamingReasoning, setStreamingReasoning] = useState<string | null>(null)
   const [toolActivity, setToolActivity] = useState<ToolActivity[]>([])
   const [streaming, setStreaming] = useState(false)
   const [slashIndex, setSlashIndex] = useState(0)
+  const [showThinking, setShowThinking] = useState(loadShowThinking)
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+
+  function toggleShowThinking() {
+    setShowThinking((prev) => {
+      const next = !prev
+      try {
+        localStorage.setItem(SHOW_THINKING_KEY, next ? "1" : "0")
+      } catch {
+        // private browsing / storage blocked — the toggle still works for this session
+      }
+      return next
+    })
+  }
+
+  function toggleSelected(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function exitSelectMode() {
+    setSelectMode(false)
+    setSelectedIds(new Set())
+  }
+
+  async function deleteSelected() {
+    const n = selectedIds.size
+    if (n === 0) return
+    if (
+      await confirm({
+        title: `Delete ${n} conversation${n === 1 ? "" : "s"}?`,
+        description: "These conversations are only stored in this browser and can't be recovered.",
+      })
+    ) {
+      deleteConversations([...selectedIds])
+      exitSelectMode()
+    }
+  }
   const scrollRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   // ChatGPT/Claude-style "stick to bottom": auto-follow new tokens only
@@ -187,8 +247,9 @@ export function AIAssistantPage() {
   const modelId = active?.modelId || defaultModelId
   const selectedModel = flatModels.find((m) => m.modelRowId === modelId)
   const committedMessages = active?.messages ?? []
-  const displayMessages: (DisplayMessage & { streaming?: boolean })[] =
-    streaming ? [...committedMessages, { id: "__streaming__", role: "assistant", content: streamingText ?? "", streaming: true }] : committedMessages
+  const displayMessages: (DisplayMessage & { streaming?: boolean })[] = streaming
+    ? [...committedMessages, { id: "__streaming__", role: "assistant", content: streamingText ?? "", reasoning: streamingReasoning ?? undefined, streaming: true }]
+    : committedMessages
 
   const slashMatches = useMemo(() => {
     if (!input.startsWith("/") || input.includes(" ") || input.includes("\n")) return []
@@ -236,7 +297,7 @@ export function AIAssistantPage() {
     if (stickToBottomRef.current) el.scrollTop = el.scrollHeight
     else setNewBelow(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [displayMessages.length, streamingText, toolActivity.length])
+  }, [displayMessages.length, streamingText, streamingReasoning, toolActivity.length])
 
   function handleScroll() {
     const el = scrollRef.current
@@ -250,11 +311,14 @@ export function AIAssistantPage() {
   async function runCompletion(convId: string, history: DisplayMessage[], useModelId: string) {
     setStreaming(true)
     setStreamingText("")
+    setStreamingReasoning(null)
     setToolActivity([])
     const controller = new AbortController()
     abortRef.current = controller
     let assistantText = ""
+    let reasoningText = ""
     let midStreamError: string | null = null
+    let aborted = false
     // Mirrors the toolActivity state updates below, but as a plain array so
     // the finished tool calls can be attached to the committed message —
     // toolActivity itself is cleared once streaming ends (it's "what's
@@ -292,6 +356,9 @@ export function AIAssistantPage() {
           if (evt.delta) {
             assistantText += evt.delta
             setStreamingText(assistantText)
+          } else if (evt.reasoning) {
+            reasoningText += evt.reasoning
+            setStreamingReasoning(reasoningText)
           } else if (evt.toolCall) {
             const { name, args } = evt.toolCall
             setToolActivity((prev) => [...prev, { name, args, status: "running" }])
@@ -318,22 +385,40 @@ export function AIAssistantPage() {
       }
       if (midStreamError) throw new Error(midStreamError)
     } catch (err) {
-      if (!(err instanceof Error && err.name === "AbortError")) {
-        toast.error(err instanceof Error ? err.message : "The AI provider didn't respond")
+      if (err instanceof Error && err.name === "AbortError") {
+        aborted = true
+      } else {
+        const message = err instanceof Error ? err.message : "The AI provider didn't respond"
+        midStreamError = midStreamError ?? message
+        // Still toast — a transient failure with a real answer already on
+        // screen elsewhere in the transcript is easy to miss as an inline
+        // bubble alone, so both together beats picking one.
+        toast.error(message)
       }
     } finally {
       setStreaming(false)
       setStreamingText(null)
+      setStreamingReasoning(null)
       setToolActivity([])
       abortRef.current = null
       // Commit whatever came back — including a partial answer if the user
       // hit Stop midway, same as every mainstream chat product. Tool calls
       // are attached even when there's no final text yet (e.g. aborted
-      // mid-loop) so the evidence of what was checked isn't lost.
-      if (assistantText || toolLog.length > 0) {
+      // mid-loop) so the evidence of what was checked isn't lost. An error
+      // (not a plain user-initiated Stop) is kept on the message itself so
+      // it stays visible in the transcript, not just a toast that's gone in
+      // a few seconds.
+      if (assistantText || toolLog.length > 0 || (midStreamError && !aborted)) {
         setMessages(convId, [
           ...history,
-          { id: newId(), role: "assistant", content: assistantText, toolCalls: toolLog.length > 0 ? toolLog : undefined },
+          {
+            id: newId(),
+            role: "assistant",
+            content: assistantText,
+            reasoning: reasoningText || undefined,
+            toolCalls: toolLog.length > 0 ? toolLog : undefined,
+            error: !aborted ? (midStreamError ?? undefined) : undefined,
+          },
         ])
       }
     }
@@ -454,15 +539,31 @@ export function AIAssistantPage() {
         {/* Conversation history sidebar — desktop only; mobile reaches the
             same list through the History button in the chat panel's header. */}
         <div className="hidden w-60 shrink-0 flex-col gap-2 md:flex">
-          <Button size="sm" variant="secondary" className="justify-start" onClick={() => createConversation(modelId)}>
-            <MessageSquarePlus className="h-3.5 w-3.5" /> New chat
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button size="sm" variant="secondary" className="flex-1 justify-start" onClick={() => createConversation(modelId)}>
+              <MessageSquarePlus className="h-3.5 w-3.5" /> New chat
+            </Button>
+            {conversations.length > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                title={selectMode ? "Cancel selection" : "Select conversations"}
+                onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+              >
+                {selectMode ? <X className="h-3.5 w-3.5" /> : <ListChecks className="h-3.5 w-3.5" />}
+              </Button>
+            )}
+          </div>
+          {selectMode && <SelectionBar count={selectedIds.size} onDelete={deleteSelected} />}
           <div className="flex-1 space-y-1 overflow-y-auto">
             <ConversationList
               conversations={conversations}
               activeId={activeId}
               onSelect={setActiveId}
               onDelete={handleDelete}
+              selectMode={selectMode}
+              selectedIds={selectedIds}
+              onToggleSelect={toggleSelected}
             />
           </div>
         </div>
@@ -470,20 +571,36 @@ export function AIAssistantPage() {
         {/* Mobile conversation history — the sidebar above is hidden below
             md, so this is the only way to switch or delete a conversation
             on a narrow viewport. */}
-        <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
+        <Dialog open={historyOpen} onOpenChange={(open) => { setHistoryOpen(open); if (!open) exitSelectMode() }}>
           <DialogContent className="max-w-sm">
             <DialogHeader>
               <DialogTitle>Conversations</DialogTitle>
             </DialogHeader>
-            <Button size="sm" variant="secondary" className="justify-start" onClick={() => { createConversation(modelId); setHistoryOpen(false) }}>
-              <MessageSquarePlus className="h-3.5 w-3.5" /> New chat
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button size="sm" variant="secondary" className="flex-1 justify-start" onClick={() => { createConversation(modelId); setHistoryOpen(false) }}>
+                <MessageSquarePlus className="h-3.5 w-3.5" /> New chat
+              </Button>
+              {conversations.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  title={selectMode ? "Cancel selection" : "Select conversations"}
+                  onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+                >
+                  {selectMode ? <X className="h-3.5 w-3.5" /> : <ListChecks className="h-3.5 w-3.5" />}
+                </Button>
+              )}
+            </div>
+            {selectMode && <SelectionBar count={selectedIds.size} onDelete={deleteSelected} />}
             <div className="max-h-[60vh] space-y-1 overflow-y-auto">
               <ConversationList
                 conversations={conversations}
                 activeId={activeId}
                 onSelect={(id) => { setActiveId(id); setHistoryOpen(false) }}
                 onDelete={handleDelete}
+                selectMode={selectMode}
+                selectedIds={selectedIds}
+                onToggleSelect={toggleSelected}
               />
             </div>
           </DialogContent>
@@ -512,6 +629,16 @@ export function AIAssistantPage() {
             </Select>
             <div className="flex shrink-0 items-center gap-2">
               <Badge variant="brand" className="hidden sm:inline-flex">Fleet-focused</Badge>
+              <Button
+                size="sm"
+                variant="ghost"
+                title={showThinking ? "Hide model reasoning" : "Show model reasoning"}
+                aria-pressed={showThinking}
+                className={cn("hidden sm:inline-flex", showThinking && "text-brand-500")}
+                onClick={toggleShowThinking}
+              >
+                <BrainCircuit className="h-3.5 w-3.5" /> Thinking
+              </Button>
               <Button size="sm" variant="ghost" className="md:hidden" onClick={() => setHistoryOpen(true)}>
                 <History className="h-3.5 w-3.5" /> History
               </Button>
@@ -519,6 +646,17 @@ export function AIAssistantPage() {
                 <MessageSquarePlus className="h-3.5 w-3.5" /> New
               </Button>
             </div>
+          </div>
+
+          {/* Slim top-of-panel progress bar — a lighter-weight "something is
+              happening" cue than the per-message ThinkingDots/spinners alone,
+              visible even while scrolled away from the bottom of a long reply. */}
+          <div className="relative h-0.5 shrink-0 overflow-hidden bg-transparent">
+            {streaming && (
+              <div className="absolute inset-0 bg-[var(--bg-muted)]">
+                <div className="absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-brand-500 to-transparent" />
+              </div>
+            )}
           </div>
 
           <CardContent className="relative flex-1 overflow-hidden p-0">
@@ -565,6 +703,12 @@ export function AIAssistantPage() {
                       {m.role === "user" ? <UserIcon className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
                     </div>
                     <div className={cn("min-w-0 max-w-[75%]", m.role === "user" && "flex flex-col items-end")}>
+                      {/* The model's reasoning, if any — shown ahead of tool calls and
+                          the answer itself, same ordering it actually happens in.
+                          Hidden entirely when the "Thinking" toggle is off. */}
+                      {showThinking && (m.streaming ? streamingReasoning : m.reasoning) && (
+                        <ThinkingBlock text={(m.streaming ? streamingReasoning : m.reasoning) ?? ""} active={!!m.streaming && !m.content} />
+                      )}
                       {/* Live tool-call activity while this message is streaming, or —
                           once it's committed — the same evidence kept alongside it so
                           "what did it check" is never lost after the answer lands. */}
@@ -582,16 +726,19 @@ export function AIAssistantPage() {
                           ))}
                         </div>
                       )}
-                      {/* An assistant message with no text (e.g. Stop hit before the
-                          model produced any) has nothing to show beyond its tool
-                          pills above — skip the bubble instead of rendering an empty box. */}
-                      {(m.role !== "assistant" || m.content || m.streaming) && (
+                      {/* An assistant message with no text and no error (e.g. Stop hit
+                          before the model produced anything) has nothing to show beyond
+                          its tool pills above — skip the bubble instead of rendering an
+                          empty box. */}
+                      {(m.role !== "assistant" || m.content || m.streaming || m.error) && (
                         <div
                           className={cn(
                             "rounded-xl border px-3.5 py-2.5 text-sm",
                             m.role === "user"
                               ? "border-brand-700 bg-brand-600 text-white shadow-sm"
-                              : "border-[var(--border)] bg-[var(--bg-surface)] shadow-sm",
+                              : m.error && !m.content
+                                ? "border-[var(--status-error)]/40 bg-[var(--status-error)]/5 shadow-sm"
+                                : "border-[var(--border)] bg-[var(--bg-surface)] shadow-sm",
                           )}
                         >
                           {m.role === "assistant" ? (
@@ -600,7 +747,12 @@ export function AIAssistantPage() {
                                 <Markdown text={m.content} />
                                 {m.streaming && <span className="ml-0.5 inline-block h-3.5 w-[2px] translate-y-0.5 animate-pulse bg-brand-500" aria-hidden />}
                               </>
-                            ) : m.streaming && toolActivity.length === 0 ? (
+                            ) : m.error ? (
+                              <span className="flex items-start gap-1.5 text-[var(--status-error)]">
+                                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                {m.error}
+                              </span>
+                            ) : m.streaming && toolActivity.length === 0 && !streamingReasoning ? (
                               <ThinkingDots />
                             ) : null
                           ) : (
@@ -608,12 +760,12 @@ export function AIAssistantPage() {
                           )}
                         </div>
                       )}
-                      {m.role === "assistant" && !m.streaming && m.content && (
-                        <div className="mt-1 flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100">
-                          <CopyMessageButton content={m.content} onCopy={copyMessage} />
+                      {m.role === "assistant" && !m.streaming && (m.content || m.error) && (
+                        <div className={cn("mt-1 flex items-center gap-2 transition-opacity", !m.error && "opacity-0 group-hover:opacity-100")}>
+                          {m.content && <CopyMessageButton content={m.content} onCopy={copyMessage} />}
                           {i === displayMessages.length - 1 && lastMessageIsAssistant && !streaming && (
                             <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={regenerate}>
-                              <RotateCcw className="h-3 w-3" /> Regenerate
+                              <RotateCcw className="h-3 w-3" /> {m.error ? "Retry" : "Regenerate"}
                             </Button>
                           )}
                         </div>
@@ -777,16 +929,36 @@ function ActivityPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (o
 
 /** The conversation-switcher list — shared by the desktop sidebar and the
  * mobile History dialog so they can never drift into two implementations. */
+/** Shown above the conversation list while multi-select is active — the
+ * running count plus the one bulk action, so clearing out old chats doesn't
+ * mean confirming and clicking the trash icon once per conversation. */
+function SelectionBar({ count, onDelete }: { count: number; onDelete: () => void }) {
+  return (
+    <div className="flex items-center justify-between gap-2 px-1 text-xs text-[var(--text-muted)]">
+      <span>{count} selected</span>
+      <Button size="sm" variant="destructive" className="h-6 px-2 text-xs" disabled={count === 0} onClick={onDelete}>
+        <Trash2 className="h-3 w-3" /> Delete
+      </Button>
+    </div>
+  )
+}
+
 function ConversationList({
   conversations,
   activeId,
   onSelect,
   onDelete,
+  selectMode = false,
+  selectedIds,
+  onToggleSelect,
 }: {
   conversations: Conversation[]
   activeId: string | null
   onSelect: (id: string) => void
   onDelete: (id: string, title: string) => void
+  selectMode?: boolean
+  selectedIds?: Set<string>
+  onToggleSelect?: (id: string) => void
 }) {
   if (conversations.length === 0) {
     return <p className="px-2 py-4 text-center text-xs text-[var(--text-muted)]">No conversations yet</p>
@@ -797,24 +969,33 @@ function ConversationList({
         <button
           key={c.id}
           type="button"
-          onClick={() => onSelect(c.id)}
+          onClick={() => (selectMode ? onToggleSelect?.(c.id) : onSelect(c.id))}
           className={cn(
             "group relative flex w-full items-center justify-between gap-1 rounded-lg py-2 pr-2.5 pl-3.5 text-left text-sm transition-colors",
             c.id === activeId ? "bg-[var(--bg-muted)] text-[var(--text)]" : "text-[var(--text-muted)] hover:bg-[var(--bg-surface-hover)]",
           )}
         >
           {c.id === activeId && <span className="absolute top-1.5 bottom-1.5 left-0 w-[3px] rounded-full bg-brand-500" aria-hidden />}
+          {selectMode && (
+            <Checkbox
+              checked={selectedIds?.has(c.id) ?? false}
+              onClick={(e) => e.stopPropagation()}
+              onCheckedChange={() => onToggleSelect?.(c.id)}
+            />
+          )}
           <span className="min-w-0 flex-1">
             <span className="block truncate">{c.title}</span>
             <span className="block text-[10px] text-[var(--text-muted)]">{formatRelativeTime(c.updatedAt)}</span>
           </span>
-          <Trash2
-            className="h-3 w-3 shrink-0 opacity-0 transition-opacity hover:text-[var(--status-error)] group-hover:opacity-100"
-            onClick={(e) => {
-              e.stopPropagation()
-              onDelete(c.id, c.title)
-            }}
-          />
+          {!selectMode && (
+            <Trash2
+              className="h-3 w-3 shrink-0 opacity-0 transition-opacity hover:text-[var(--status-error)] group-hover:opacity-100"
+              onClick={(e) => {
+                e.stopPropagation()
+                onDelete(c.id, c.title)
+              }}
+            />
+          )}
         </button>
       ))}
     </>
@@ -864,6 +1045,41 @@ function ToolCallPill({ name, status, args, result }: { name: string; status: "r
           </div>
         )}
       </div>
+    </details>
+  )
+}
+
+/** A reasoning model's chain-of-thought, collapsible like ToolCallPill — open
+ * by default while actively thinking (no answer text yet), auto-collapsing
+ * the moment the real answer starts, but never fighting a manual toggle the
+ * reader already made. Modeled on the "Thinking… / Show thinking" pattern
+ * modern chat UIs use for reasoning models. */
+function ThinkingBlock({ text, active }: { text: string; active: boolean }) {
+  const [open, setOpen] = useState(active)
+  const userToggled = useRef(false)
+  useEffect(() => {
+    if (!active && !userToggled.current) setOpen(false)
+  }, [active])
+
+  return (
+    <details
+      open={open}
+      onToggle={(e) => {
+        userToggled.current = true
+        setOpen((e.target as HTMLDetailsElement).open)
+      }}
+      className="group mb-1.5 w-fit max-w-full animate-in overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] fade-in text-xs text-[var(--text-muted)] open:w-full"
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 px-2.5 py-1 marker:content-none [&::-webkit-details-marker]:hidden">
+        {active ? (
+          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-brand-500" />
+        ) : (
+          <BrainCircuit className="h-3 w-3 shrink-0 opacity-60" />
+        )}
+        <span className="flex-1">{active ? "Thinking…" : "Thought process"}</span>
+        <ChevronDown className="h-3 w-3 shrink-0 opacity-50 transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="max-h-48 overflow-auto border-t border-[var(--border)] px-2.5 py-2 whitespace-pre-wrap italic">{text}</div>
     </details>
   )
 }

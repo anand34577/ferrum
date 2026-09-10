@@ -269,6 +269,38 @@ func (s *Server) Router() http.Handler {
 					r.Get("/nextid", s.nextGuestID)
 					r.Get("/templates", s.listTemplates)
 
+					// PBS (Proxmox Backup Server) remote — mounted on a
+					// connection whose stored type is "pbs" rather than
+					// "pve"; pbsClientFor rejects any other type.
+					r.Route("/pbs", func(r chi.Router) {
+						r.Get("/datastores", s.pbsListDatastores)
+						r.Route("/datastores/{store}", func(r chi.Router) {
+							r.Get("/namespaces", s.pbsListNamespaces)
+							r.Get("/groups", s.pbsListGroups)
+							r.Get("/snapshots", s.pbsListSnapshots)
+							r.Post("/snapshots/protected", s.pbsSetSnapshotProtected)
+							r.Post("/prune", s.pbsPrune)
+							r.Post("/gc", s.pbsStartGC)
+							r.Get("/gc", s.pbsGCStatus)
+						})
+						r.Route("/sync-jobs", func(r chi.Router) {
+							r.Get("/", s.pbsListSyncJobs)
+							r.Route("/{jobId}", func(r chi.Router) {
+								r.Get("/", s.pbsGetSyncJob)
+								r.Post("/run", s.pbsRunSyncJob)
+							})
+						})
+						r.Route("/verify-jobs", func(r chi.Router) {
+							r.Get("/", s.pbsListVerifyJobs)
+							r.Route("/{jobId}", func(r chi.Router) {
+								r.Get("/", s.pbsGetVerifyJob)
+								r.Post("/run", s.pbsRunVerifyJob)
+							})
+						})
+						r.Get("/tasks/{upid}/status", s.pbsTaskStatus)
+						r.Get("/tasks/{upid}/log", s.pbsTaskLog)
+					})
+
 					r.Route("/guests/{type}/{node}/{vmid}", func(r chi.Router) {
 						r.Post("/power/{action}", s.guestPowerAction)
 						r.Post("/console", s.openGuestConsole)
@@ -279,6 +311,7 @@ func (s *Server) Router() http.Handler {
 						r.Post("/clone", s.cloneGuest)
 						r.Post("/migrate", s.migrateGuest)
 						r.Get("/migrate", s.migratePrecondition)
+						r.Post("/remote-migrate", s.remoteMigrateGuest)
 						r.Post("/resize", s.resizeGuestDisk)
 						r.Post("/move-disk", s.moveGuestDisk)
 						r.Post("/template", s.setGuestTemplate)
@@ -827,11 +860,11 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 				"style-src 'self' 'unsafe-inline'; "+
 				"img-src 'self' data: blob:; "+
 				// data: is needed for the Topology page's SVG export
-					// (html-to-image inlines @font-face as base64 data URIs so
-					// the exported file is self-contained) — without it the
-					// browser blocks that inlined @font-face while rendering
-					// the export's foreignObject content.
-					"font-src 'self' data:; "+
+				// (html-to-image inlines @font-face as base64 data URIs so
+				// the exported file is self-contained) — without it the
+				// browser blocks that inlined @font-face while rendering
+				// the export's foreignObject content.
+				"font-src 'self' data:; "+
 				"connect-src 'self' ws: wss:; "+
 				"object-src 'none'; "+
 				"frame-ancestors 'none'; "+

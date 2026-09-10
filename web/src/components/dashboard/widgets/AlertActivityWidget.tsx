@@ -6,6 +6,7 @@ import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { scopedConnection } from "@/lib/fleet"
 import { useMemo } from "react"
 import { WidgetError } from "@/components/dashboard/WidgetChrome"
+import { WidgetViewAllLink } from "@/components/dashboard/WidgetViewAllLink"
 
 export function AlertActivityWidget({ settings }: { settings: WidgetSettings }) {
   const connId = scopedConnection(settings)
@@ -60,6 +61,7 @@ export function AlertActivityWidget({ settings }: { settings: WidgetSettings }) 
               <span className="truncate">{a.resourceName}</span>
             </p>
           ))}
+          <WidgetViewAllLink to="/alerts" shown={latest.length} total={active.length} />
         </div>
       )}
     </div>

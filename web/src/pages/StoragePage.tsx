@@ -2,11 +2,10 @@ import { useQueries, useQuery } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { Database, HardDrive } from "lucide-react"
 import { useMemo } from "react"
-import { Bar, BarChart, Cell, LabelList, Rectangle, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
-import type { BarShapeProps } from "recharts"
 import { DonutChart, type DonutSlice } from "@/components/charts/DonutChart"
-import { chartTooltip } from "@/components/charts/tooltipTheme"
+import { RankedBarChart } from "@/components/charts/RankedBarChart"
 import { CephDaemonsCard } from "@/components/storage/CephDaemonsCard"
+import { CephOsdsCard } from "@/components/storage/CephOsdsCard"
 import { CreateStorageDialog } from "@/components/storage/CreateStorageDialog"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -16,10 +15,7 @@ import { ErrorState } from "@/components/ui/error-state"
 import { Meter } from "@/components/ui/meter"
 import { PageHeader } from "@/components/ui/page-header"
 import { Skeleton } from "@/components/ui/skeleton"
-import { StatusDot } from "@/components/ui/status-dot"
 import { api, type CephOSD, type CephPool, type CephStatus, type ClusterResource, type ConnectionInventory } from "@/lib/api"
-import { chartBarRadius } from "@/lib/chartRadius"
-import { useTheme } from "@/lib/theme"
 import { formatBytes, formatPercentFine } from "@/lib/utils"
 
 const TYPE_COLORS = [
@@ -32,8 +28,6 @@ const TYPE_COLORS = [
 ]
 
 export function StoragePage() {
-  const { look } = useTheme()
-  const barRadius = chartBarRadius(look)
   const { data: inventory, isLoading, isError, refetch } = useQuery({
     queryKey: ["inventory"],
     queryFn: () => api.get<ConnectionInventory[]>("/inventory/"),
@@ -50,6 +44,7 @@ export function StoragePage() {
     connName: c.name,
     nodes: Array.from(new Set((c.resources ?? []).filter((r) => r.type === "node").map((r) => r.node))),
   }))
+  const storageGroups = nodesByConn.filter((t) => t.nodes.length > 0)
 
   const cephQueries = useQueries({
     queries: firstNodeByConn
@@ -256,45 +251,15 @@ export function StoragePage() {
               <p className="text-xs text-[var(--text-muted)]">Local and shared, combined — each shared pool counted once regardless of how many nodes mount it.</p>
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={Math.max(160, usageByPool.length * 28)}>
-                <BarChart data={usageByPool} layout="vertical" margin={{ top: 0, right: 36, left: 0, bottom: 0 }}>
-                  <XAxis type="number" domain={[0, 100]} hide />
-                  <YAxis type="category" dataKey="name" width={100} tick={{ fontSize: 11, fill: "var(--text-muted)" }} axisLine={false} tickLine={false} />
-                  <Tooltip
-                    cursor={false}
-                    formatter={(v) => `${Number(v).toFixed(0)}% used`}
-                    {...chartTooltip}
-                  />
-                  {/* background = the full-length track, so the unfilled
-                      remainder reads as "space left" instead of fading into
-                      the card. Radius matches the track on every corner so
-                      the fill never pokes past its rounded ends. Hover
-                      feedback is a 1px outline on the hovered row's track. */}
-                  <Bar
-                    dataKey="pct"
-                    radius={[barRadius, barRadius, barRadius, barRadius]}
-                    barSize={12}
-                    background={(p: BarShapeProps) => (
-                      <Rectangle
-                        x={p.x}
-                        y={p.y}
-                        width={p.width}
-                        height={p.height}
-                        fill="var(--track)"
-                        radius={barRadius}
-                        stroke={p.isActive ? "var(--text-faint)" : "none"}
-                        strokeWidth={1}
-                      />
-                    )}
-                    isAnimationActive={false}
-                  >
-                    {usageByPool.map((p) => (
-                      <Cell key={p.name} fill={p.pct >= 90 ? "var(--status-error)" : p.pct >= 75 ? "var(--status-warn)" : "var(--color-brand-500)"} />
-                    ))}
-                    <LabelList dataKey="pct" position="right" formatter={(v) => `${Number(v).toFixed(0)}%`} style={{ fill: "var(--text-muted)", fontSize: 11 }} />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+              <RankedBarChart
+                data={usageByPool.map((p) => ({ name: p.name, value: p.pct }))}
+                domain={[0, 100]}
+                nameWidth={140}
+                rowHeight={28}
+                colorFor={(p) => (p.value >= 90 ? "var(--status-error)" : p.value >= 75 ? "var(--status-warn)" : undefined)}
+                labelFormatter={(v) => `${v.toFixed(0)}%`}
+                tooltipLabel="Usage"
+              />
             </CardContent>
           </Card>
         </div>
@@ -308,11 +273,11 @@ export function StoragePage() {
             </CardTitle>
             <p className="text-xs text-[var(--text-muted)]">Physically attached to one node — dir, LVM, ZFS, and similar. Not shared across the cluster.</p>
           </div>
-          <div className="flex flex-wrap justify-end gap-2">
-            {nodesByConn.filter((t) => t.nodes.length > 0).map((t) => (
-              <CreateStorageDialog key={t.connId} connId={t.connId} connName={connections.length > 1 ? t.connName : undefined} nodes={t.nodes} />
-            ))}
-          </div>
+          {/* One dialog, not one button per connection — that scaled to a
+              wall of buttons once a fleet had more than a handful of
+              connections. The dialog's own Connection picker (shown once
+              there's more than one) replaces the per-connection button. */}
+          {storageGroups.length > 0 && <CreateStorageDialog groups={storageGroups} />}
         </CardHeader>
         <CardContent>
           <DataTable columns={columns} data={localPools} searchPlaceholder="Search local storage..." emptyMessage="No local storage found." />
@@ -407,27 +372,7 @@ export function StoragePage() {
         .map((t, i) => {
           const osds = cephOSDQueries[i]?.data
           if (!osds || osds.length === 0) return null
-          return (
-            <Card key={`ceph-osds-${t.connId}`}>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <HardDrive className="h-4 w-4" /> Ceph OSDs — {t.connName}
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="flex flex-wrap gap-2">
-                {osds.map((osd) => (
-                  <div key={osd.id} className="flex items-center gap-2 rounded-md bg-[var(--bg-muted)] px-3 py-1.5 text-sm">
-                    <StatusDot status={osd.up === 1 ? "ok" : "error"} />
-                    <span className="font-mono text-xs">osd.{osd.id}</span>
-                    {osd.host && <span className="text-xs text-[var(--text-muted)]">{osd.host}</span>}
-                    <span className="text-xs text-[var(--text-muted)]">
-                      {osd.up === 1 ? "up" : "down"} · {osd.in === 1 ? "in" : "out"}
-                    </span>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          )
+          return <CephOsdsCard key={`ceph-osds-${t.connId}`} connName={t.connName} osds={osds} />
         })}
 
       {nodesByConn
@@ -479,18 +424,23 @@ function CapacityCard({ title, capacity }: { title: string; capacity: CapacityRo
             // always-100%-and-misleading) number to lead with here.
             const pctUsed = r.total > 0 ? (r.used / r.total) * 100 : 0
             return (
-              <li key={r.name} className="grid grid-cols-[auto_1fr_auto] items-center gap-2 text-xs">
+              // flex, not grid-cols-[auto_1fr_auto] — that gave each <li> its
+              // own independent grid, so the "auto" byte column sized to
+              // THAT row's own text and every row's bar (1fr) ended up a
+              // different length. A shared fixed width on the byte column
+              // keeps the bar column identical across every row instead.
+              <li key={r.name} className="flex items-center gap-2 text-xs">
                 <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} aria-hidden />
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <p className="flex items-baseline justify-between gap-2">
                     <span className="truncate font-medium" title={r.name}>{r.name}</span>
                     <span className="shrink-0 text-[var(--text-muted)] tabular">{pctUsed.toFixed(0)}% used</span>
                   </p>
                   <div className="mt-1 h-1 w-full overflow-hidden rounded-none bg-[var(--track)]">
-                    <div className="h-full" style={{ width: `${Math.min(100, pctUsed)}%`, background: color }} />
+                    <div className="h-full transition-[width] duration-300 ease-out" style={{ width: `${Math.min(100, pctUsed)}%`, background: color }} />
                   </div>
                 </div>
-                <div className="shrink-0 text-right tabular">
+                <div className="w-24 shrink-0 text-right tabular">
                   <p className="font-medium">{formatBytes(r.total)}</p>
                   <p className="text-[10px] text-[var(--text-muted)]">{formatBytes(r.used)} used</p>
                 </div>

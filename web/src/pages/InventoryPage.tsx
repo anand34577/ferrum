@@ -13,13 +13,14 @@ import {
   Workflow,
   X,
 } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import { useDeferredValue, useEffect, useRef, useState } from "react"
 import { Link, useLocation, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Combobox } from "@/components/ui/combobox"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import {
   DropdownMenu,
@@ -36,7 +37,6 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { MultiSelect } from "@/components/ui/multi-select"
 import { PageHeader } from "@/components/ui/page-header"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusDot } from "@/components/ui/status-dot"
 import { Hint } from "@/components/ui/tooltip"
@@ -53,6 +53,14 @@ export function InventoryPage() {
   const location = useLocation()
   const focusState = location.state as { focusGuestId?: string; focusGuestName?: string } | null
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  // A node with hundreds of guests renders every row unvirtualized once
+  // expanded — fine for the common case, sluggish at the tail. Cap the
+  // unfiltered render and let the operator opt into the rest per node
+  // instead of adding a virtualization dependency for a rare case; the
+  // moment a filter is active the list is already narrowed, so the cap
+  // only applies when nothing is filtering it down.
+  const [revealedNodes, setRevealedNodes] = useState<Set<string>>(new Set())
+  const GUEST_RENDER_CAP = 150
   const [selectedGuest, setSelectedGuest] = useState<{ connId: string; guest: ClusterResource } | null>(null)
   const [createDialogConn, setCreateDialogConn] = useState<{ connId: string; nodes: ClusterResource[] } | null>(null)
   // Filters live in the URL (not just component state) so a search/filter
@@ -250,6 +258,12 @@ export function InventoryPage() {
 
   const allGuests = (data ?? []).flatMap((c) => c.resources ?? []).filter((r) => r.type === "qemu" || r.type === "lxc")
 
+  // Typing into the search box re-filters every guest on every keystroke;
+  // deferring just the value used for matching (not the input's own value,
+  // which must stay immediate) lets React keep the input responsive on a
+  // large fleet instead of blocking a keystroke behind a full re-filter.
+  const deferredSearch = useDeferredValue(search)
+
   // A search/filter match hidden inside a collapsed connection or node group
   // is effectively invisible — the classic "search doesn't find what's
   // right there" complaint. Whenever a filter is active, force-expand any
@@ -260,7 +274,7 @@ export function InventoryPage() {
     if (statusTypes.length > 0 && !statusTypes.includes(r.status ?? "")) return false
     if (guestTypes.length > 0 && !guestTypes.includes(r.type)) return false
     if (poolFilter.length > 0 && !(r.pool && poolFilter.includes(r.pool))) return false
-    if (search && !`${r.name ?? ""} ${r.vmid ?? ""}`.toLowerCase().includes(search.toLowerCase())) return false
+    if (deferredSearch && !`${r.name ?? ""} ${r.vmid ?? ""}`.toLowerCase().includes(deferredSearch.toLowerCase())) return false
     return true
   }
 
@@ -440,6 +454,8 @@ export function InventoryPage() {
                     const nodeKey = `${conn.connectionId}/${node.node}`
                     const guests = guestsByNode.filter((g) => g.node === node.node)
                     const nodeExpanded = expanded.has(nodeKey) || (filtersActive && guests.length > 0)
+                    const guestsCapped = !filtersActive && !revealedNodes.has(nodeKey) && guests.length > GUEST_RENDER_CAP
+                    const visibleGuests = guestsCapped ? guests.slice(0, GUEST_RENDER_CAP) : guests
                     return (
                       <div key={nodeKey}>
                         <div className="inv-row flex w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-md px-2 py-1.5 hover:bg-[var(--bg-surface-hover)]">
@@ -472,7 +488,7 @@ export function InventoryPage() {
                             {guests.length === 0 && (
                               <p className="py-1 text-xs text-[var(--text-muted)]">No guests on this node.</p>
                             )}
-                            {guests.map((guest) => (
+                            {visibleGuests.map((guest) => (
                               <div
                                 key={guest.id}
                                 ref={(el) => {
@@ -606,6 +622,14 @@ export function InventoryPage() {
                                 </span>
                               </div>
                             ))}
+                            {guestsCapped && (
+                              <button
+                                className="w-full rounded-md py-1.5 text-center text-xs text-[var(--text-muted)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text)]"
+                                onClick={() => setRevealedNodes((s) => new Set(s).add(nodeKey))}
+                              >
+                                Show all {guests.length} guests (search above narrows this list too)
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
@@ -641,18 +665,13 @@ export function InventoryPage() {
           </DialogHeader>
           <div className="space-y-1.5">
             <Label>Target node</Label>
-            <Select value={migrateTarget} onValueChange={setMigrateTarget}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select a node..." />
-              </SelectTrigger>
-              <SelectContent>
-                {bulkMigrateNodes.map((n) => (
-                  <SelectItem key={n.node} value={n.node!}>
-                    {n.node}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Combobox
+              value={migrateTarget}
+              onChange={setMigrateTarget}
+              placeholder="Select a node..."
+              searchPlaceholder="Search nodes..."
+              options={bulkMigrateNodes.map((n) => ({ value: n.node!, label: n.node! }))}
+            />
           </div>
           <DialogFooter>
             <Button disabled={!migrateTarget || bulkMigrateAction.isPending} onClick={() => void bulkMigrate()}>

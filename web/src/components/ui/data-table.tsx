@@ -8,11 +8,11 @@ import {
   type SortingState,
   useReactTable,
 } from "@tanstack/react-table"
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Search, X } from "lucide-react"
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, X } from "lucide-react"
 import { type ReactNode, useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Input } from "@/components/ui/input"
+import { ListSearch } from "@/components/ui/list-search"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 
@@ -109,16 +109,13 @@ export function DataTable<T>({
       {(searchable || toolbar || (selection && selection.selected.size > 0)) && (
         <div className="flex flex-wrap items-center gap-2">
           {searchable && (
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-faint)]" />
-              <Input
-                value={globalFilter}
-                onChange={(e) => setGlobalFilter(e.target.value)}
-                placeholder={searchPlaceholder}
-                aria-label={searchPlaceholder}
-                className="h-8.5 w-64 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] pl-8 text-xs transition-colors hover:border-[var(--border-strong)]"
-              />
-            </div>
+            <ListSearch
+              value={globalFilter}
+              onChange={setGlobalFilter}
+              placeholder={searchPlaceholder}
+              size="sm"
+              containerClassName="w-full sm:w-64"
+            />
           )}
           {toolbar}
           {selection && selection.selected.size > 0 && (

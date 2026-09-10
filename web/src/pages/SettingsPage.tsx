@@ -20,6 +20,7 @@ import { Label } from "@/components/ui/label"
 import { PageHeader } from "@/components/ui/page-header"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Textarea } from "@/components/ui/textarea"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { api, ApiError, type ClusterResource, type ConnectionInventory, type DatacenterOptions, type Subscription } from "@/lib/api"
 import { dangerousExtraKeys, parseExtraLines } from "@/lib/utils"
@@ -203,12 +204,7 @@ function DatacenterOptionsForm({
       </div>
       <div className="space-y-1.5">
         <Label>Description (cluster-wide MOTD)</Label>
-        <textarea
-          className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-sm"
-          rows={3}
-          value={form.description ?? ""}
-          onChange={(e) => setForm({ ...form, description: e.target.value })}
-        />
+        <Textarea className="font-sans" rows={3} value={form.description ?? ""} onChange={(e) => setForm({ ...form, description: e.target.value })} />
       </div>
       {otherOptions.length > 0 && (
         <div className="space-y-1.5">
@@ -222,8 +218,8 @@ function DatacenterOptionsForm({
       )}
       <div className="space-y-1.5">
         <Label>Advanced: additional options (one key=value per line)</Label>
-        <textarea
-          className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 font-mono text-xs"
+        <Textarea
+          className="text-xs"
           rows={2}
           placeholder={"bwlimit=default=10240\nu2f=appid=https://example.com"}
           value={extraText}

@@ -44,14 +44,20 @@ interface StackedBarChartProps {
 
 /** Horizontal stacked bars — composition across categories (e.g. guest mix
  * per node). Category names stay readable on the Y axis however long they are. */
-export function StackedBarChart({ data, series, height = 180, valueFormatter, showXAxis = false, showLegend = true }: StackedBarChartProps) {
+export function StackedBarChart({ data, series, height, valueFormatter, showXAxis = false, showLegend = true }: StackedBarChartProps) {
   const { look } = useTheme()
   const r = chartBarRadius(look)
   if (data.length === 0) return null
 
+  // A fixed height compresses rows once a caller passes more categories than
+  // it was sized for. Falling back to a per-row minimum (only when the
+  // caller didn't pin a height) keeps rows readable the way RankedBarChart's
+  // `minHeight: data.length * rowHeight` does, instead of squeezing labels.
+  const chartHeight = height ?? Math.max(120, data.length * 24)
+
   return (
     <div>
-      <ResponsiveContainer width="100%" height={height}>
+      <ResponsiveContainer width="100%" height={chartHeight}>
         <BarChart data={data} layout="vertical" margin={{ top: 0, right: 12, left: 0, bottom: 0 }} barCategoryGap="25%">
           <XAxis type="number" hide={!showXAxis} tick={{ fontSize: 11, fill: "var(--text-muted)" }} axisLine={false} tickLine={false} allowDecimals={false} />
           <YAxis

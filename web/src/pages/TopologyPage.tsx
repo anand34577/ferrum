@@ -19,7 +19,7 @@ import {
 } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
 import { toSvg } from "html-to-image"
-import { Boxes, Check, Download, KeyRound, Lock, Magnet, Pencil, Server, ServerCog, Waypoints } from "lucide-react"
+import { Boxes, Check, Download, KeyRound, Lock, Magnet, MoreHorizontal, Pencil, Server, ServerCog, Waypoints } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
@@ -39,6 +39,11 @@ const STATUS_COLOR: Record<string, string> = {
   stopped: "var(--status-error)",
 }
 
+// Past this many guests on one node, stop minting a live-metered card (with
+// its own polled CPU/mem/disk bars) per guest — a host with a few hundred
+// guests would otherwise mount a few hundred of them, re-rendered on every
+// 20s inventory poll. The rest collapse into one lightweight summary card.
+const GUEST_NODE_CAP = 40
 const DEFAULT_ROOT_NAME = "Proxmox Servers"
 const ROOT_NAME_KEY = "ferrum-topology-root-name"
 const POSITIONS_KEY = "ferrum-topology-positions"
@@ -266,7 +271,20 @@ function GuestNode({ data }: NodeProps<Node<{ label: string; vmid: number; statu
   )
 }
 
-const nodeTypes = { root: RootNode, connection: ConnectionNode, pveNode: PveNode, guest: GuestNode }
+/** Stand-in for every guest past GUEST_NODE_CAP on one host — no live
+ * meters, no per-item polling, just a count. Click routes through the same
+ * onNodeClick as a PVE node card (see ReactFlow's onNodeClick below). */
+function OverflowGuestsNode({ data }: NodeProps<Node<{ count: number }>>) {
+  return (
+    <div className="nodrag flex w-44 cursor-pointer items-center gap-2 rounded-md border border-dashed border-[var(--border-strong)] bg-[var(--bg-surface)] px-2.5 py-2 text-xs text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-muted)]">
+      <MoreHorizontal className="h-3.5 w-3.5 shrink-0" />
+      <span>+{data.count} more guest{data.count === 1 ? "" : "s"} — view in Inventory</span>
+      <Handle type="target" position={Position.Left} className="!h-1.5 !w-1.5 !border-0 !bg-[var(--border-strong)]" />
+    </div>
+  )
+}
+
+const nodeTypes = { root: RootNode, connection: ConnectionNode, pveNode: PveNode, guest: GuestNode, overflow: OverflowGuestsNode }
 
 type FlowNode = Node<Record<string, unknown>>
 
@@ -405,6 +423,27 @@ export function TopologyPage() {
     })
   }, [graphNodes, setNodes])
 
+  // savedPositions otherwise only grows — a deleted guest's dragged position
+  // stays in localStorage forever. Once a real (non-empty, non-error) fetch
+  // comes back, drop anything not in the current graph.
+  useEffect(() => {
+    if (isLoading || isError || graphNodes.length === 0) return
+    setSavedPositions((prev) => {
+      const liveIds = new Set(graphNodes.map((n) => n.id))
+      const stale = Object.keys(prev).filter((id) => id !== "root" && !liveIds.has(id))
+      if (stale.length === 0) return prev
+      const next = { ...prev }
+      for (const id of stale) delete next[id]
+      try {
+        localStorage.setItem(POSITIONS_KEY, JSON.stringify(next))
+      } catch {
+        // storage blocked — harmless, just means this prune doesn't stick
+      }
+      return next
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graphNodes, isLoading, isError])
+
   function handleNodesChange(changes: NodeChange<FlowNode>[]) {
     onNodesChange(changes)
     // Persist manual drags so layout survives reloads and polls.
@@ -452,6 +491,8 @@ export function TopologyPage() {
           onNodeClick={(_, node) => {
             if (node.type === "pveNode" && node.data.connId && node.data.nodeName) {
               navigate(`/nodes/${node.data.connId}/${node.data.nodeName}`)
+            } else if (node.type === "overflow") {
+              navigate("/inventory")
             }
           }}
         >
@@ -627,13 +668,19 @@ function buildGraph(
         },
       })
 
-      const nodeGuests = guests.filter((g) => g.node === pn.node)
+      const allNodeGuests = guests.filter((g) => g.node === pn.node)
+      const overflowCount = Math.max(0, allNodeGuests.length - GUEST_NODE_CAP)
+      const nodeGuests = overflowCount > 0 ? allNodeGuests.slice(0, GUEST_NODE_CAP) : allNodeGuests
+      // +1 slot in the centering math when there's an overflow card, so it
+      // takes its place in the stack instead of the real guests re-centering
+      // around a slot that isn't there.
+      const slots = nodeGuests.length + (overflowCount > 0 ? 1 : 0)
       nodeGuests.forEach((g, guestIdx) => {
         const guestId = `guest-${conn.connectionId}-${g.id}`
         nodes.push({
           id: guestId,
           type: "guest",
-          position: savedPositions[guestId] ?? { x: 1010, y: nodeY + guestIdx * 84 - ((nodeGuests.length - 1) * 84) / 2 },
+          position: savedPositions[guestId] ?? { x: 1010, y: nodeY + guestIdx * 84 - ((slots - 1) * 84) / 2 },
           data: {
             label: g.name ?? `#${g.vmid}`,
             vmid: g.vmid ?? 0,
@@ -653,6 +700,22 @@ function buildGraph(
           style: { stroke: "var(--text-muted)", strokeWidth: 1.5 },
         })
       })
+
+      if (overflowCount > 0) {
+        const overflowId = `overflow-${conn.connectionId}-${pn.node}`
+        nodes.push({
+          id: overflowId,
+          type: "overflow",
+          position: savedPositions[overflowId] ?? { x: 1010, y: nodeY + nodeGuests.length * 84 - ((slots - 1) * 84) / 2 },
+          data: { count: overflowCount },
+        })
+        edges.push({
+          id: `e-${nodeId}-${overflowId}`,
+          source: nodeId,
+          target: overflowId,
+          style: { stroke: "var(--text-faint)", strokeWidth: 1, strokeDasharray: "3 3" },
+        })
+      }
     })
   })
 

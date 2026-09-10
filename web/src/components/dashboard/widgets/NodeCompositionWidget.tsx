@@ -2,6 +2,7 @@ import { StackedBarChart } from "@/components/charts/StackedBarChart"
 import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { useScopedInventory } from "@/lib/fleet"
 import { WidgetError } from "@/components/dashboard/WidgetChrome"
+import { WidgetViewAllLink } from "@/components/dashboard/WidgetViewAllLink"
 
 // Composition across categories: what each node's guest fleet is made of
 // (VMs vs containers), stacked so the host mix is visible per node.
@@ -20,9 +21,8 @@ export function NodeCompositionWidget({ settings }: { settings: WidgetSettings }
     entry.total += 1
     byNode.set(key, entry)
   }
-  const rows = Array.from(byNode.values())
-    .sort((a, b) => (sortBy === "total" ? b.total - a.total : b.qemu - a.qemu))
-    .slice(0, 10)
+  const allNodes = Array.from(byNode.values()).sort((a, b) => (sortBy === "total" ? b.total - a.total : b.qemu - a.qemu))
+  const rows = allNodes.slice(0, 10)
 
   if (rows.length === 0) {
     return <p className="text-sm text-[var(--text-muted)]">No guests reporting yet.</p>
@@ -39,6 +39,7 @@ export function NodeCompositionWidget({ settings }: { settings: WidgetSettings }
         height={Math.max(110, rows.length * 26)}
         showLegend
       />
+      <WidgetViewAllLink to="/inventory" shown={rows.length} total={allNodes.length} />
     </div>
   )
 }

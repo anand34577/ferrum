@@ -437,7 +437,11 @@ export function NodeDetailPage() {
                           {s.shared === 1 && <Badge variant="ok">Shared</Badge>}
                           <Badge variant={s.active === 0 ? "error" : "default"}>{s.active === 0 ? "Inactive" : "Active"}</Badge>
                           <Meter value={pct} label={`${s.storage} usage`} className="min-w-16 flex-1" />
-                          <span className="shrink-0 whitespace-nowrap text-right text-xs text-[var(--text-muted)] tabular">{formatBytes(s.used ?? 0)} / {formatBytes(s.total ?? 0)}</span>
+                          {/* Fixed width — otherwise the flex-1 Meter's track
+                              length varies with how long this row's byte
+                              string happens to be, so every bar reads a
+                              different length even at the same fill %. */}
+                          <span className="w-36 shrink-0 whitespace-nowrap text-right text-xs text-[var(--text-muted)] tabular">{formatBytes(s.used ?? 0)} / {formatBytes(s.total ?? 0)}</span>
                         </div>
                       )
                     })}

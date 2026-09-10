@@ -2,13 +2,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
+import { Combobox } from "@/components/ui/combobox"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { FormError } from "@/components/ui/form-error"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Textarea } from "@/components/ui/textarea"
 import { UploadTemplateDialog } from "@/components/inventory/UploadTemplateDialog"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { api, ApiError, type ClusterResource, type TemplateItem } from "@/lib/api"
@@ -119,14 +120,11 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Node</Label>
-                <Select value={vmForm.node} onValueChange={(v) => setVmForm({ ...vmForm, node: v })}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {nodes.map((n) => <SelectItem key={n.node} value={n.node!}>{n.node}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <Combobox
+                  value={vmForm.node}
+                  onChange={(v) => setVmForm({ ...vmForm, node: v })}
+                  options={nodes.map((n) => ({ value: n.node!, label: n.node! }))}
+                />
               </div>
               <div className="space-y-1.5">
                 <Label>Name</Label>
@@ -157,21 +155,14 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
                   <Label>Boot ISO (optional — omit when cloning a cloud-init template)</Label>
                   <UploadTemplateDialog connId={connId} nodes={nodes} content="iso" />
                 </div>
-                <Select value={vmForm.iso} onValueChange={(v) => setVmForm({ ...vmForm, iso: v })}>
-                  <SelectTrigger>
-                    <SelectValue placeholder={templatesQuery.isLoading ? "Loading..." : "None"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {isos.map((t) => (
-                      <SelectItem key={t.volid} value={t.volid}>
-                        {t.volid.split("/").pop()} <span className="text-[var(--text-muted)]">({t.node})</span>
-                      </SelectItem>
-                    ))}
-                    {isos.length === 0 && !templatesQuery.isLoading && (
-                      <SelectItem value="__none__" disabled>No ISOs found on this connection</SelectItem>
-                    )}
-                  </SelectContent>
-                </Select>
+                <Combobox
+                  value={vmForm.iso}
+                  onChange={(v) => setVmForm({ ...vmForm, iso: v })}
+                  placeholder={templatesQuery.isLoading ? "Loading..." : "None"}
+                  searchPlaceholder="Search ISOs..."
+                  emptyText="No ISOs found on this connection"
+                  options={isos.map((t) => ({ value: t.volid, label: `${t.volid.split("/").pop()} (${t.node})` }))}
+                />
               </div>
               <div className="space-y-1.5">
                 <Label>IP config (cloud-init)</Label>
@@ -195,8 +186,8 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
             </p>
             <div className="space-y-1.5">
               <Label>Advanced: extra disks/NICs/hardware (one key=value per line)</Label>
-              <textarea
-                className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 font-mono text-xs"
+              <Textarea
+                className="text-xs"
                 rows={2}
                 placeholder={"scsi1=local-lvm:32\nnet1=virtio,bridge=vmbr1"}
                 value={vmForm.extraText}
@@ -220,14 +211,11 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Node</Label>
-                <Select value={lxcForm.node} onValueChange={(v) => setLxcForm({ ...lxcForm, node: v })}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {nodes.map((n) => <SelectItem key={n.node} value={n.node!}>{n.node}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <Combobox
+                  value={lxcForm.node}
+                  onChange={(v) => setLxcForm({ ...lxcForm, node: v })}
+                  options={nodes.map((n) => ({ value: n.node!, label: n.node! }))}
+                />
               </div>
               <div className="space-y-1.5">
                 <Label>Hostname</Label>
@@ -238,21 +226,14 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
                   <Label>Container template</Label>
                   <UploadTemplateDialog connId={connId} nodes={nodes} content="vztmpl" />
                 </div>
-                <Select value={lxcForm.template} onValueChange={(v) => setLxcForm({ ...lxcForm, template: v })}>
-                  <SelectTrigger>
-                    <SelectValue placeholder={templatesQuery.isLoading ? "Loading..." : "Select a template..."} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {vztmpls.map((t) => (
-                      <SelectItem key={t.volid} value={t.volid}>
-                        {t.volid.split("/").pop()} <span className="text-[var(--text-muted)]">({t.node})</span>
-                      </SelectItem>
-                    ))}
-                    {vztmpls.length === 0 && !templatesQuery.isLoading && (
-                      <SelectItem value="__none__" disabled>No container templates found — add one above</SelectItem>
-                    )}
-                  </SelectContent>
-                </Select>
+                <Combobox
+                  value={lxcForm.template}
+                  onChange={(v) => setLxcForm({ ...lxcForm, template: v })}
+                  placeholder={templatesQuery.isLoading ? "Loading..." : "Select a template..."}
+                  searchPlaceholder="Search templates..."
+                  emptyText="No container templates found — add one above"
+                  options={vztmpls.map((t) => ({ value: t.volid, label: `${t.volid.split("/").pop()} (${t.node})` }))}
+                />
               </div>
               <div className="space-y-1.5">
                 <Label>Cores</Label>
@@ -285,8 +266,8 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
             </label>
             <div className="space-y-1.5">
               <Label>Advanced: extra mount points/NICs/hardware (one key=value per line)</Label>
-              <textarea
-                className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 font-mono text-xs"
+              <Textarea
+                className="text-xs"
                 rows={2}
                 placeholder={"mp0=local-lvm:8,mp=/data\nnet1=name=eth1,bridge=vmbr1"}
                 value={lxcForm.extraText}

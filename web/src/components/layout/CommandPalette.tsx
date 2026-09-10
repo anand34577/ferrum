@@ -48,8 +48,16 @@ const pages = [
   { to: "/settings", label: "Settings", icon: Settings, adminOnly: true },
 ]
 
+// cmdk mounts every item you hand it (its filter only hides non-matches with
+// CSS) — on a fleet with thousands of guests, opening the palette would mount
+// thousands of DOM nodes before anyone types a character. Capping the
+// default (no search text yet) list sidesteps that; typing anything switches
+// to the full set so search still reaches every guest, just not pre-mounted.
+const DEFAULT_GUEST_LIMIT = 200
+
 export function CommandPalette() {
   const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState("")
   const navigate = useNavigate()
   const { user } = useAuth()
   const { theme, setTheme } = useTheme()
@@ -66,6 +74,10 @@ export function CommandPalette() {
     enabled: open,
     staleTime: 10_000,
   })
+
+  useEffect(() => {
+    if (!open) setSearch("")
+  }, [open])
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -111,6 +123,7 @@ export function CommandPalette() {
   }, [inventory])
 
   const visiblePages = useMemo(() => pages.filter((p) => !p.adminOnly || user?.isAdmin), [user?.isAdmin])
+  const visibleGuests = search.trim() ? guests : guests.slice(0, DEFAULT_GUEST_LIMIT)
 
   function go(to: string) {
     navigate(to)
@@ -137,6 +150,8 @@ export function CommandPalette() {
             input's radius, not the global square outline. */}
         <Command.Input
           autoFocus
+          value={search}
+          onValueChange={setSearch}
           placeholder="Jump to a page, node, or guest…"
           className="h-9 w-full rounded-lg bg-transparent px-2 text-sm outline-none placeholder:text-[var(--text-muted)] focus-visible:outline-none"
         />
@@ -234,10 +249,14 @@ export function CommandPalette() {
 
         {guests.length > 0 && (
           <Command.Group
-            heading="Guests"
+            heading={
+              visibleGuests.length < guests.length
+                ? `Guests (first ${visibleGuests.length} of ${guests.length} — keep typing to search them all)`
+                : "Guests"
+            }
             className="text-xs text-[var(--text-muted)] [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.08em]"
           >
-            {guests.map(({ guest }) => (
+            {visibleGuests.map(({ guest }) => (
               <Command.Item
                 key={guest.id}
                 value={`${guest.name} ${guest.vmid} ${guest.tags?.replace(/[;,]/g, " ") ?? ""}`}

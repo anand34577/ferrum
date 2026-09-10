@@ -10,10 +10,12 @@ import { EmptyState } from "@/components/ui/empty-state"
 import { ErrorState } from "@/components/ui/error-state"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { ListSearch } from "@/components/ui/list-search"
 import { PageHeader } from "@/components/ui/page-header"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Textarea } from "@/components/ui/textarea"
 import {
   api,
   ApiError,
@@ -274,7 +276,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
           ) : (
             <div className="space-y-1.5">
               {(zonesQuery.data ?? []).map((z) => (
-                <div key={z.zone} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
+                <div key={z.zone} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm transition-colors animate-in fade-in slide-in-from-top-1 duration-200 hover:bg-[var(--bg-surface-hover)]">
                   <div className="flex items-center gap-2">
                     <span className="font-medium">{z.zone}</span>
                     <Badge>{z.type}</Badge>
@@ -310,7 +312,10 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
               <Label>Bridge (vlan/qinq)</Label>
               <Input placeholder="vmbr0" value={zoneForm.bridge} onChange={(e) => setZoneForm((f) => ({ ...f, bridge: e.target.value }))} className="w-28" />
             </div>
-            <Button size="sm" disabled={!zoneForm.zone || createZone.isPending} onClick={() => createZone.mutate()}>
+            {/* Default (h-9) size, not sm (h-8) — matches the Input/Select
+                beside it exactly so items-end bottom-alignment lands the
+                button's edge flush with theirs instead of 4px short. */}
+            <Button disabled={!zoneForm.zone || createZone.isPending} onClick={() => createZone.mutate()}>
               <Plus className="h-3.5 w-3.5" /> Add zone
             </Button>
           </div>
@@ -370,7 +375,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
               <Label>VLAN tag</Label>
               <Input type="number" placeholder="optional" value={vnetForm.tag} onChange={(e) => setVnetForm((f) => ({ ...f, tag: e.target.value }))} className="w-24" />
             </div>
-            <Button size="sm" disabled={!vnetForm.vnet || !vnetForm.zone || createVnet.isPending} onClick={() => createVnet.mutate()}>
+            <Button disabled={!vnetForm.vnet || !vnetForm.zone || createVnet.isPending} onClick={() => createVnet.mutate()}>
               <Plus className="h-3.5 w-3.5" /> Add vnet
             </Button>
           </div>
@@ -388,7 +393,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
             ) : (
               <div className="space-y-1.5">
                 {(subnetsQuery.data ?? []).map((s) => (
-                  <div key={s.subnet} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
+                  <div key={s.subnet} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm transition-colors animate-in fade-in slide-in-from-top-1 duration-200 hover:bg-[var(--bg-surface-hover)]">
                     <span className="font-mono">{s.subnet}</span>
                     {s.gateway && <Badge>gw: {s.gateway}</Badge>}
                     <Button size="icon" variant="ghost" aria-label={`Delete subnet ${s.subnet}`} onClick={() => deleteSubnet.mutate(s.subnet)}>
@@ -408,7 +413,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
                 <Label>Gateway</Label>
                 <Input placeholder="10.0.0.1" value={subnetForm.gateway} onChange={(e) => setSubnetForm((f) => ({ ...f, gateway: e.target.value }))} className="w-32" />
               </div>
-              <Button size="sm" disabled={!subnetForm.cidr || createSubnet.isPending} onClick={() => createSubnet.mutate()}>
+              <Button disabled={!subnetForm.cidr || createSubnet.isPending} onClick={() => createSubnet.mutate()}>
                 <Plus className="h-3.5 w-3.5" /> Add subnet
               </Button>
             </div>
@@ -427,7 +432,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
           ) : (
             <div className="space-y-1.5">
               {(controllersQuery.data ?? []).map((c) => (
-                <div key={c.controller} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
+                <div key={c.controller} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm transition-colors animate-in fade-in slide-in-from-top-1 duration-200 hover:bg-[var(--bg-surface-hover)]">
                   <div className="flex items-center gap-2">
                     <span className="font-medium">{c.controller}</span>
                     <Badge>{c.type}</Badge>
@@ -458,11 +463,11 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
             </div>
             <div className="space-y-1.5">
               <Label>Extra fields (key=value per line)</Label>
-              <textarea
+              <Textarea
                 placeholder={"asn=65000\npeers=10.0.0.1,10.0.0.2"}
                 value={controllerForm.extra}
                 onChange={(e) => setControllerForm((f) => ({ ...f, extra: e.target.value }))}
-                className="block w-64 rounded-md border border-[var(--border)] bg-transparent px-2 py-1.5 text-sm"
+                className="w-64"
                 rows={2}
               />
             </div>
@@ -472,7 +477,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
                 this row taller than a single-line field. */}
             <div className="space-y-1.5">
               <Label className="invisible" aria-hidden>Add</Label>
-              <Button size="sm" disabled={!controllerForm.controller || createController.isPending} onClick={() => createController.mutate()}>
+              <Button disabled={!controllerForm.controller || createController.isPending} onClick={() => createController.mutate()}>
                 <Plus className="h-3.5 w-3.5" /> Add controller
               </Button>
             </div>
@@ -491,7 +496,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
           ) : (
             <div className="space-y-1.5">
               {(ipamsQuery.data ?? []).map((i) => (
-                <div key={i.ipam} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
+                <div key={i.ipam} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm transition-colors animate-in fade-in slide-in-from-top-1 duration-200 hover:bg-[var(--bg-surface-hover)]">
                   <div className="flex items-center gap-2">
                     <span className="font-medium">{i.ipam}</span>
                     <Badge>{i.type}</Badge>
@@ -521,17 +526,17 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
             </div>
             <div className="space-y-1.5">
               <Label>Extra fields (key=value per line)</Label>
-              <textarea
+              <Textarea
                 placeholder={"url=https://netbox.example.com\ntoken=..."}
                 value={ipamForm.extra}
                 onChange={(e) => setIpamForm((f) => ({ ...f, extra: e.target.value }))}
-                className="block w-64 rounded-md border border-[var(--border)] bg-transparent px-2 py-1.5 text-sm"
+                className="w-64"
                 rows={2}
               />
             </div>
             <div className="space-y-1.5">
               <Label className="invisible" aria-hidden>Add</Label>
-              <Button size="sm" disabled={!ipamForm.ipam || createIpam.isPending} onClick={() => createIpam.mutate()}>
+              <Button disabled={!ipamForm.ipam || createIpam.isPending} onClick={() => createIpam.mutate()}>
                 <Plus className="h-3.5 w-3.5" /> Add IPAM
               </Button>
             </div>
@@ -613,7 +618,7 @@ function ClusterNodesPanel({ base, connId }: { base: string; connId: string }) {
             <p className="text-sm text-[var(--text-muted)]">Not part of a cluster (standalone node), or this connection can't be reached.</p>
           ) : (
             (nodesQuery.data ?? []).map((n) => (
-              <div key={n.name} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
+              <div key={n.name} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm transition-colors animate-in fade-in slide-in-from-top-1 duration-200 hover:bg-[var(--bg-surface-hover)]">
                 <span className="font-medium">{n.name}</span>
                 <div className="flex items-center gap-2">
                   {n.nodeid !== undefined && <Badge>nodeid {n.nodeid}</Badge>}
@@ -634,7 +639,7 @@ function ClusterNodesPanel({ base, connId }: { base: string; connId: string }) {
             <p className="text-xs text-[var(--text-muted)]">Turns this standalone connection into a one-node cluster other nodes can join.</p>
             <div className="flex gap-2">
               <Input placeholder="cluster name" value={clusterName} onChange={(e) => setClusterName(e.target.value)} />
-              <Button size="sm" disabled={!clusterName || createCluster.isPending} onClick={() => createCluster.mutate()}>
+              <Button disabled={!clusterName || createCluster.isPending} onClick={() => createCluster.mutate()}>
                 Create
               </Button>
             </div>
@@ -692,6 +697,21 @@ function AccessPanel({ base, connId }: { base: string; connId: string }) {
   const aclQuery = useQuery({ queryKey: ["pve-access-acl", connId], queryFn: () => api.get<AccessACLEntry[]>(`${base}/access/acl`) })
   const domainsQuery = useQuery({ queryKey: ["pve-access-domains", connId], queryFn: () => api.get<AccessDomain[]>(`${base}/access/domains`) })
 
+  // Users and ACL are the two lists here that scale with the org, not with
+  // how much an admin has manually configured (an LDAP/AD realm can hand PVE
+  // hundreds of users; a per-path ACL is often one row per user per pool) —
+  // Realms/Roles stay small and fixed, so only these two get a search box.
+  const [userQuery, setUserQuery] = useState("")
+  const users = (usersQuery.data ?? []).filter(
+    (u) => !userQuery || u.userid.toLowerCase().includes(userQuery.toLowerCase()) || u.email?.toLowerCase().includes(userQuery.toLowerCase()),
+  )
+  const [aclFilter, setAclFilter] = useState("")
+  const acl = (aclQuery.data ?? []).filter(
+    (e) =>
+      !aclFilter ||
+      [e.path, e.ugid, e.roleid, e.type].some((v) => v?.toLowerCase().includes(aclFilter.toLowerCase())),
+  )
+
   return (
     <div className="space-y-4">
       <Card>
@@ -703,7 +723,7 @@ function AccessPanel({ base, connId }: { base: string; connId: string }) {
             <Skeleton className="h-12" />
           ) : (
             (domainsQuery.data ?? []).map((d) => (
-              <div key={d.realm} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
+              <div key={d.realm} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm transition-colors animate-in fade-in slide-in-from-top-1 duration-200 hover:bg-[var(--bg-surface-hover)]">
                 <div className="flex items-center gap-2">
                   <span className="font-medium">{d.realm}</span>
                   <Badge variant="outline">{d.type}</Badge>
@@ -719,31 +739,38 @@ function AccessPanel({ base, connId }: { base: string; connId: string }) {
       <Card>
         <CardHeader><CardTitle className="text-sm">Users</CardTitle></CardHeader>
         <CardContent className="space-y-1.5">
+          {(usersQuery.data?.length ?? 0) > 8 && (
+            <ListSearch value={userQuery} onChange={setUserQuery} placeholder="Search users..." className="mb-2" />
+          )}
           {usersQuery.isError ? (
             <ErrorState onRetry={usersQuery.refetch} />
           ) : usersQuery.isLoading ? (
             <Skeleton className="h-12" />
           ) : (usersQuery.data ?? []).length === 0 ? (
             <p className="text-sm text-[var(--text-muted)]">No users found.</p>
+          ) : users.length === 0 ? (
+            <p className="text-sm text-[var(--text-muted)]">No users match "{userQuery}".</p>
           ) : (
-            (usersQuery.data ?? []).map((u) => (
-              <div key={u.userid} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium">{u.userid}</span>
-                    {u.enable === 0 && <Badge variant="error">disabled</Badge>}
+            <div className={users.length > 10 ? "max-h-96 space-y-1.5 overflow-y-auto pr-1" : "space-y-1.5"}>
+              {users.map((u) => (
+                <div key={u.userid} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{u.userid}</span>
+                      {u.enable === 0 && <Badge variant="error">disabled</Badge>}
+                    </div>
+                    {u.email && <span className="text-xs text-[var(--text-muted)]">{u.email}</span>}
                   </div>
-                  {u.email && <span className="text-xs text-[var(--text-muted)]">{u.email}</span>}
+                  {u.tokens && u.tokens.length > 0 && (
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {u.tokens.map((t) => (
+                        <Badge key={t.tokenid} variant="outline" className="font-mono text-[10px]">{t.tokenid}</Badge>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                {u.tokens && u.tokens.length > 0 && (
-                  <div className="mt-1.5 flex flex-wrap gap-1">
-                    {u.tokens.map((t) => (
-                      <Badge key={t.tokenid} variant="outline" className="font-mono text-[10px]">{t.tokenid}</Badge>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))
+              ))}
+            </div>
           )}
         </CardContent>
       </Card>
@@ -766,23 +793,30 @@ function AccessPanel({ base, connId }: { base: string; connId: string }) {
       <Card>
         <CardHeader><CardTitle className="text-sm">ACL</CardTitle></CardHeader>
         <CardContent className="space-y-1.5">
+          {(aclQuery.data?.length ?? 0) > 8 && (
+            <ListSearch value={aclFilter} onChange={setAclFilter} placeholder="Search ACL entries..." className="mb-2" />
+          )}
           {aclQuery.isError ? (
             <ErrorState onRetry={aclQuery.refetch} />
           ) : aclQuery.isLoading ? (
             <Skeleton className="h-12" />
           ) : (aclQuery.data ?? []).length === 0 ? (
             <p className="text-sm text-[var(--text-muted)]">No ACL entries.</p>
+          ) : acl.length === 0 ? (
+            <p className="text-sm text-[var(--text-muted)]">No ACL entries match "{aclFilter}".</p>
           ) : (
-            (aclQuery.data ?? []).map((e, i) => (
-              <div key={`${e.path}-${e.ugid}-${e.roleid}-${i}`} className="flex flex-wrap items-center gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
-                <Badge variant="outline">{e.type}</Badge>
-                <span className="font-mono text-xs">{e.ugid}</span>
-                <span className="text-[var(--text-muted)]">on</span>
-                <span className="font-mono text-xs">{e.path}</span>
-                <span className="text-[var(--text-muted)]">→</span>
-                <Badge variant="info">{e.roleid}</Badge>
-              </div>
-            ))
+            <div className={acl.length > 10 ? "max-h-96 space-y-1.5 overflow-y-auto pr-1" : "space-y-1.5"}>
+              {acl.map((e, i) => (
+                <div key={`${e.path}-${e.ugid}-${e.roleid}-${i}`} className="flex flex-wrap items-center gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
+                  <Badge variant="outline">{e.type}</Badge>
+                  <span className="font-mono text-xs">{e.ugid}</span>
+                  <span className="text-[var(--text-muted)]">on</span>
+                  <span className="font-mono text-xs">{e.path}</span>
+                  <span className="text-[var(--text-muted)]">→</span>
+                  <Badge variant="info">{e.roleid}</Badge>
+                </div>
+              ))}
+            </div>
           )}
         </CardContent>
       </Card>

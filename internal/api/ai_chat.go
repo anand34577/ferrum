@@ -60,6 +60,15 @@ type toolActivity struct {
 	Result string `json:"result,omitempty"`
 }
 
+// reasoningEnvelope carries a chunk of a "reasoning"/"thinking" model's
+// chain-of-thought, kept out of "content" deltas so it never ends up in
+// conversation history sent back to the model (see toOpenAIMessage and
+// parseChatCompletionStream) — purely a display-time aside for the UI's
+// collapsible "Thinking" block.
+type reasoningEnvelope struct {
+	Reasoning string `json:"ferrum_reasoning"`
+}
+
 // toolResultDisplayLimit caps how much of a tool's result text is sent to
 // the browser for display in the tool-activity pill — the full untruncated
 // text still goes to the model via messages below; this only bounds what a
@@ -326,6 +335,15 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Non-streaming providers (Needle) can only hand back reasoning once
+		// the whole response is in; a real streaming provider's own
+		// "reasoning_content" deltas (see parseChatCompletionStream) are
+		// already forwarded live and never land in respMsg, so this is a
+		// no-op for those.
+		if reasoning, _ := respMsg["reasoning_content"].(string); reasoning != "" {
+			streamReasoningText(w, flusher, reasoning)
+		}
+
 		toolCalls, _ := respMsg["tool_calls"].([]any)
 		if len(toolCalls) == 0 {
 			content, _ := respMsg["content"].(string)
@@ -536,8 +554,16 @@ func (s *Server) callChatCompletion(
 // arrive as index-addressed fragments (id/name/arguments each build up
 // across multiple chunks) rather than as one complete object.
 type streamChunkDelta struct {
-	Content   string `json:"content"`
-	ToolCalls []struct {
+	Content string `json:"content"`
+	// ReasoningContent is a reasoning-capable model's chain-of-thought,
+	// streamed separately from the final answer — the field name an
+	// increasing number of OpenAI-compatible runtimes use for it (vLLM,
+	// DeepSeek-R1-family models, LM Studio's reasoning models, ...).
+	// Forwarded live to the browser (see parseChatCompletionStream) but
+	// never mixed into Content/full, so it never reaches conversation
+	// history sent back to the model on the next tool-call iteration.
+	ReasoningContent string `json:"reasoning_content"`
+	ToolCalls        []struct {
 		Index    int    `json:"index"`
 		ID       string `json:"id"`
 		Function struct {
@@ -633,6 +659,9 @@ func parseChatCompletionStream(body io.Reader, w http.ResponseWriter, flusher ht
 			acc.name.WriteString(tc.Function.Name)
 			acc.args.WriteString(tc.Function.Arguments)
 		}
+		if delta.ReasoningContent != "" {
+			writeSSEJSON(w, flusher, reasoningEnvelope{Reasoning: delta.ReasoningContent})
+		}
 		if delta.Content == "" {
 			continue
 		}
@@ -690,6 +719,20 @@ func parseChatCompletionStream(body io.Reader, w http.ResponseWriter, flusher ht
 		respMsg["tool_calls"] = calls
 	}
 	return respMsg, streamedLive, nil
+}
+
+// streamReasoningText "types out" a non-streaming provider's (Needle's)
+// reasoning text via reasoningEnvelope chunks — same idea as streamText, but
+// without streamText's own trailing [DONE]: this can run mid-loop, before
+// any tool calls or the final answer, so the SSE stream must stay open.
+func streamReasoningText(w http.ResponseWriter, flusher http.Flusher, text string) {
+	const chunkRunes = 4
+	runes := []rune(text)
+	for i := 0; i < len(runes); i += chunkRunes {
+		end := min(i+chunkRunes, len(runes))
+		writeSSEJSON(w, flusher, reasoningEnvelope{Reasoning: string(runes[i:end])})
+		time.Sleep(8 * time.Millisecond)
+	}
 }
 
 // streamText "types out" text to the client in small chunks using the same

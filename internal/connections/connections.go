@@ -6,11 +6,13 @@ package connections
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
 	"golang.org/x/sync/singleflight"
 
+	"ferrum/internal/pbs"
 	"ferrum/internal/pve"
 	"ferrum/internal/secrets"
 	"ferrum/internal/store"
@@ -36,12 +38,18 @@ type Resolver struct {
 	db      *store.DB
 	secrets *secrets.Box
 
-	mu     sync.Mutex
-	cached map[string]*cachedClient
+	mu        sync.Mutex
+	cached    map[string]*cachedClient
+	cachedPBS map[string]*cachedPBSClient
 
 	// logins coalesces concurrent cache-miss callers for the same connection
 	// id into one login attempt — see ClientFor.
 	logins singleflight.Group
+	// pbsLogins does the same for PBSClientFor, kept separate so a PVE and a
+	// PBS login for the same connection id (which can't actually happen,
+	// since a row is one type or the other, but keeps the two code paths
+	// independent) never collide in one singleflight.Group key space.
+	pbsLogins singleflight.Group
 }
 
 // cachedClient pairs an authenticated client with its login time so
@@ -56,8 +64,16 @@ type cachedClient struct {
 // live reports whether this cached client can still be handed out.
 func (e *cachedClient) live() bool { return e.expires.IsZero() || time.Now().Before(e.expires) }
 
+// cachedPBSClient mirrors cachedClient for PBS connections.
+type cachedPBSClient struct {
+	client  *pbs.Client
+	expires time.Time
+}
+
+func (e *cachedPBSClient) live() bool { return e.expires.IsZero() || time.Now().Before(e.expires) }
+
 func New(db *store.DB, secretBox *secrets.Box) *Resolver {
-	return &Resolver{db: db, secrets: secretBox, cached: map[string]*cachedClient{}}
+	return &Resolver{db: db, secrets: secretBox, cached: map[string]*cachedClient{}, cachedPBS: map[string]*cachedPBSClient{}}
 }
 
 func (r *Resolver) List(ctx context.Context) ([]Info, error) {
@@ -199,6 +215,91 @@ func (r *Resolver) login(ctx context.Context, id string) (*pve.Client, error) {
 	return client, nil
 }
 
+// PBSClientFor returns an authenticated pbs.Client for a stored PBS
+// connection, with the same caching behavior as ClientFor.
+func (r *Resolver) PBSClientFor(ctx context.Context, id string) (*pbs.Client, error) {
+	r.mu.Lock()
+	entry, ok := r.cachedPBS[id]
+	r.mu.Unlock()
+	if ok && entry.live() {
+		return entry.client, nil
+	}
+
+	v, err, _ := r.pbsLogins.Do(id, func() (any, error) {
+		loginCtx, cancel := context.WithTimeout(context.Background(), loginTimeout)
+		defer cancel()
+		return r.pbsLogin(loginCtx, id)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*pbs.Client), nil
+}
+
+func (r *Resolver) pbsLogin(ctx context.Context, id string) (*pbs.Client, error) {
+	r.mu.Lock()
+	entry, ok := r.cachedPBS[id]
+	r.mu.Unlock()
+	if ok && entry.live() {
+		return entry.client, nil
+	}
+
+	creds, err := r.credsFor(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	client := pbs.New(creds.host, creds.port, pbs.WithInsecureSkipVerify(!creds.verifyTLS))
+
+	var expires time.Time
+	switch creds.authType {
+	case "token":
+		secret, err := r.secrets.Decrypt(creds.tokenSecretEnc)
+		if err != nil {
+			return nil, err
+		}
+		client.WithAPIToken(creds.tokenID, secret)
+	case "password":
+		password, err := r.secrets.Decrypt(creds.passwordEnc)
+		if err != nil {
+			return nil, err
+		}
+		if err := client.Login(ctx, creds.username, password); err != nil {
+			r.invalidate(id)
+			return nil, err
+		}
+		expires = time.Now().Add(ticketTTL)
+	default:
+		return nil, &unknownAuthTypeError{authType: creds.authType}
+	}
+
+	r.mu.Lock()
+	r.cachedPBS[id] = &cachedPBSClient{client: client, expires: expires}
+	r.mu.Unlock()
+	return client, nil
+}
+
+// TargetCredentials returns the decrypted host/port/token needed to build a
+// PVE remote-migrate "target-endpoint" string for a stored connection. It is
+// only ever consumed server-side (internal/api builds the endpoint string
+// and hands it straight to the source PVE cluster) — the decrypted secret
+// must never be sent back to the frontend. Only token auth is supported: PVE
+// remote-migrate authenticates against the target with an API token, not a
+// ticket.
+func (r *Resolver) TargetCredentials(ctx context.Context, id string) (host string, port int, tokenID, tokenSecret string, err error) {
+	creds, err := r.credsFor(ctx, id)
+	if err != nil {
+		return "", 0, "", "", err
+	}
+	if creds.authType != "token" {
+		return "", 0, "", "", fmt.Errorf("target connection must use API token auth for remote migration")
+	}
+	secret, err := r.secrets.Decrypt(creds.tokenSecretEnc)
+	if err != nil {
+		return "", 0, "", "", err
+	}
+	return creds.host, creds.port, creds.tokenID, secret, nil
+}
+
 // OnUpstreamUnauthorized drops the cached ticket for a connection after the
 // upstream rejected it with 401, so the next request re-authenticates.
 func (r *Resolver) OnUpstreamUnauthorized(id string) {
@@ -216,6 +317,7 @@ func (r *Resolver) invalidate(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.cached, id)
+	delete(r.cachedPBS, id)
 }
 
 type unknownAuthTypeError struct{ authType string }
@@ -240,4 +342,5 @@ func (r *Resolver) InvalidateAll() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.cached = map[string]*cachedClient{}
+	r.cachedPBS = map[string]*cachedPBSClient{}
 }
