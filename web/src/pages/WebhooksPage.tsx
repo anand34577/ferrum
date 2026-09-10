@@ -102,7 +102,11 @@ export function WebhooksPage() {
 
   const testMutation = useMutation({
     mutationFn: (id: string) => api.post<{ delivered: boolean; error?: string }>(`/settings/webhooks/${id}/test`, {}),
-    onSuccess: (res) => (res.delivered ? toast.success("Test event delivered") : toast.error(res.error ?? "Delivery failed")),
+    onSuccess: (res, id) => {
+      queryClient.invalidateQueries({ queryKey: ["webhook-deliveries", id] })
+      if (res.delivered) toast.success("Test event delivered")
+      else toast.error(res.error ?? "Delivery failed")
+    },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to send test event"),
   })
 
