@@ -328,6 +328,9 @@ func (s *Server) Router() http.Handler {
 						r.Get("/config", s.getGuestConfig)
 						r.Put("/config", s.updateGuestConfig)
 						r.Put("/tags", s.updateGuestTags)
+						r.Post("/baseline", s.captureGuestBaseline)
+						r.Delete("/baseline", s.clearGuestBaseline)
+						r.Get("/drift", s.getGuestDrift)
 						r.Post("/clone", s.cloneGuest)
 						r.Post("/migrate", s.migrateGuest)
 						r.Get("/migrate", s.migratePrecondition)
@@ -716,6 +719,19 @@ func (s *Server) Router() http.Handler {
 					r.Post("/test", s.testWebhook)
 					r.Get("/deliveries", s.listWebhookDeliveries)
 				})
+			})
+
+			r.Route("/drift", func(r chi.Router) {
+				r.Get("/summary", s.driftSummary)
+			})
+
+			r.Route("/lifecycle", func(r chi.Router) {
+				r.Get("/actions", s.lifecycleActions)
+			})
+			r.Route("/settings/lifecycle", func(r chi.Router) {
+				r.Use(s.requireAdminForMutations)
+				r.Get("/", s.getLifecycleSettings)
+				r.Put("/", s.putLifecycleSettings)
 			})
 		})
 	})

@@ -41,6 +41,12 @@ var (
 	date    = "unknown"
 )
 
+// lifecycleSweepInterval is how often the snapshot-retention sweep and
+// orphaned-disk check run — a lower-frequency background job than the metric
+// alert evaluator, since both passes fetch guest configs and storage content
+// across the whole fleet.
+const lifecycleSweepInterval = 1 * time.Hour
+
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to config file")
 	dev := flag.Bool("dev", false, "use human-readable logs instead of JSON")
@@ -177,6 +183,12 @@ func runServer(ctx context.Context, cfg config.Config) {
 	defer stopPoller()
 	go evaluator.Run(pollerCtx, srv.AlertPollInterval(ctx))
 	go webhookDispatcher.Run(pollerCtx, eventBus)
+
+	// Snapshot retention sweep + orphaned-disk check — read-heavy and slower
+	// moving than the metric alert evaluator, so it runs on its own longer
+	// interval rather than sharing AlertPollInterval.
+	lifecycleEvaluator := poller.NewLifecycleEvaluator(db, connections.New(db, secretBox))
+	go lifecycleEvaluator.Run(pollerCtx, lifecycleSweepInterval)
 
 	distFS, err := web.DistFS()
 	if err != nil {
