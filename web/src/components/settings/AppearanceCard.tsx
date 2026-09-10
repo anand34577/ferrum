@@ -101,6 +101,9 @@ const ACCENTS: { value: Accent; label: string; swatch: string }[] = [
   { value: "verdant", label: "Verdant", swatch: "#268a64" },
   { value: "violet", label: "Violet", swatch: "#6a3fb0" },
   { value: "slate", label: "Slate", swatch: "#5c6e82" },
+  { value: "amber", label: "Amber", swatch: "#ad741c" },
+  { value: "rose", label: "Rose", swatch: "#b23568" },
+  { value: "teal", label: "Teal", swatch: "#16847f" },
 ]
 
 export function AppearanceCard() {

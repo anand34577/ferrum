@@ -375,7 +375,7 @@ export function ConnectionsPage() {
             <Card key={conn.id}>
               <CardContent className="flex flex-wrap items-center justify-between gap-2 py-3">
                 <div className="min-w-0 flex-1">
-                  <p className="flex items-center gap-2 truncate font-medium">
+                  <p className="flex min-w-0 items-center gap-2 font-medium">
                     {status && <StatusDot status={status.online ? "ok" : "error"} />}
                     <span className="truncate">{conn.name}</span>
                   </p>

@@ -10,6 +10,16 @@ function statusVariant(status: string): "ok" | "warn" | "error" | "default" {
   return "error"
 }
 
+// A failed task's "status" from PVE isn't a short word like "OK" — it's the
+// raw failure text (e.g. "command '/usr/bin/termproxy ...' failed: exit code
+// 1"), which blew up the badge to the row's full width instead of reading as
+// a compact status chip. Collapse it to "Failed" and keep the full text as a
+// hover title.
+function statusLabel(status: string): string {
+  if (status === "OK" || status === "running" || !status) return status || "running"
+  return "Failed"
+}
+
 export function RunningTasksWidget({ settings }: { settings: WidgetSettings }) {
   const limit = Number(settings.limit) || 8
   const { tasks, isError } = useClusterTasks(scopedConnection(settings))
@@ -27,7 +37,9 @@ export function RunningTasksWidget({ settings }: { settings: WidgetSettings }) {
         <div key={t.upid} className="flex items-center gap-2 text-sm">
           <span className="w-24 shrink-0 truncate text-xs text-[var(--text-muted)]">{t.connName}</span>
           <span className="min-w-0 flex-1 truncate font-mono text-xs">{t.type}</span>
-          <Badge variant={statusVariant(t.status)}>{t.status || "running"}</Badge>
+          <Badge variant={statusVariant(t.status)} className="max-w-24 shrink-0 truncate" title={t.status || undefined}>
+            {statusLabel(t.status)}
+          </Badge>
         </div>
       ))}
     </div>

@@ -451,18 +451,23 @@ type JournalEntry struct {
 // that alone otherwise fails json.Unmarshal for the entire journal array
 // (one differently-shaped line 502s the whole request; see FlexString above
 // for the same kind of PVE version inconsistency elsewhere in this file).
+// "n" itself is also seen as a quoted number on some versions, so it's
+// decoded via FlexString and parsed loosely rather than declared int.
 func (e *JournalEntry) UnmarshalJSON(data []byte) error {
 	var s string
 	if err := json.Unmarshal(data, &s); err == nil {
 		e.N, e.T = 0, s
 		return nil
 	}
-	type alias JournalEntry // avoids infinite recursion into this method
-	var a alias
+	var a struct {
+		N FlexString `json:"n"`
+		T string     `json:"t"`
+	}
 	if err := json.Unmarshal(data, &a); err != nil {
 		return err
 	}
-	*e = JournalEntry(a)
+	n, _ := strconv.Atoi(string(a.N)) // non-numeric/absent "n" just stays 0
+	*e = JournalEntry{N: n, T: a.T}
 	return nil
 }
 

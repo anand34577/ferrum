@@ -6,6 +6,17 @@ Fleet control for Proxmox VE — a single dashboard for every cluster and standa
 - **Backend:** Go (chi router), SQLite or PostgreSQL
 - **Frontend:** React + TypeScript, Vite, Tailwind CSS v4
 
+## Features
+
+- **Fleet-wide overview** — every connection (PVE cluster, standalone node, or PBS remote) rolled up into one dashboard: node/guest counts, CPU/memory/storage, active alerts, and a drag-and-drop customizable dashboard with 20+ widgets.
+- **Inventory & operations** — nodes, VMs, and LXCs with live consoles/shells (noVNC + xterm.js), snapshots, guest agent file browser, bulk start/stop/migrate, and cross-cluster guest migration.
+- **Storage & backups** — pool usage and Ceph health across every connection, backup job status and replication, and PBS remote integration alongside native PVE storage.
+- **High availability, firewall & SDN** — HA groups/resources, cluster and per-node firewall rules, and SDN zones/VNets/subnets, all per connection.
+- **Alerting & automation** — threshold-based alerts (CPU/memory/disk/guest), config drift detection, guest lifecycle policies, capacity forecasting, a fleet health score, scheduled health-digest emails, and Terraform/Ansible inventory export.
+- **Integrations** — outbound webhooks for real-time events, a REST API and MCP server (scoped API keys, so any MCP-capable agent or script can drive Ferrum), and a built-in AI Assistant that can use any OpenAI-compatible provider — including a zero-config local model (Needle 2) with no API key or network required.
+- **Access & auditing** — per-user roles, optional OIDC single sign-on, session/certificate monitoring, and a full audit log of every mutating action across the UI, REST API, and MCP.
+- **A dozen look-and-feel presets** — Enterprise, Proxmox-native, Terminal, Glass Flight Deck, Midnight, Paper, Glassmorphism, Neumorphism, Brutalist, Solarized, High Contrast, and Aurora — each with light/dark and a choice of accent colors.
+
 ## Screenshots
 
 Captured against a mock Proxmox cluster (`prod-cluster`: 3 nodes, 16 VMs/LXCs, Ceph + NFS storage) to show the UI populated the way it looks on a real fleet. Click any thumbnail for the full-size image.

@@ -610,11 +610,14 @@ function ClusterNodesPanel({ base, connId }: { base: string; connId: string }) {
       <Card>
         <CardHeader><CardTitle className="text-sm">Members</CardTitle></CardHeader>
         <CardContent className="space-y-1.5">
-          {nodesQuery.isError ? (
-            <ErrorState onRetry={nodesQuery.refetch} />
-          ) : nodesQuery.isLoading ? (
+          {nodesQuery.isLoading ? (
             <Skeleton className="h-12" />
-          ) : (nodesQuery.data ?? []).length === 0 ? (
+          ) : nodesQuery.isError || (nodesQuery.data ?? []).length === 0 ? (
+            // PVE errors this same call on a standalone node (no
+            // /etc/pve/corosync.conf to read) — indistinguishable, from here,
+            // from the connection just being unreachable, so both read as
+            // this one message rather than a scary "couldn't load" card with
+            // a retry that can't fix "there's no cluster to list".
             <p className="text-sm text-[var(--text-muted)]">Not part of a cluster (standalone node), or this connection can't be reached.</p>
           ) : (
             (nodesQuery.data ?? []).map((n) => (

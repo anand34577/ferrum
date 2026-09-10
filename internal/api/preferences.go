@@ -36,7 +36,7 @@ var validThemes = map[string]bool{"light": true, "dark": true, "system": true}
 // Accent is a named palette, not a raw color — same whitelist reasoning as
 // theme: the actual color ramps live in the frontend's index.css, so the
 // server just needs to reject anything that isn't one of the known names.
-var validAccents = map[string]bool{"oxide": true, "azure": true, "verdant": true, "violet": true, "slate": true}
+var validAccents = map[string]bool{"oxide": true, "azure": true, "verdant": true, "violet": true, "slate": true, "amber": true, "rose": true, "teal": true}
 
 // Look is a named whole-app visual register (typography, radius, elevation,
 // surface tone) — same whitelist reasoning as accent: index.css owns the
@@ -154,7 +154,7 @@ func (s *Server) putPreferences(w http.ResponseWriter, r *http.Request) {
 	}
 	if patch.Accent != nil {
 		if !validAccents[*patch.Accent] {
-			writeErrorMsg(w, http.StatusBadRequest, "accent must be one of: oxide, azure, verdant, violet, slate")
+			writeErrorMsg(w, http.StatusBadRequest, "accent must be one of: oxide, azure, verdant, violet, slate, amber, rose, teal")
 			return
 		}
 		current.Accent = *patch.Accent

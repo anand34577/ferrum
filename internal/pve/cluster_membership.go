@@ -12,7 +12,11 @@ type ClusterConfigNode struct {
 	Name   string `json:"name"`
 	NodeID int    `json:"nodeid,omitempty"`
 	Votes  int    `json:"quorum_votes,omitempty"`
-	Pve    int    `json:"pve_addr,omitempty"`
+	// PveAddr is an IP address (e.g. "10.0.0.5"), not a number — declaring it
+	// int here made every response with a populated pve_addr fail to
+	// unmarshal (json: cannot unmarshal string into Go struct field), which
+	// 502'd the whole "Members" list.
+	PveAddr string `json:"pve_addr,omitempty"`
 }
 
 func (c *Client) ClusterConfigNodes(ctx context.Context) ([]ClusterConfigNode, error) {

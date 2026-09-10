@@ -31,7 +31,10 @@ export function AlertActivityWidget({ settings }: { settings: WidgetSettings }) 
   const critical = connId === "all" ? summaryQuery.data?.critical ?? 0 : active.filter((a) => a.severity === "critical").length
   const total = warning + critical
 
-  if (summaryQuery.isError && activeQuery.isError) return <WidgetError />
+  // Either query failing means the counts below are wrong or incomplete —
+  // requiring both to fail (the old `&&`) let one silently-broken endpoint
+  // render as if everything were fine.
+  if (summaryQuery.isError || activeQuery.isError) return <WidgetError />
 
   if (total === 0) {
     return (
@@ -56,7 +59,7 @@ export function AlertActivityWidget({ settings }: { settings: WidgetSettings }) 
       {latest.length > 0 && (
         <div className="mb-1 w-full space-y-1 border-t border-[var(--border)] pt-2">
           {latest.map((a) => (
-            <p key={a.id} className="flex items-center gap-1.5 truncate text-xs text-[var(--text-muted)]">
+            <p key={a.id} className="flex min-w-0 items-center gap-1.5 text-xs text-[var(--text-muted)]">
               <StatusDot status={a.severity === "critical" ? "error" : "warn"} />
               <span className="truncate">{a.resourceName}</span>
             </p>

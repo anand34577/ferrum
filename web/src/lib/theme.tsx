@@ -14,7 +14,7 @@ import { useAuth } from "@/lib/auth"
 
 export type ThemePreference = "light" | "dark" | "system"
 export type Theme = "light" | "dark"
-export type Accent = "oxide" | "azure" | "verdant" | "violet" | "slate"
+export type Accent = "oxide" | "azure" | "verdant" | "violet" | "slate" | "amber" | "rose" | "teal"
 /** Row/list padding across tables and lists app-wide — orthogonal to look,
  * same as accent. See the [data-density="compact"] rules in index.css. */
 export type Density = "comfortable" | "compact"
@@ -140,7 +140,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       localStorage.setItem(THEME_KEY, server)
     }
     const serverAccent = prefsQuery.data?.accent
-    const knownAccents: Accent[] = ["oxide", "azure", "verdant", "violet", "slate"]
+    const knownAccents: Accent[] = ["oxide", "azure", "verdant", "violet", "slate", "amber", "rose", "teal"]
     if (serverAccent && knownAccents.includes(serverAccent) && serverAccent !== accentRef.current) {
       setAccentState(serverAccent)
       localStorage.setItem(ACCENT_KEY, serverAccent)

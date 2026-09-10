@@ -51,6 +51,12 @@ export function DonutChart({ data, height = 180, centerLabel, centerValue, forma
           </Pie>
           <Tooltip
             formatter={(value) => formatValue(Number(value))}
+            // Pinned below the ring instead of following the cursor: a
+            // donut this small has its hover point right next to (or over)
+            // the center label, and the default cursor-following position
+            // rendered the tooltip box on top of it.
+            position={{ y: height }}
+            allowEscapeViewBox={{ x: true, y: true }}
             {...chartTooltip}
           />
         </PieChart>

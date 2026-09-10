@@ -48,8 +48,12 @@ export function Combobox({
   const filtered = search ? options.filter((o) => o.label.toLowerCase().includes(search.toLowerCase())) : options
 
   useEffect(() => {
-    if (!open) setSearch("")
-  }, [open])
+    if (!open) {
+      setSearch("")
+      return
+    }
+    if (showSearch) inputRef.current?.focus()
+  }, [open, showSearch])
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -70,11 +74,6 @@ export function Combobox({
       <DropdownMenuContent
         align="start"
         className="max-h-[var(--radix-dropdown-menu-content-available-height,18rem)] min-w-56 overflow-y-auto"
-        onOpenAutoFocus={(e) => {
-          if (!showSearch) return
-          e.preventDefault()
-          inputRef.current?.focus()
-        }}
       >
         {showSearch && (
           <div className="relative mb-1 px-1 pt-1">

@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { api, type AlertInstance } from "@/lib/api"
 import { useEventStream } from "@/lib/useEventStream"
-import { cn } from "@/lib/utils"
+import { cn, formatAlertValue } from "@/lib/utils"
 
 const SEVERITY_DOT: Record<string, string> = { critical: "bg-[var(--status-error)]", warning: "bg-[var(--status-warn)]" }
 
@@ -97,7 +97,7 @@ export function NotificationBell() {
             <div className="min-w-0">
               <p className="truncate text-sm font-medium">{a.resourceName}</p>
               <p className="truncate text-xs text-[var(--text-muted)]">
-                {a.connectionName} · {a.value.toFixed(1)}% ≥ {a.threshold}%
+                {a.connectionName} · {formatAlertValue(a.metric, a.value, a.threshold)}
               </p>
             </div>
           </DropdownMenuItem>

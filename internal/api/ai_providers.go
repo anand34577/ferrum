@@ -40,6 +40,10 @@ func (s *Server) seedBuiltinNeedleProvider(ctx context.Context) {
 	err := s.db.QueryRowContext(ctx, `SELECT id FROM ai_providers WHERE base_url = ?`, needle.BaseURL).Scan(&providerID)
 	switch {
 	case err == sql.ErrNoRows:
+		var dismissed string
+		if err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, needleProviderDismissedKey).Scan(&dismissed); err == nil && dismissed == "1" {
+			return // an admin explicitly deleted it — stay deleted across restarts
+		}
 		providerID = uuid.NewString()
 		if _, err := s.db.ExecContext(ctx, `
 			INSERT INTO ai_providers (id, name, base_url, api_key_enc, model, is_enabled, is_default, created_at, updated_at)
@@ -314,7 +318,7 @@ func (s *Server) updateAIProvider(w http.ResponseWriter, r *http.Request) {
 		set("name", req.Name)
 	}
 	if req.BaseURL != "" {
-		if !strings.HasPrefix(req.BaseURL, "http://") && !strings.HasPrefix(req.BaseURL, "https://") {
+		if !needle.IsBuiltin(req.BaseURL) && !strings.HasPrefix(req.BaseURL, "http://") && !strings.HasPrefix(req.BaseURL, "https://") {
 			writeErrorMsg(w, http.StatusBadRequest, "baseUrl must start with http:// or https://")
 			return
 		}
@@ -352,8 +356,21 @@ func (s *Server) updateAIProvider(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"updated": true})
 }
 
+// needleProviderDismissedKey persists that an admin explicitly deleted the
+// built-in Needle 2 provider, so seedBuiltinNeedleProvider doesn't silently
+// resurrect it on the next server restart — deleting it should stay deleted,
+// same as any other provider, not just until the process restarts.
+const needleProviderDismissedKey = "ai.needle_provider_dismissed"
+
 func (s *Server) deleteAIProvider(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+
+	var baseURL string
+	if err := s.db.QueryRowContext(r.Context(), `SELECT base_url FROM ai_providers WHERE id = ?`, id).Scan(&baseURL); err != nil && err != sql.ErrNoRows {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
 	res, err := s.db.ExecContext(r.Context(), `DELETE FROM ai_providers WHERE id = ?`, id)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
@@ -363,6 +380,18 @@ func (s *Server) deleteAIProvider(w http.ResponseWriter, r *http.Request) {
 		writeErrorMsg(w, http.StatusNotFound, "ai provider not found")
 		return
 	}
+
+	if needle.IsBuiltin(baseURL) {
+		now := time.Now().UTC().Format(time.RFC3339)
+		if _, err := s.db.ExecContext(r.Context(),
+			`INSERT INTO settings (key, value, updated_at) VALUES (?, '1', ?)
+			 ON CONFLICT(key) DO UPDATE SET value = '1', updated_at = excluded.updated_at`,
+			needleProviderDismissedKey, now,
+		); err != nil {
+			slog.Error("recording needle provider dismissal", "error", err)
+		}
+	}
+
 	s.audit(r, "ai.provider.delete", "settings", id)
 	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
 }

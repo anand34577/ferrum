@@ -34,6 +34,23 @@ export function formatBytesAtUnit(bytes: number, unitIndex: number): string {
   return `${parseFloat(value.toFixed(2))} ${BYTE_UNITS[unitIndex]}`
 }
 
+/** Alert instance value/threshold as "value vs threshold" text. Every
+ * user-defined rule (node_cpu, storage_usage, ...) is a 0-100 percent, but a
+ * few built-in alerts reuse the same value/threshold columns for other
+ * units — cert_expiry/connection_stale count days (lower is worse, not
+ * higher), and storage_orphan_disk carries a raw byte size with no
+ * meaningful threshold (always 0). Formatting every metric as a percentage
+ * printed a disk's byte count as e.g. "67108864.0%". */
+export function formatAlertValue(metric: string, value: number, threshold: number): string {
+  if (metric === "cert_expiry" || metric === "connection_stale") {
+    return `${value.toFixed(0)}d ≤ ${threshold.toFixed(0)}d`
+  }
+  if (metric === "storage_orphan_disk") {
+    return formatBytes(value)
+  }
+  return `${value.toFixed(1)}% ≥ ${threshold.toFixed(1)}%`
+}
+
 export function formatUptime(seconds: number): string {
   if (!seconds) return "-"
   const days = Math.floor(seconds / 86400)

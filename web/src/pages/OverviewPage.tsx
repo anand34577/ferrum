@@ -35,7 +35,7 @@ import { StatusDot } from "@/components/ui/status-dot"
 import { Hint } from "@/components/ui/tooltip"
 import { api, type AlertInstance, type FleetOverviewConn } from "@/lib/api"
 import { summarizeFleet, useScopedInventory, utilizationTone } from "@/lib/fleet"
-import { cn, formatBytes, formatPercentFine, formatRelativeTime } from "@/lib/utils"
+import { cn, formatAlertValue, formatBytes, formatPercentFine, formatRelativeTime } from "@/lib/utils"
 
 /**
  * Fleet Overview — the landing page of the centralized manager. Aggregated
@@ -445,7 +445,7 @@ export function OverviewPage() {
                       {ALERT_METRIC_LABELS[a.metric] ?? a.metric} · {a.connectionName}
                     </span>
                     <span className="ml-auto shrink-0 tabular text-[var(--text-muted)]" title="Value vs threshold">
-                      {a.value.toFixed(1)}% <span className="text-[var(--text-faint)]">≥ {a.threshold}%</span>
+                      {formatAlertValue(a.metric, a.value, a.threshold)}
                     </span>
                   </li>
                 ))}
