@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Network, Pencil, Plus, Trash2, Wifi } from "lucide-react"
+import { Download, Network, Pencil, Plus, Trash2, Wifi } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { EmptyState } from "@/components/ui/empty-state"
 import { ErrorState } from "@/components/ui/error-state"
@@ -21,6 +22,7 @@ import { api, ApiError, type Connection, type ConnectionInventory } from "@/lib/
 
 interface FormState {
   name: string
+  type: "pve" | "pbs"
   host: string
   port: number
   authType: "token" | "password"
@@ -34,6 +36,7 @@ interface FormState {
 
 const emptyForm: FormState = {
   name: "",
+  type: "pve",
   host: "",
   port: 8006,
   authType: "token",
@@ -44,6 +47,8 @@ const emptyForm: FormState = {
   verifyTls: false,
   behindReverseProxy: false,
 }
+
+const DEFAULT_PORT: Record<FormState["type"], number> = { pve: 8006, pbs: 8007 }
 
 export function ConnectionsPage() {
   const queryClient = useQueryClient()
@@ -62,6 +67,7 @@ export function ConnectionsPage() {
     setEditingId(conn.id)
     setForm({
       name: conn.name,
+      type: conn.type,
       host: conn.host,
       port: conn.port,
       authType: conn.authType,
@@ -110,6 +116,7 @@ export function ConnectionsPage() {
       // empty field means "keep the existing credential".
       const body: Record<string, unknown> = {
         name: form.name,
+        type: form.type,
         host: form.host,
         port: form.port,
         authType: form.authType,
@@ -146,6 +153,26 @@ export function ConnectionsPage() {
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to remove connection"),
   })
 
+  // The export endpoints return a raw file (Content-Disposition: attachment),
+  // not JSON — bypasses the api.ts helper's JSON parsing and triggers a real
+  // browser save via a throwaway object-URL link, same technique as
+  // TopologyPage's SVG export.
+  async function downloadExport(connId: string, format: "terraform" | "ansible", filename: string) {
+    try {
+      const res = await fetch(`/api/v1/connections/${connId}/export/${format}`, { credentials: "include" })
+      if (!res.ok) throw new Error(`Export failed (${res.status})`)
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      toast.error(`Couldn't export as ${format === "terraform" ? "Terraform" : "Ansible"}`)
+    }
+  }
+
   async function removeConnection(conn: Connection) {
     const ok = await confirm({
       title: `Remove ${conn.name}?`,
@@ -180,6 +207,29 @@ export function ConnectionsPage() {
               <div className="space-y-1.5">
                 <Label>Name</Label>
                 <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Type</Label>
+                <Select
+                  value={form.type}
+                  onValueChange={(v) => {
+                    const type = v as FormState["type"]
+                    // Only nudge the port when it's still at the other type's
+                    // default — an admin who already typed a custom port
+                    // shouldn't have it silently overwritten by switching type.
+                    const port = form.port === DEFAULT_PORT[form.type] ? DEFAULT_PORT[type] : form.port
+                    setForm({ ...form, type, port })
+                  }}
+                  disabled={!!editingId}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pve">Proxmox VE (cluster or host)</SelectItem>
+                    <SelectItem value="pbs">Proxmox Backup Server</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-1.5">
                 <Label>Host</Label>
@@ -325,7 +375,7 @@ export function ConnectionsPage() {
             <Card key={conn.id}>
               <CardContent className="flex flex-wrap items-center justify-between gap-2 py-3">
                 <div className="min-w-0 flex-1">
-                  <p className="flex items-center gap-2 truncate font-medium">
+                  <p className="flex min-w-0 items-center gap-2 font-medium">
                     {status && <StatusDot status={status.online ? "ok" : "error"} />}
                     <span className="truncate">{conn.name}</span>
                   </p>
@@ -339,7 +389,25 @@ export function ConnectionsPage() {
                       <StatusDot status={status.online ? "ok" : "error"} />
                     </span>
                   )}
+                  <Badge variant="outline">{conn.type === "pbs" ? "PBS" : "PVE"}</Badge>
                   <Badge variant={conn.verifyTls ? "ok" : "default"}>{conn.verifyTls ? "TLS verified" : "TLS insecure"}</Badge>
+                  {conn.type === "pve" && (
+                    <DropdownMenu>
+                      <Hint label="Export inventory as IaC">
+                        <DropdownMenuTrigger asChild>
+                          <Button size="icon" variant="ghost" aria-label={`Export ${conn.name} inventory`}>
+                            <Download className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                      </Hint>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onSelect={() => downloadExport(conn.id, "terraform", `${conn.name}.tf`)}>Terraform (.tf)</DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => downloadExport(conn.id, "ansible", `${conn.name}-inventory.yml`)}>
+                          Ansible inventory (.yml)
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
                   <Hint label="Edit connection">
                     <Button size="icon" variant="ghost" onClick={() => startEdit(conn)} aria-label={`Edit ${conn.name}`}>
                       <Pencil className="h-4 w-4" />

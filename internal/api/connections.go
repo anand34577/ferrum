@@ -11,12 +11,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"ferrum/internal/pbs"
 	"ferrum/internal/pve"
 )
 
 type connectionDTO struct {
 	ID                 string `json:"id"`
 	Name               string `json:"name"`
+	Type               string `json:"type"` // "pve" | "pbs"
 	Host               string `json:"host"`
 	Port               int    `json:"port"`
 	AuthType           string `json:"authType"`
@@ -29,6 +31,7 @@ type connectionDTO struct {
 
 type createConnectionRequest struct {
 	Name               string `json:"name"`
+	Type               string `json:"type,omitempty"` // "pve" (default) | "pbs"
 	Host               string `json:"host"`
 	Port               int    `json:"port"`
 	AuthType           string `json:"authType"` // "token" | "password"
@@ -42,7 +45,7 @@ type createConnectionRequest struct {
 
 func (s *Server) listConnections(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.QueryContext(r.Context(), `
-		SELECT id, name, host, port, auth_type, COALESCE(username,''), COALESCE(token_id,''), verify_tls, behind_reverse_proxy, created_at
+		SELECT id, name, type, host, port, auth_type, COALESCE(username,''), COALESCE(token_id,''), verify_tls, behind_reverse_proxy, created_at
 		FROM connections ORDER BY name`)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
@@ -54,7 +57,7 @@ func (s *Server) listConnections(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var c connectionDTO
 		var verify, reverse int
-		if err := rows.Scan(&c.ID, &c.Name, &c.Host, &c.Port, &c.AuthType, &c.Username, &c.TokenID, &verify, &reverse, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Type, &c.Host, &c.Port, &c.AuthType, &c.Username, &c.TokenID, &verify, &reverse, &c.CreatedAt); err != nil {
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -71,8 +74,11 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	if req.Type == "" {
+		req.Type = "pve"
+	}
 	if req.Port == 0 {
-		req.Port = 8006
+		req.Port = defaultPortFor(req.Type)
 	}
 	if err := validateConnectionRequest(&req); err != nil {
 		writeErrorMsg(w, http.StatusBadRequest, err.Error())
@@ -97,9 +103,9 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 	id := uuid.NewString()
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err = s.db.ExecContext(r.Context(), `
-		INSERT INTO connections (id, name, host, port, auth_type, token_id, token_secret_enc, username, password_enc, verify_tls, behind_reverse_proxy, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, req.Name, req.Host, req.Port, req.AuthType, req.TokenID, tokenSecretEnc, req.Username, passwordEnc,
+		INSERT INTO connections (id, name, type, host, port, auth_type, token_id, token_secret_enc, username, password_enc, verify_tls, behind_reverse_proxy, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, req.Name, req.Type, req.Host, req.Port, req.AuthType, req.TokenID, tokenSecretEnc, req.Username, passwordEnc,
 		boolToInt(req.VerifyTLS), boolToInt(req.BehindReverseProxy), now, now,
 	)
 	if err != nil {
@@ -107,8 +113,17 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "connections.create", "connections", req.Name)
-	slog.Info("connection created", "id", id, "name", req.Name, "host", req.Host, "authType", req.AuthType)
+	slog.Info("connection created", "id", id, "name", req.Name, "type", req.Type, "host", req.Host, "authType", req.AuthType)
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
+}
+
+// defaultPortFor returns the conventional API port for a connection type
+// when the caller didn't specify one — 8006 for PVE, 8007 for PBS.
+func defaultPortFor(connType string) int {
+	if connType == "pbs" {
+		return 8007
+	}
+	return 8006
 }
 
 // updateConnectionRequest mirrors createConnectionRequest but every field is
@@ -116,6 +131,7 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 // name doesn't force re-entering a password/token.
 type updateConnectionRequest struct {
 	Name               *string `json:"name,omitempty"`
+	Type               *string `json:"type,omitempty"`
 	Host               *string `json:"host,omitempty"`
 	Port               *int    `json:"port,omitempty"`
 	AuthType           *string `json:"authType,omitempty"`
@@ -144,6 +160,13 @@ func (s *Server) updateConnection(w http.ResponseWriter, r *http.Request) {
 
 	if req.Name != nil {
 		set("name", *req.Name)
+	}
+	if req.Type != nil {
+		if *req.Type != "pve" && *req.Type != "pbs" {
+			writeErrorMsg(w, http.StatusBadRequest, `type must be "pve" or "pbs"`)
+			return
+		}
+		set("type", *req.Type)
 	}
 	if req.Host != nil {
 		set("host", *req.Host)
@@ -237,11 +260,31 @@ func (s *Server) testConnection(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	if req.Type == "" {
+		req.Type = "pve"
+	}
 	if req.Port == 0 {
-		req.Port = 8006
+		req.Port = defaultPortFor(req.Type)
 	}
 	if err := validateConnectionRequest(&req); err != nil {
 		writeErrorMsg(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if req.Type == "pbs" {
+		client := pbs.New(req.Host, req.Port, pbs.WithInsecureSkipVerify(!req.VerifyTLS))
+		if req.AuthType == "token" {
+			client.WithAPIToken(req.TokenID, req.TokenSecret)
+		} else if err := client.Login(r.Context(), req.Username, req.Password); err != nil {
+			writeErrorMsg(w, http.StatusBadGateway, "login failed: "+err.Error())
+			return
+		}
+		version, err := client.Version(r.Context())
+		if err != nil {
+			writeErrorMsg(w, http.StatusBadGateway, "connection failed: "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": version.Version})
 		return
 	}
 
@@ -267,6 +310,9 @@ func validateConnectionRequest(req *createConnectionRequest) error {
 	if req.Name == "" || req.Host == "" {
 		return fmt.Errorf("name and host are required")
 	}
+	if req.Type != "" && req.Type != "pve" && req.Type != "pbs" {
+		return fmt.Errorf(`type must be "pve" or "pbs"`)
+	}
 	if req.Port < 1 || req.Port > 65535 {
 		return fmt.Errorf("port must be between 1 and 65535")
 	}
@@ -286,6 +332,27 @@ func validateConnectionRequest(req *createConnectionRequest) error {
 // reusing the resolver's cached ticket when one is live.
 func (s *Server) clientFor(ctx context.Context, id string) (*pve.Client, error) {
 	return s.connections.ClientFor(ctx, id)
+}
+
+// pbsClientFor builds an authenticated pbs.Client for a stored connection,
+// rejecting one that isn't type=pbs so a pve-typed connection id can't be
+// used to reach the PBS handlers (and vice versa via clientFor).
+func (s *Server) pbsClientFor(ctx context.Context, id string) (*pbs.Client, error) {
+	connType, err := s.connectionType(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if connType != "pbs" {
+		return nil, fmt.Errorf("connection %s is not a PBS connection", id)
+	}
+	return s.connections.PBSClientFor(ctx, id)
+}
+
+// connectionType looks up a stored connection's type ("pve" | "pbs").
+func (s *Server) connectionType(ctx context.Context, id string) (string, error) {
+	var connType string
+	err := s.db.QueryRowContext(ctx, `SELECT type FROM connections WHERE id = ?`, id).Scan(&connType)
+	return connType, err
 }
 
 func boolToInt(b bool) int {

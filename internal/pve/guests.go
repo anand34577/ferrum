@@ -2,6 +2,7 @@ package pve
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"sort"
@@ -295,6 +296,65 @@ func (c *Client) MigrateGuest(ctx context.Context, guestType, node string, vmid 
 	}
 	return out.Data, nil
 }
+
+// RemoteMigrateOptions configures a cross-cluster (remote-to-remote) live
+// migration of a qemu VM via PVE's native remote-migrate API — PDM's
+// headline feature. Unlike MigrateOptions' TargetNode (a node name within
+// the *same* cluster), the target here lives on an entirely different PVE
+// connection, addressed through TargetEndpoint.
+type RemoteMigrateOptions struct {
+	// TargetEndpoint is PVE's "proxmox-remote" connection string for the
+	// destination cluster: "apitoken=PVEAPIToken=<user>@<realm>!<tokenid>=<secret>,host=<host>,port=<port>,fingerprint=<sha256-fingerprint>".
+	// Built by the caller from the target connection's stored credentials —
+	// see internal/api/guests.go's remoteMigrateGuest, which is also the
+	// only place the decrypted secret is ever read.
+	TargetEndpoint string
+	TargetNode     string
+	TargetVMID     int    // 0 keeps the source vmid on the target
+	TargetStorage  string // required: PVE has no "same storage name" default across clusters
+	TargetBridge   string // optional: remap the guest's network bridge on the target
+	Online         bool   // live migration; the guest keeps running throughout
+	// DeleteSource removes the guest from the source cluster once the
+	// migration completes successfully.
+	DeleteSource bool
+}
+
+// RemoteMigrateGuest starts a qemu VM's cross-cluster live migration to a
+// different PVE connection via POST /nodes/{node}/qemu/{vmid}/remote_migrate.
+// qemu only: PVE has no equivalent remote-migrate endpoint for lxc on
+// versions available at the time of writing (see ErrLXCRemoteMigrateUnsupported).
+func (c *Client) RemoteMigrateGuest(ctx context.Context, node string, vmid int, opts RemoteMigrateOptions) (string, error) {
+	form := url.Values{
+		"target-endpoint": {opts.TargetEndpoint},
+		"target-storage":  {opts.TargetStorage},
+	}
+	if opts.TargetVMID > 0 {
+		form.Set("target-vmid", strconv.Itoa(opts.TargetVMID))
+	}
+	if opts.TargetBridge != "" {
+		form.Set("target-bridge", opts.TargetBridge)
+	}
+	if opts.Online {
+		form.Set("online", "1")
+	}
+	if opts.DeleteSource {
+		form.Set("delete", "1")
+	}
+	var out struct {
+		Data string `json:"data"`
+	}
+	if err := c.post(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/remote_migrate", PathEscape(node), vmid), form, &out); err != nil {
+		return "", err
+	}
+	return out.Data, nil
+}
+
+// ErrLXCRemoteMigrateUnsupported reports that remote (cross-cluster)
+// migration was requested for an LXC container — PVE doesn't expose a
+// remote_migrate endpoint for lxc, unlike qemu, so this is a hard
+// unsupported-operation error rather than an upstream call that could
+// silently fail.
+var ErrLXCRemoteMigrateUnsupported = errors.New("pve: remote migration is not supported for LXC containers on this PVE version — only qemu VMs support cross-cluster live migration")
 
 // MigratePreconditionResult reports whether/how a guest can migrate — call
 // before MigrateGuest so the UI can warn about local disks or an

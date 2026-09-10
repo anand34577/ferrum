@@ -81,6 +81,7 @@ export interface User {
 export interface Connection {
   id: string
   name: string
+  type: "pve" | "pbs"
   host: string
   port: number
   authType: "token" | "password"
@@ -171,6 +172,55 @@ export interface RRDPoint {
   pressurememorysome?: number
   pressurememoryfull?: number
   extra?: Record<string, number>
+}
+
+// Mirrors api.ForecastResult (internal/api/forecast.go).
+export interface ForecastResult {
+  metric: "disk" | "mem" | "cpu"
+  currentPct: number
+  trend: "rising" | "falling" | "flat"
+  daysToWarning?: number
+  daysToCritical?: number
+  projectedDate90?: string
+  projectedDate100?: string
+  confidence: "low" | "medium" | "high"
+  sampleSize: number
+  rSquared: number
+}
+
+// Mirrors api.capacityWarning (internal/api/forecast.go).
+export interface CapacityWarning {
+  connectionId: string
+  connectionName: string
+  node: string
+  metric: "disk" | "mem" | "cpu"
+  currentPct: number
+  trend: "rising" | "falling" | "flat"
+  daysToWarning?: number
+  daysToCritical?: number
+  confidence: "low" | "medium" | "high"
+}
+
+// Mirrors api.healthComponent (internal/api/health.go).
+export interface HealthComponent {
+  label: string
+  points: number
+  max: number
+}
+
+// Mirrors api.healthScoreResult (internal/api/health.go).
+export interface HealthScoreResult {
+  connectionId?: string
+  connectionName?: string
+  score: number
+  components: HealthComponent[]
+}
+
+// Mirrors the fleetHealthScore handler's response (internal/api/health.go).
+export interface FleetHealthScore {
+  score: number
+  worst?: HealthScoreResult
+  connections: HealthScoreResult[]
 }
 
 // Mirrors pve.FirewallRule (internal/pve/firewall.go).
@@ -852,6 +902,19 @@ export interface ApiKey {
 // Returned once, at creation — never retrievable again.
 export interface CreatedApiKey extends ApiKey {
   key: string
+}
+
+// Mirrors auth.Session (internal/auth/sessions.go) — one signed-in device,
+// for the Sessions panel on ProfilePage and its admin equivalent on the
+// Users page. The session token itself is never exposed.
+export interface Session {
+  id: string
+  createdAt: string
+  lastSeenAt?: string
+  expiresAt: string
+  ip?: string
+  userAgent?: string
+  current: boolean
 }
 
 // Mirrors api.aiModelDTO — one selectable model under a provider. label is

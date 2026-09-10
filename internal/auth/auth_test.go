@@ -61,11 +61,11 @@ func TestLoginRoundTrip(t *testing.T) {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 
-	if _, _, err := svc.Login(ctx, "admin", "wrong-password"); err != ErrInvalidCredentials {
+	if _, _, err := svc.Login(ctx, "admin", "wrong-password", "127.0.0.1", "test-agent"); err != ErrInvalidCredentials {
 		t.Fatalf("Login with wrong password: got %v, want ErrInvalidCredentials", err)
 	}
 
-	user, token, err := svc.Login(ctx, "admin", "correct-password")
+	user, token, err := svc.Login(ctx, "admin", "correct-password", "127.0.0.1", "test-agent")
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}

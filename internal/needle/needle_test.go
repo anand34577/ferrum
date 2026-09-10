@@ -2,8 +2,52 @@ package needle
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"testing"
 )
+
+func TestWriteToolsFileRespectsMaxToolsEnvVar(t *testing.T) {
+	SetToolCatalog(func() []ToolDef {
+		return []ToolDef{
+			{Name: "a", InputSchema: map[string]any{"type": "object"}},
+			{Name: "b", InputSchema: map[string]any{"type": "object"}},
+			{Name: "c", InputSchema: map[string]any{"type": "object"}},
+		}
+	})
+	t.Cleanup(func() { SetToolCatalog(nil) })
+
+	readTools := func() []needleTool {
+		path, err := writeToolsFile()
+		if err != nil {
+			t.Fatalf("writeToolsFile: %v", err)
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading tools file: %v", err)
+		}
+		var out []needleTool
+		if err := json.Unmarshal(b, &out); err != nil {
+			t.Fatalf("unmarshaling tools file: %v", err)
+		}
+		return out
+	}
+
+	t.Setenv("FERRUM_NEEDLE_MAX_TOOLS", "2")
+	if got := readTools(); len(got) != 2 || got[0].Name != "a" || got[1].Name != "b" {
+		t.Fatalf("with FERRUM_NEEDLE_MAX_TOOLS=2, got %+v, want the first 2 tools", got)
+	}
+
+	t.Setenv("FERRUM_NEEDLE_MAX_TOOLS", "0")
+	if got := readTools(); len(got) != 3 {
+		t.Fatalf("with FERRUM_NEEDLE_MAX_TOOLS=0, got %d tools, want all 3 (no limit)", len(got))
+	}
+
+	t.Setenv("FERRUM_NEEDLE_MAX_TOOLS", "not-a-number")
+	if got := readTools(); len(got) != 3 {
+		t.Fatalf("with a garbage FERRUM_NEEDLE_MAX_TOOLS, got %d tools, want all 3 (no limit)", len(got))
+	}
+}
 
 func TestCrashInfoReportsProcessDeath(t *testing.T) {
 	m := NewManager("")
@@ -149,6 +193,9 @@ func TestToOpenAIMessageWithFunctionCalls(t *testing.T) {
 	if _, isString := fn["arguments"].(string); !isString {
 		t.Fatalf("function arguments must be a JSON string (matching the OpenAI shape), got %T", fn["arguments"])
 	}
+	if msg["reasoning_content"] != "user asked to start the guest" {
+		t.Fatalf("reasoning_content = %v, want the model's reasoning surfaced alongside the tool call", msg["reasoning_content"])
+	}
 }
 
 func TestToOpenAIMessageFallsBackToReasoningWhenNoTextOrCalls(t *testing.T) {
@@ -162,14 +209,28 @@ func TestToOpenAIMessageFallsBackToReasoningWhenNoTextOrCalls(t *testing.T) {
 	}
 }
 
-func TestToOpenAIMessagePrefersText(t *testing.T) {
-	nr := &needleResponse{Text: "the answer", Reasoning: "should not be used"}
+func TestToOpenAIMessagePrefersTextAndSurfacesReasoningSeparately(t *testing.T) {
+	nr := &needleResponse{Text: "the answer", Reasoning: "thinking about it"}
 	msg, err := toOpenAIMessage(nr)
 	if err != nil {
 		t.Fatalf("toOpenAIMessage: %v", err)
 	}
 	if msg["content"] != "the answer" {
 		t.Fatalf("content = %v, want %q", msg["content"], "the answer")
+	}
+	if msg["reasoning_content"] != "thinking about it" {
+		t.Fatalf("reasoning_content = %v, want the distinct reasoning text", msg["reasoning_content"])
+	}
+}
+
+func TestToOpenAIMessageOmitsReasoningWhenIdenticalToText(t *testing.T) {
+	nr := &needleResponse{Text: "same", Reasoning: "same"}
+	msg, err := toOpenAIMessage(nr)
+	if err != nil {
+		t.Fatalf("toOpenAIMessage: %v", err)
+	}
+	if _, ok := msg["reasoning_content"]; ok {
+		t.Fatalf("reasoning_content = %v, want it omitted when identical to content", msg["reasoning_content"])
 	}
 }
 

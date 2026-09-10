@@ -17,6 +17,7 @@ import { PageHeader } from "@/components/ui/page-header"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Hint } from "@/components/ui/tooltip"
 import { api, ApiError, type AlertInstance, type AlertRule, type ConnectionHealth, type ConnectionInventory } from "@/lib/api"
+import { formatAlertValue } from "@/lib/utils"
 
 /** How long ago `since` was, as a short "3h 12m" style duration — connection
  * downtime is the one alert-adjacent number worth reading at a glance. */
@@ -38,6 +39,9 @@ const METRIC_LABELS: Record<string, string> = {
   guest_cpu: "Guest CPU %",
   guest_mem: "Guest Memory %",
   storage_usage: "Storage Pool Usage %",
+  cert_expiry: "Certificate expiry",
+  connection_stale: "Connection unreachable",
+  storage_orphan_disk: "Orphaned volume",
 }
 
 export function AlertsPage() {
@@ -140,7 +144,7 @@ export function AlertsPage() {
         meta: { hideBelowMd: true },
         cell: (c) => (
           <span className="font-mono text-xs tabular">
-            {c.row.original.value.toFixed(1)}% ≥ {c.row.original.threshold}%
+            {formatAlertValue(c.row.original.metric, c.row.original.value, c.row.original.threshold)}
           </span>
         ),
       },

@@ -6,6 +6,17 @@ Fleet control for Proxmox VE — a single dashboard for every cluster and standa
 - **Backend:** Go (chi router), SQLite or PostgreSQL
 - **Frontend:** React + TypeScript, Vite, Tailwind CSS v4
 
+## Features
+
+- **Fleet-wide overview** — every connection (PVE cluster, standalone node, or PBS remote) rolled up into one dashboard: node/guest counts, CPU/memory/storage, active alerts, and a drag-and-drop customizable dashboard with 20+ widgets.
+- **Inventory & operations** — nodes, VMs, and LXCs with live consoles/shells (noVNC + xterm.js), snapshots, guest agent file browser, bulk start/stop/migrate, and cross-cluster guest migration.
+- **Storage & backups** — pool usage and Ceph health across every connection, backup job status and replication, and PBS remote integration alongside native PVE storage.
+- **High availability, firewall & SDN** — HA groups/resources, cluster and per-node firewall rules, and SDN zones/VNets/subnets, all per connection.
+- **Alerting & automation** — threshold-based alerts (CPU/memory/disk/guest), config drift detection, guest lifecycle policies, capacity forecasting, a fleet health score, scheduled health-digest emails, and Terraform/Ansible inventory export.
+- **Integrations** — outbound webhooks for real-time events, a REST API and MCP server (scoped API keys, so any MCP-capable agent or script can drive Ferrum), and a built-in AI Assistant that can use any OpenAI-compatible provider — including a zero-config local model (Needle 2) with no API key or network required.
+- **Access & auditing** — per-user roles, optional OIDC single sign-on, session/certificate monitoring, and a full audit log of every mutating action across the UI, REST API, and MCP.
+- **A dozen look-and-feel presets** — Enterprise, Proxmox-native, Terminal, Glass Flight Deck, Midnight, Paper, Glassmorphism, Neumorphism, Brutalist, Solarized, High Contrast, and Aurora — each with light/dark and a choice of accent colors.
+
 ## Screenshots
 
 Captured against a mock Proxmox cluster (`prod-cluster`: 3 nodes, 16 VMs/LXCs, Ceph + NFS storage) to show the UI populated the way it looks on a real fleet. Click any thumbnail for the full-size image.
@@ -171,6 +182,8 @@ On any other platform (32-bit, RISC-V, Windows/ARM64, ...) there's no bundled bi
 2. Point Ferrum at it: set `FERRUM_NEEDLE_BIN=/path/to/needle` (or `needleBinPath` in `config.yaml`) before starting Ferrum. This also overrides the bundled binary on a supported platform, if you'd rather run a different build.
 
 Ferrum starts the binary itself (as a local subprocess, `127.0.0.1`-only) the first time it's used, and stops it on shutdown. If no binary is bundled for the platform and `FERRUM_NEEDLE_BIN` isn't set (or doesn't exist), this provider simply isn't usable — every other provider is unaffected.
+
+**Troubleshooting on small ARM boards (Raspberry Pi and similar SBCs):** Needle does a one-time "tool retrieval" pass over Ferrum's full tool catalog (~60 tools) the first time it's used, which briefly uses noticeably more memory and CPU than steady-state chat — Ferrum already waits up to 60s for that first startup. On a board with very little RAM this pass can get the subprocess killed by the kernel's OOM-killer instead; the error will say `needle process exited: signal: killed`. If you hit that, set `FERRUM_NEEDLE_MAX_TOOLS=<n>` to cap how many tools Needle is given (e.g. `10` keeps just the original read-only lookup tools), trading away the newer create/manage tools for a much lighter embedding pass. If it still fails, the board likely doesn't have enough RAM to run even this small a model reliably — use a real OpenAI-compatible provider instead (a cheap/free hosted API, or Ollama on a separate, beefier machine).
 
 ## API access, MCP, and audit logging
 

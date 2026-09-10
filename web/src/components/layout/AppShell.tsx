@@ -17,12 +17,14 @@ import {
   Settings,
   Shield,
   ShieldCheck,
+  Layers3,
   Sparkles,
   Sun,
   Terminal,
   UserRound,
   Users,
   Waypoints,
+  Webhook,
 } from "lucide-react"
 import { type ReactNode, useState } from "react"
 import { useLocation, useNavigate } from "react-router-dom"
@@ -84,6 +86,7 @@ const navGroups: { label: string; items: NavItemSpec[] }[] = [
       { to: "/alerts", label: "Alerts", icon: AlertTriangle },
       { to: "/tasks", label: "Task Center", icon: Terminal },
       { to: "/ai-assistant", label: "AI Assistant", icon: Sparkles },
+      { to: "/bulk-operations", label: "Bulk Operations", icon: Layers3, adminOnly: true },
     ],
   },
   {
@@ -91,6 +94,7 @@ const navGroups: { label: string; items: NavItemSpec[] }[] = [
     items: [
       { to: "/connections", label: "Connections", icon: Network, adminOnly: true },
       { to: "/users", label: "Users", icon: Users, adminOnly: true },
+      { to: "/webhooks", label: "Webhooks", icon: Webhook, adminOnly: true },
       { to: "/audit", label: "Audit Log", icon: ClipboardList, adminOnly: true },
       { to: "/settings", label: "Settings", icon: Settings, adminOnly: true },
     ],

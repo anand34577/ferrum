@@ -4,6 +4,7 @@ import { useState } from "react"
 import { toast } from "sonner"
 import { ApiKeysCard } from "@/components/profile/ApiKeysCard"
 import { McpIntegrationCard } from "@/components/profile/McpIntegrationCard"
+import { SessionsCard } from "@/components/profile/SessionsCard"
 import { AppearanceCard } from "@/components/settings/AppearanceCard"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -268,6 +269,7 @@ export function ProfilePage() {
         </CardContent>
       </Card>
 
+      <SessionsCard />
       <ApiKeysCard />
       <McpIntegrationCard />
     </div>

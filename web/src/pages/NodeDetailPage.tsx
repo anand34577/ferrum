@@ -431,12 +431,20 @@ export function NodeDetailPage() {
                     {storageQuery.data?.map((s) => {
                       const pct = s.total ? ((s.used ?? 0) / s.total) * 100 : 0
                       return (
-                        <div key={s.storage} className="flex flex-wrap items-center gap-3 text-sm">
-                          <span className="w-32 truncate font-medium">{s.storage}</span>
-                          <Badge>{s.type}</Badge>
-                          {s.shared === 1 && <Badge variant="ok">Shared</Badge>}
-                          <Badge variant={s.active === 0 ? "error" : "default"}>{s.active === 0 ? "Inactive" : "Active"}</Badge>
-                          <Meter value={pct} label={`${s.storage} usage`} className="min-w-16 flex-1" />
+                        // Fixed-width outer columns (not auto) — each row is
+                        // its own independent grid, so anything narrower than
+                        // its content (a name/badge cluster that's 2 badges
+                        // on one row and 3 on the next) let the Meter column
+                        // start and end at a different x per row even at the
+                        // same fill %.
+                        <div key={s.storage} className="grid grid-cols-[minmax(0,14rem)_1fr_9rem] items-center gap-3 text-sm">
+                          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                            <span className="truncate font-medium">{s.storage}</span>
+                            <Badge>{s.type}</Badge>
+                            {s.shared === 1 && <Badge variant="ok">Shared</Badge>}
+                            <Badge variant={s.active === 0 ? "error" : "default"}>{s.active === 0 ? "Inactive" : "Active"}</Badge>
+                          </div>
+                          <Meter value={pct} label={`${s.storage} usage`} className="min-w-16" />
                           <span className="shrink-0 whitespace-nowrap text-right text-xs text-[var(--text-muted)] tabular">{formatBytes(s.used ?? 0)} / {formatBytes(s.total ?? 0)}</span>
                         </div>
                       )

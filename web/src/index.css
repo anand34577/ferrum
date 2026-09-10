@@ -277,6 +277,42 @@
   --accent-800: #2e3844;
 }
 
+[data-accent="amber"] {
+  --accent-50: #fbf1e2;
+  --accent-100: #f3ddb4;
+  --accent-200: #e9c37e;
+  --accent-300: #dba54c;
+  --accent-400: #c98d2c;
+  --accent-500: #ad741c;
+  --accent-600: #8c5c16;
+  --accent-700: #714a14;
+  --accent-800: #573910;
+}
+
+[data-accent="rose"] {
+  --accent-50: #fbebf1;
+  --accent-100: #f5cddc;
+  --accent-200: #eba3c0;
+  --accent-300: #dd739e;
+  --accent-400: #cd4c81;
+  --accent-500: #b23568;
+  --accent-600: #8f2a54;
+  --accent-700: #732244;
+  --accent-800: #591a35;
+}
+
+[data-accent="teal"] {
+  --accent-50: #e6f6f6;
+  --accent-100: #c3e8e7;
+  --accent-200: #92d5d3;
+  --accent-300: #5bbdba;
+  --accent-400: #2fa39f;
+  --accent-500: #16847f;
+  --accent-600: #0f6a66;
+  --accent-700: #0d5551;
+  --accent-800: #0a413e;
+}
+
 /* ==========================================================================
  * Look-and-feel presets — a whole-app visual register, orthogonal to the
  * light/dark toggle and the accent color. Applied as [data-look] on <html>

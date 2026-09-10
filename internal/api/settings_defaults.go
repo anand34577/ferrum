@@ -99,7 +99,7 @@ func (s *Server) putDefaultPreferences(w http.ResponseWriter, r *http.Request) {
 	}
 	if patch.Accent != nil {
 		if !validAccents[*patch.Accent] {
-			writeErrorMsg(w, http.StatusBadRequest, "accent must be one of: oxide, azure, verdant, violet, slate")
+			writeErrorMsg(w, http.StatusBadRequest, "accent must be one of: oxide, azure, verdant, violet, slate, amber, rose, teal")
 			return
 		}
 		row.accent = *patch.Accent

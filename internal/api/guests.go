@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -177,6 +179,184 @@ func (s *Server) migrateGuest(w http.ResponseWriter, r *http.Request) {
 	s.audit(r, "vm.migrate", "vm", node+"/"+guestType+"/"+chi.URLParam(r, "vmid"))
 	slog.Info("guest migration started", "connectionId", connID, "vmid", vmid, "target", req.TargetNode, "online", req.Online)
 	writeJSON(w, http.StatusOK, map[string]string{"upid": upid})
+}
+
+// remoteMigrateGuestRequest configures a cross-cluster (remote-to-remote)
+// live migration — PVE's native remote_migrate, addressed at a *different*
+// stored connection than the one the guest currently lives on.
+type remoteMigrateGuestRequest struct {
+	TargetConnID  string `json:"targetConnId"`
+	TargetNode    string `json:"targetNode"`
+	TargetVMID    int    `json:"targetVmid,omitempty"`
+	TargetStorage string `json:"targetStorage"`
+	TargetBridge  string `json:"targetBridge,omitempty"`
+	Online        bool   `json:"online"`
+	DeleteSource  bool   `json:"deleteSource,omitempty"`
+}
+
+// remoteMigrateGuest starts a qemu VM's live migration to a node on a
+// *different* PVE connection (a different cluster/standalone host), via
+// PVE 8.x's native remote_migrate API — the cross-cluster counterpart to
+// migrateGuest above, which only moves a guest within its own cluster.
+//
+// qemu only: PVE has no remote_migrate endpoint for lxc at the time of
+// writing (see pve.ErrLXCRemoteMigrateUnsupported) — that's a hard
+// unsupported-operation error, not an upstream call left to fail
+// unpredictably.
+//
+// The target connection's decrypted API token is read server-side only
+// (via s.connections.TargetCredentials) to build PVE's target-endpoint
+// connection string; it is never echoed back in any response.
+func (s *Server) remoteMigrateGuest(w http.ResponseWriter, r *http.Request) {
+	srcConnID, guestType, node := chi.URLParam(r, "id"), chi.URLParam(r, "type"), chi.URLParam(r, "node")
+	vmid, err := vmidParam(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if guestType != "qemu" {
+		writeErrorMsg(w, http.StatusBadRequest, pve.ErrLXCRemoteMigrateUnsupported.Error())
+		return
+	}
+
+	var req remoteMigrateGuestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.TargetConnID == "" || req.TargetNode == "" || req.TargetStorage == "" {
+		writeErrorMsg(w, http.StatusBadRequest, "targetConnId, targetNode, and targetStorage are required")
+		return
+	}
+	if req.TargetConnID == srcConnID {
+		writeErrorMsg(w, http.StatusBadRequest, "targetConnId must be a different connection — use /migrate for a same-cluster move")
+		return
+	}
+
+	srcType, err := s.connectionType(r.Context(), srcConnID)
+	if err != nil {
+		writeErrorMsg(w, http.StatusBadGateway, "source connection not found")
+		return
+	}
+	targetType, err := s.connectionType(r.Context(), req.TargetConnID)
+	if err != nil {
+		writeErrorMsg(w, http.StatusBadGateway, "target connection not found")
+		return
+	}
+	if srcType != "pve" || targetType != "pve" {
+		writeErrorMsg(w, http.StatusBadRequest, "both connections must be type=pve for remote migration")
+		return
+	}
+
+	srcClient, err := s.clientFor(r.Context(), srcConnID)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+
+	targetEndpoint, err := s.buildRemoteMigrateTargetEndpoint(r.Context(), req.TargetConnID, req.TargetNode)
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+
+	upid, err := srcClient.RemoteMigrateGuest(r.Context(), node, vmid, pve.RemoteMigrateOptions{
+		TargetEndpoint: targetEndpoint,
+		TargetNode:     req.TargetNode,
+		TargetVMID:     req.TargetVMID,
+		TargetStorage:  req.TargetStorage,
+		TargetBridge:   req.TargetBridge,
+		Online:         req.Online,
+		DeleteSource:   req.DeleteSource,
+	})
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(r, "vm.remote_migrate", "vm", node+"/"+guestType+"/"+chi.URLParam(r, "vmid"))
+	slog.Info("guest remote migration started", "sourceConnectionId", srcConnID, "targetConnectionId", req.TargetConnID,
+		"vmid", vmid, "targetNode", req.TargetNode, "online", req.Online)
+	writeJSON(w, http.StatusOK, map[string]string{"upid": upid})
+}
+
+// buildRemoteMigrateTargetEndpoint assembles PVE's "proxmox-remote"
+// connection string for the target cluster: its host/port/API token (read
+// server-side from the stored connection, never exposed to the frontend)
+// plus the target node's pveproxy TLS fingerprint, which PVE's
+// remote_migrate call uses to pin the connection instead of trusting a CA.
+//
+// remote_migrate performs the migration by talking to the target node's own
+// API directly, so host must resolve to *that* node specifically — not just
+// any reachable member of the target cluster. When the stored connection's
+// host isn't already the target node (e.g. it points at a different member
+// or a load balancer), the target node's own IP is looked up via its
+// cluster status and used instead.
+func (s *Server) buildRemoteMigrateTargetEndpoint(ctx context.Context, targetConnID, targetNode string) (string, error) {
+	host, port, tokenID, tokenSecret, err := s.connections.TargetCredentials(ctx, targetConnID)
+	if err != nil {
+		return "", fmt.Errorf("target connection credentials: %w", err)
+	}
+
+	targetClient, err := s.clientFor(ctx, targetConnID)
+	if err != nil {
+		return "", err
+	}
+	if nodeHost, err := nodeIPFromClusterStatus(ctx, targetClient, targetNode); err == nil && nodeHost != "" {
+		host = nodeHost
+	}
+
+	fingerprint, err := s.targetNodeFingerprint(ctx, targetConnID, targetNode)
+	if err != nil {
+		return "", fmt.Errorf("target node fingerprint: %w", err)
+	}
+
+	return fmt.Sprintf("apitoken=PVEAPIToken=%s=%s,host=%s,port=%d,fingerprint=%s",
+		tokenID, tokenSecret, host, port, fingerprint), nil
+}
+
+// nodeIPFromClusterStatus looks up a specific node's IP from the target
+// cluster's own /cluster/status — used so a stored connection pointed at
+// one cluster member can still remote-migrate to any other member by name.
+// Returns "" (not an error) when the node isn't found, e.g. a standalone
+// (non-clustered) target where the connection's host is already correct.
+func nodeIPFromClusterStatus(ctx context.Context, client *pve.Client, node string) (string, error) {
+	status, err := client.ClusterStatus(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, entry := range status {
+		if entry.Type == "node" && entry.Name == node && entry.IP != "" {
+			return entry.IP, nil
+		}
+	}
+	return "", nil
+}
+
+// targetNodeFingerprint fetches the target node's pveproxy certificate
+// fingerprint through the already-authenticated target client (trust is
+// bootstrapped the same way PVE's own cluster-join flow does it: connect
+// with the connection's configured verify-TLS setting, then hand the
+// fingerprint we observe to the source cluster to pin future connections).
+func (s *Server) targetNodeFingerprint(ctx context.Context, targetConnID, targetNode string) (string, error) {
+	targetClient, err := s.clientFor(ctx, targetConnID)
+	if err != nil {
+		return "", err
+	}
+	certs, err := targetClient.NodeCertificates(ctx, targetNode)
+	if err != nil {
+		return "", err
+	}
+	for _, cert := range certs {
+		if cert.Filename == "pveproxy.pem" && cert.Fingerprint != "" {
+			return cert.Fingerprint, nil
+		}
+	}
+	for _, cert := range certs {
+		if cert.Fingerprint != "" {
+			return cert.Fingerprint, nil
+		}
+	}
+	return "", fmt.Errorf("no TLS certificate fingerprint found for node %s", targetNode)
 }
 
 // migratePrecondition surfaces PVE's pre-migration check (local disks,

@@ -6,11 +6,13 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Combobox } from "@/components/ui/combobox"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { EmptyState } from "@/components/ui/empty-state"
 import { ErrorState } from "@/components/ui/error-state"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { ListSearch } from "@/components/ui/list-search"
 import { PageHeader } from "@/components/ui/page-header"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -191,6 +193,12 @@ export function HAPage() {
   const guestOptionsForConn = (c: ConnectionInventory): ClusterResource[] =>
     (c.resources ?? []).filter((r) => r.type === "qemu" || r.type === "lxc")
 
+  // Resources is the one list here that scales with guest count rather than
+  // with how much an admin has manually configured (a big cluster can have
+  // hundreds of HA-managed guests) — Groups/Rules stay small and hand-typed,
+  // so only Resources gets a search box, one per connection.
+  const [resourceFilter, setResourceFilter] = useState<Record<string, string>>({})
+
   return (
     <div className="space-y-4">
       <PageHeader
@@ -235,21 +243,19 @@ export function HAPage() {
                 </div>
                 <div className="space-y-1.5">
                   <Label>Guest</Label>
-                  <Select value={form.guestId} onValueChange={(v) => setForm({ ...form, guestId: v })}>
-                    <SelectTrigger>
-                      <SelectValue placeholder={form.connId ? "Pick a guest…" : "Pick a connection first"} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(connections.find((c) => c.connectionId === form.connId)
-                        ? guestOptionsForConn(connections.find((c) => c.connectionId === form.connId)!)
-                        : []
-                      ).map((g) => (
-                        <SelectItem key={g.id} value={String(g.id)}>
-                          {g.name} <span className="font-mono text-[var(--text-muted)]">#{g.vmid}</span>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  {/* Combobox, not Select — a cluster can hand this hundreds
+                      of guests and Select has no way to search one. */}
+                  <Combobox
+                    value={form.guestId}
+                    onChange={(v) => setForm({ ...form, guestId: v })}
+                    placeholder={form.connId ? "Pick a guest…" : "Pick a connection first"}
+                    searchPlaceholder="Search guests..."
+                    disabled={!form.connId}
+                    options={(connections.find((c) => c.connectionId === form.connId)
+                      ? guestOptionsForConn(connections.find((c) => c.connectionId === form.connId)!)
+                      : []
+                    ).map((g) => ({ value: String(g.id), label: `${g.name} #${g.vmid}` }))}
+                  />
                   {sid && <p className="text-xs text-[var(--text-faint)]">Service ID: <span className="font-mono">{sid}</span></p>}
                 </div>
                 <div className="space-y-1.5">
@@ -409,10 +415,23 @@ export function HAPage() {
                 </div>
                 <div>
                   <p className="mb-2 text-xs font-medium text-[var(--text-muted)]">Resources</p>
-                  <div className="space-y-1.5">
+                  {(resourceQueries[i].data?.length ?? 0) > 8 && (
+                    <ListSearch
+                      value={resourceFilter[c.connectionId] ?? ""}
+                      onChange={(v) => setResourceFilter((f) => ({ ...f, [c.connectionId]: v }))}
+                      placeholder="Search HA resources..."
+                      className="mb-2"
+                    />
+                  )}
+                  <div className={(resourceQueries[i].data?.length ?? 0) > 10 ? "max-h-72 space-y-1.5 overflow-y-auto pr-1" : "space-y-1.5"}>
                     {resourceQueries[i].isError && <p className="text-xs text-[var(--text-muted)]">Couldn't load HA resources for this connection.</p>}
                     {resourceQueries[i].data?.length === 0 && <p className="text-sm text-[var(--text-muted)]">No HA-managed guests.</p>}
-                    {resourceQueries[i].data?.map((res) => (
+                    {(resourceQueries[i].data ?? [])
+                      .filter((res) => {
+                        const q = (resourceFilter[c.connectionId] ?? "").toLowerCase()
+                        return !q || res.sid.toLowerCase().includes(q) || res.group?.toLowerCase().includes(q)
+                      })
+                      .map((res) => (
                       <div key={res.sid} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
                         <span className="truncate font-mono text-xs">{res.sid}</span>
                         <div className="flex flex-wrap items-center gap-2">

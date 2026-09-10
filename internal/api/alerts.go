@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -23,7 +24,14 @@ type alertRuleDTO struct {
 }
 
 func (s *Server) listAlertRules(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.QueryContext(r.Context(), `SELECT id, name, metric, connection_id, threshold, severity, enabled, created_at FROM alert_rules ORDER BY name`)
+	// Excludes the built-in "system-*" rules the alert evaluator seeds for
+	// itself (certificate expiry, connection staleness — see
+	// internal/poller/certificates.go): they back alert_instances the same
+	// way a user-created rule does, but aren't meant to be edited or
+	// deleted from this admin-facing list.
+	rows, err := s.db.QueryContext(r.Context(), `
+		SELECT id, name, metric, connection_id, threshold, severity, enabled, created_at
+		FROM alert_rules WHERE id NOT LIKE 'system-%' ORDER BY name`)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -88,6 +96,10 @@ func (s *Server) createAlertRule(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteAlertRule(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if strings.HasPrefix(id, "system-") {
+		writeErrorMsg(w, http.StatusBadRequest, "built-in alert rules can't be deleted")
+		return
+	}
 	if _, err := s.db.ExecContext(r.Context(), `DELETE FROM alert_rules WHERE id = ?`, id); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return

@@ -35,19 +35,31 @@ const TYPE_LABEL: Record<StorageType, string> = {
 // the server/portal field to browse what's actually there.
 const SCANNABLE: StorageType[] = ["nfs", "cifs", "iscsi", "glusterfs"]
 
-interface CreateStorageDialogProps {
+interface ConnectionGroup {
   connId: string
-  connName?: string
+  connName: string
   nodes: string[]
+}
+
+interface CreateStorageDialogProps {
+  /** One entry per connection this dialog can target. A single "Add Storage"
+   * trigger regardless of how many connections/nodes exist — with one button
+   * per connection (the previous design) a 20-connection fleet turns the
+   * card header into a wall of buttons that wraps for pages and pushes
+   * everything else down; a single dialog with a connection picker scales
+   * to any fleet size instead. */
+  groups: ConnectionGroup[]
 }
 
 // Fills the confirmed gap from the Proxmox-API audit: registering a storage
 // backend required already knowing the exact export path/IQN by heart, or
 // looking it up in the real Proxmox UI first — this exposes PVE's own
 // discovery (/scan/nfs, /scan/cifs, /scan/iscsi, /scan/glusterfs) instead.
-export function CreateStorageDialog({ connId, connName, nodes }: CreateStorageDialogProps) {
+export function CreateStorageDialog({ groups }: CreateStorageDialogProps) {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
+  const [connId, setConnId] = useState(groups[0]?.connId ?? "")
+  const nodes = groups.find((g) => g.connId === connId)?.nodes ?? []
   const [type, setType] = useState<StorageType>("nfs")
   const [storageName, setStorageName] = useState("")
   const [node, setNode] = useState(nodes[0] ?? "")
@@ -66,6 +78,8 @@ export function CreateStorageDialog({ connId, connName, nodes }: CreateStorageDi
   const [scanOptions, setScanOptions] = useState<string[]>([])
 
   function reset() {
+    setConnId(groups[0]?.connId ?? "")
+    setNode(groups[0]?.nodes[0] ?? "")
     setType("nfs")
     setStorageName("")
     setServer("")
@@ -173,14 +187,34 @@ export function CreateStorageDialog({ connId, connName, nodes }: CreateStorageDi
     <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) reset() }}>
       <DialogTrigger asChild>
         <Button type="button" size="sm">
-          <Plus className="h-3.5 w-3.5" /> Add Storage{connName ? ` — ${connName}` : ""}
+          <Plus className="h-3.5 w-3.5" /> Add Storage
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Add Storage</DialogTitle>
-          <DialogDescription>Register a storage backend for this connection.</DialogDescription>
+          <DialogDescription>Register a storage backend for a connection.</DialogDescription>
         </DialogHeader>
+
+        {/* Only shown once there's an actual choice — a single connection
+            skips straight to the Node picker below, same as before. */}
+        {groups.length > 1 && (
+          <div className="space-y-1.5">
+            <Label>Connection</Label>
+            <Select
+              value={connId}
+              onValueChange={(v) => {
+                setConnId(v)
+                setNode(groups.find((g) => g.connId === v)?.nodes[0] ?? "")
+              }}
+            >
+              <SelectTrigger><SelectValue placeholder="Select a connection..." /></SelectTrigger>
+              <SelectContent>
+                {groups.map((g) => <SelectItem key={g.connId} value={g.connId}>{g.connName}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">

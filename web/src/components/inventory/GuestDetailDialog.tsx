@@ -18,6 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { StatusDot } from "@/components/ui/status-dot"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Textarea } from "@/components/ui/textarea"
 import { TypeChip } from "@/components/ui/type-chip"
 import { guestDotStatus } from "@/lib/utils"
 import {
@@ -539,12 +540,7 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
                 </div>
                 <div className="space-y-1.5">
                   <Label>Notes</Label>
-                  <textarea
-                    className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-sm"
-                    rows={3}
-                    value={configForm.notes}
-                    onChange={(e) => setConfigForm((f) => ({ ...f, notes: e.target.value }))}
-                  />
+                  <Textarea className="font-sans" rows={3} value={configForm.notes} onChange={(e) => setConfigForm((f) => ({ ...f, notes: e.target.value }))} />
                 </div>
                 <div className="flex gap-2">
                   <Button size="sm" disabled={updateConfig.isPending} onClick={() => updateConfig.mutate()}>
@@ -771,7 +767,9 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
             {snapshotsQuery.isError && (
               <p className="text-sm text-[var(--status-error)]">Couldn't load snapshots for this guest.</p>
             )}
-            <div className="space-y-1.5">
+            {/* Scoped scroll instead of growing the whole dialog past the tab
+                bar — a guest with a long snapshot history stays inside this tab. */}
+            <div className={(snapshotsQuery.data?.length ?? 0) > 8 ? "max-h-96 space-y-1.5 overflow-y-auto pr-1" : "space-y-1.5"}>
               {(snapshotsQuery.data ?? []).map((snap) => (
                 <div key={snap.name} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
                   <div className="min-w-0">
@@ -808,7 +806,8 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
             ) : (backupsQuery.data ?? []).length === 0 ? (
               <p className="text-sm text-[var(--text-muted)]">No backup archives found for this guest on its node's storage.</p>
             ) : (
-              (backupsQuery.data ?? [])
+              <div className={(backupsQuery.data?.length ?? 0) > 8 ? "max-h-96 space-y-1.5 overflow-y-auto pr-1" : "space-y-1.5"}>
+              {(backupsQuery.data ?? [])
                 .sort((a, b) => (b.ctime ?? 0) - (a.ctime ?? 0))
                 .map((b) => (
                   <div key={b.volid} className="flex items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
@@ -845,7 +844,8 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
                       </Button>
                     </div>
                   </div>
-                ))
+                ))}
+              </div>
             )}
             {browsingBackup && (
               <FileRestoreBrowser

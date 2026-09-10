@@ -20,6 +20,8 @@ import (
 
 	"ferrum/internal/auth"
 	"ferrum/internal/connections"
+	"ferrum/internal/digest"
+	"ferrum/internal/events"
 	"ferrum/internal/mcp"
 	"ferrum/internal/needle"
 	"ferrum/internal/notify"
@@ -42,8 +44,12 @@ type Server struct {
 	oidcMu sync.RWMutex
 	oidc   *auth.OIDCClient // nil when SSO isn't configured; guarded because the settings UI can replace it at any time
 
-	evaluator *poller.AlertEvaluator // its SetNotifier is called when the notification settings are saved; nil until SetAlertEvaluator is called
-	notify    *notify.Notifier       // never nil — Notify is a no-op when no channel is enabled
+	evaluator       *poller.AlertEvaluator // its SetNotifier is called when the notification settings are saved; nil until SetAlertEvaluator is called
+	digestScheduler *digest.Scheduler      // its SetNotifier is called when the notification settings are saved; nil until SetDigestScheduler is called
+	notify          *notify.Notifier       // never nil — Notify is a no-op when no channel is enabled
+
+	events   *events.Bus               // in-process pub/sub backing SSE and outgoing webhooks; nil until SetEventBus is called (see cmd/ferrum/main.go)
+	webhooks *notify.WebhookDispatcher // nil until SetWebhookDispatcher is called
 
 	securityMu       sync.RWMutex
 	require2FAAdmins bool // enforced by requireTOTPEnrolled below; toggled live from Settings
@@ -133,6 +139,27 @@ func (s *Server) Notifier() *notify.Notifier {
 // saved Gotify/SMTP config into the running poller without a restart.
 func (s *Server) SetAlertEvaluator(e *poller.AlertEvaluator) {
 	s.evaluator = e
+}
+
+// SetEventBus attaches the shared in-process event bus (see internal/events)
+// that the SSE endpoint reads from. Called once at startup.
+func (s *Server) SetEventBus(b *events.Bus) {
+	s.events = b
+}
+
+// SetWebhookDispatcher attaches the outgoing-webhook dispatcher used by the
+// admin webhook settings endpoints ("send test event"). Called once at
+// startup.
+func (s *Server) SetWebhookDispatcher(d *notify.WebhookDispatcher) {
+	s.webhooks = d
+}
+
+// SetDigestScheduler mirrors SetAlertEvaluator for the fleet digest
+// scheduler — lets the notification settings handler push a newly saved
+// Gotify/SMTP config into it, and lets the /settings/digest/send-now
+// handler trigger an immediate send.
+func (s *Server) SetDigestScheduler(d *digest.Scheduler) {
+	s.digestScheduler = d
 }
 
 func New(db *store.DB, authSvc *auth.Service, secretBox *secrets.Box, opts ServerOptions) *Server {
@@ -268,6 +295,50 @@ func (s *Server) Router() http.Handler {
 					r.Post("/lxc", s.createLXC)
 					r.Get("/nextid", s.nextGuestID)
 					r.Get("/templates", s.listTemplates)
+					r.Get("/health-score", s.connectionHealthScore)
+
+					// PBS (Proxmox Backup Server) remote — mounted on a
+					// connection whose stored type is "pbs" rather than
+					// "pve"; pbsClientFor rejects any other type.
+					r.Route("/pbs", func(r chi.Router) {
+						r.Get("/datastores", s.pbsListDatastores)
+						r.Route("/datastores/{store}", func(r chi.Router) {
+							r.Get("/namespaces", s.pbsListNamespaces)
+							r.Get("/groups", s.pbsListGroups)
+							r.Get("/snapshots", s.pbsListSnapshots)
+							r.Post("/snapshots/protected", s.pbsSetSnapshotProtected)
+							r.Post("/prune", s.pbsPrune)
+							r.Post("/gc", s.pbsStartGC)
+							r.Get("/gc", s.pbsGCStatus)
+						})
+						r.Route("/sync-jobs", func(r chi.Router) {
+							r.Get("/", s.pbsListSyncJobs)
+							r.Route("/{jobId}", func(r chi.Router) {
+								r.Get("/", s.pbsGetSyncJob)
+								r.Post("/run", s.pbsRunSyncJob)
+							})
+						})
+						r.Route("/verify-jobs", func(r chi.Router) {
+							r.Get("/", s.pbsListVerifyJobs)
+							r.Route("/{jobId}", func(r chi.Router) {
+								r.Get("/", s.pbsGetVerifyJob)
+								r.Post("/run", s.pbsRunVerifyJob)
+							})
+						})
+						r.Get("/tasks/{upid}/status", s.pbsTaskStatus)
+						r.Get("/tasks/{upid}/log", s.pbsTaskLog)
+					})
+					r.With(s.requireAdmin).Get("/certificates", s.connectionCertificates)
+
+					r.Route("/export", func(r chi.Router) {
+						// Exporting the full live inventory as IaC is
+						// sensitive infrastructure detail — admin-only
+						// regardless of the requireAdminForMutations
+						// read-passthrough this route tree otherwise allows.
+						r.Use(s.requireAdmin)
+						r.Get("/terraform", s.exportTerraform)
+						r.Get("/ansible", s.exportAnsible)
+					})
 
 					r.Route("/guests/{type}/{node}/{vmid}", func(r chi.Router) {
 						r.Post("/power/{action}", s.guestPowerAction)
@@ -276,9 +347,14 @@ func (s *Server) Router() http.Handler {
 						r.Post("/sendkey", s.guestSendKey)
 						r.Get("/config", s.getGuestConfig)
 						r.Put("/config", s.updateGuestConfig)
+						r.Put("/tags", s.updateGuestTags)
+						r.Post("/baseline", s.captureGuestBaseline)
+						r.Delete("/baseline", s.clearGuestBaseline)
+						r.Get("/drift", s.getGuestDrift)
 						r.Post("/clone", s.cloneGuest)
 						r.Post("/migrate", s.migrateGuest)
 						r.Get("/migrate", s.migratePrecondition)
+						r.Post("/remote-migrate", s.remoteMigrateGuest)
 						r.Post("/resize", s.resizeGuestDisk)
 						r.Post("/move-disk", s.moveGuestDisk)
 						r.Post("/template", s.setGuestTemplate)
@@ -321,6 +397,7 @@ func (s *Server) Router() http.Handler {
 					r.Route("/nodes/{node}", func(r chi.Router) {
 						r.Get("/status", s.nodeStatus)
 						r.Get("/rrddata", s.nodeRRDData)
+						r.Get("/forecast", s.nodeForecast)
 						r.Post("/reboot", s.rebootNode)
 						r.Post("/shutdown", s.shutdownNode)
 						r.Post("/wakeonlan", s.wakeOnLan)
@@ -533,6 +610,20 @@ func (s *Server) Router() http.Handler {
 
 			r.Get("/overview", s.fleetOverviewHandler)
 
+			r.Route("/tags", func(r chi.Router) {
+				r.Get("/", s.listTags)
+			})
+			r.Get("/search", s.globalSearch)
+			r.Route("/bulk", func(r chi.Router) {
+				r.With(s.requireAdmin).Post("/guests/action", s.bulkGuestAction)
+			})
+
+			r.Get("/health-score", s.fleetHealthScore)
+
+			r.Route("/forecast", func(r chi.Router) {
+				r.Get("/capacity-warnings", s.fleetCapacityWarnings)
+			})
+
 			r.Route("/dashboards", func(r chi.Router) {
 				r.Get("/", s.listDashboards)
 				r.Post("/", s.createDashboard)
@@ -543,6 +634,12 @@ func (s *Server) Router() http.Handler {
 				})
 			})
 
+			r.Route("/profile/sessions", func(r chi.Router) {
+				r.Get("/", s.listMySessions)
+				r.Delete("/", s.revokeMyOtherSessions)
+				r.Delete("/{id}", s.revokeMySession)
+			})
+
 			r.Route("/users", func(r chi.Router) {
 				r.Use(s.requireAdmin)
 				r.Get("/", s.listUsers)
@@ -550,6 +647,11 @@ func (s *Server) Router() http.Handler {
 				r.Route("/{id}", func(r chi.Router) {
 					r.Put("/", s.updateUser)
 					r.Delete("/", s.deleteUser)
+					r.Route("/sessions", func(r chi.Router) {
+						r.Get("/", s.listUserSessions)
+						r.Delete("/", s.revokeUserSessions)
+						r.Delete("/{sessionId}", s.revokeUserSession)
+					})
 				})
 			})
 			r.Route("/admin", func(r chi.Router) {
@@ -571,6 +673,9 @@ func (s *Server) Router() http.Handler {
 					r.Put("/agent", s.putAgentSettings)
 					r.Get("/system", s.getSystemSettings)
 					r.Put("/system", s.putSystemSettings)
+					r.Get("/digest", s.getDigestSettings)
+					r.Put("/digest", s.putDigestSettings)
+					r.Post("/digest/send-now", s.sendDigestNow)
 
 					r.Route("/ai/providers", func(r chi.Router) {
 						r.Get("/", s.listAIProviders)
@@ -619,6 +724,38 @@ func (s *Server) Router() http.Handler {
 				r.Post("/{id}/silence", s.silenceAlert)
 			})
 			r.Get("/connection-health", s.connectionHealth)
+
+			// Server-Sent Events stream of bus activity (alert
+			// triggers/resolutions, connection health, ...) — see
+			// internal/api/events.go. The handler blocks on r.Context().Done()
+			// for its lifetime; the router-wide middleware.Timeout above only
+			// cancels that context, it doesn't itself cut the connection.
+			r.Get("/events", s.streamEvents)
+
+			r.Route("/settings/webhooks", func(r chi.Router) {
+				r.Use(s.requireAdmin)
+				r.Get("/", s.listWebhooks)
+				r.Post("/", s.createWebhook)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Put("/", s.updateWebhook)
+					r.Delete("/", s.deleteWebhook)
+					r.Post("/test", s.testWebhook)
+					r.Get("/deliveries", s.listWebhookDeliveries)
+				})
+			})
+
+			r.Route("/drift", func(r chi.Router) {
+				r.Get("/summary", s.driftSummary)
+			})
+
+			r.Route("/lifecycle", func(r chi.Router) {
+				r.Get("/actions", s.lifecycleActions)
+			})
+			r.Route("/settings/lifecycle", func(r chi.Router) {
+				r.Use(s.requireAdminForMutations)
+				r.Get("/", s.getLifecycleSettings)
+				r.Put("/", s.putLifecycleSettings)
+			})
 		})
 	})
 
@@ -827,11 +964,11 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 				"style-src 'self' 'unsafe-inline'; "+
 				"img-src 'self' data: blob:; "+
 				// data: is needed for the Topology page's SVG export
-					// (html-to-image inlines @font-face as base64 data URIs so
-					// the exported file is self-contained) — without it the
-					// browser blocks that inlined @font-face while rendering
-					// the export's foreignObject content.
-					"font-src 'self' data:; "+
+				// (html-to-image inlines @font-face as base64 data URIs so
+				// the exported file is self-contained) — without it the
+				// browser blocks that inlined @font-face while rendering
+				// the export's foreignObject content.
+				"font-src 'self' data:; "+
 				"connect-src 'self' ws: wss:; "+
 				"object-src 'none'; "+
 				"frame-ancestors 'none'; "+

@@ -82,6 +82,27 @@ func TestNodeJournalObjectOrBareString(t *testing.T) {
 	}
 }
 
+// Some PVE versions quote the journal line number ("n":"1" instead of
+// "n":1) — that must decode too rather than failing the whole line's object
+// parse (see JournalEntry's UnmarshalJSON).
+func TestNodeJournalQuotedLineNumber(t *testing.T) {
+	raw := `{"data":[{"n":"1","t":"Sep 06 12:00:00 host kernel: boot"}]}`
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(raw))
+	}))
+	defer srv.Close()
+
+	c := clientFor(srv, WithInsecureSkipVerify(true))
+	entries, err := c.NodeJournal(context.Background(), "pve1", 0)
+	if err != nil {
+		t.Fatalf("NodeJournal: %v", err)
+	}
+	if len(entries) != 1 || entries[0].N != 1 {
+		t.Errorf("entries = %+v", entries)
+	}
+}
+
 // FlexString must round-trip through re-marshal as a plain JSON string so
 // API consumers (the web UI types it as `mhz?: string`) see the same shape.
 func TestFlexStringMarshal(t *testing.T) {

@@ -35,6 +35,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -64,10 +65,14 @@ const listenAddr = "127.0.0.1:" + listenPort
 // binary as unusable this run. Generous because it isn't just a TCP-accept
 // wait: Needle's "tool retrieval" (README) does a one-time embedding pass
 // over every declared tool on the process's first request once the catalog
-// exceeds 5 tools — true for Ferrum's real catalog — so cold start plus
-// first-inference warmup can run a few seconds even though the listener
-// itself comes up almost immediately.
-const startTimeout = 20 * time.Second
+// exceeds 5 tools — true for Ferrum's real catalog, which is now around 60
+// tools (see internal/mcp) — so cold start plus first-inference warmup can
+// take a while even though the listener itself comes up almost immediately,
+// especially on slower ARM SBC-class hardware. If it's dying outright rather
+// than just running long, this won't help — see m.log's "needle process
+// exited: signal: killed", which on Linux is almost always the kernel
+// OOM-killer, not a timeout.
+const startTimeout = 60 * time.Second
 
 // Manager owns the lifecycle of at most one Needle CLI subprocess — "each
 // component instance owns one conversation" per the model's own docs, and
@@ -237,7 +242,7 @@ func (m *Manager) ensureRunning(ctx context.Context) error {
 	// reliably supported cross-platform (notably on Windows), but Wait() is.
 	exited := make(chan struct{})
 	go func() {
-		_ = cmd.Wait()
+		waitErr := cmd.Wait()
 		close(exited)
 		m.mu.Lock()
 		if m.cmd == cmd {
@@ -245,6 +250,16 @@ func (m *Manager) ensureRunning(ctx context.Context) error {
 			m.cmd = nil
 		}
 		m.mu.Unlock()
+		if waitErr != nil {
+			// Wait()'s error already renders signal deaths as e.g. "signal:
+			// killed" on Unix (that's SIGKILL — on a memory-constrained host,
+			// almost always the kernel OOM-killer) — appended to the log so
+			// both the "exited immediately"/"did not become ready" messages
+			// below and ChatCompletion's crashInfo (a later mid-request
+			// death) explain *why* instead of leaving a bare connection
+			// error as the only clue.
+			m.log.Write([]byte("\n[needle process exited: " + waitErr.Error() + "]"))
+		}
 	}()
 
 	// Two phases, deliberately not one poll loop of full requests: dialing a
@@ -332,6 +347,20 @@ type needleTool struct {
 // needs to happen once per subprocess start, not per request.
 func writeToolsFile() (string, error) {
 	tools := toolCatalog()
+	// FERRUM_NEEDLE_MAX_TOOLS is an escape hatch for memory-constrained
+	// hosts (small ARM SBCs in particular): Needle's one-time "tool
+	// retrieval" embedding pass runs over the entire catalog on its first
+	// request, and Ferrum's real catalog (internal/mcp) has grown to around
+	// 60 tools — enough to OOM-kill the subprocess on a device with very
+	// little RAM (see m.log's "signal: killed" in that case). The read-only
+	// lookup tools are declared first in internal/mcp/tools.go, so
+	// truncating here keeps the most broadly useful ones (list_nodes,
+	// list_guests, cluster_status, ...) and drops the newer, more numerous
+	// mutation tools first. Unset (the default) sends the full catalog,
+	// unchanged from before this existed.
+	if n := maxNeedleTools(); n > 0 && n < len(tools) {
+		tools = tools[:n]
+	}
 	out := make([]needleTool, 0, len(tools))
 	for _, t := range tools {
 		out = append(out, needleTool{Name: t.Name, Description: t.Description, Parameters: t.InputSchema})
@@ -345,6 +374,17 @@ func writeToolsFile() (string, error) {
 		return "", err
 	}
 	return path, nil
+}
+
+// maxNeedleTools reads FERRUM_NEEDLE_MAX_TOOLS — see writeToolsFile. Any
+// unset/empty/non-positive/unparseable value means "no limit" (0), the
+// pre-existing behavior.
+func maxNeedleTools() int {
+	n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("FERRUM_NEEDLE_MAX_TOOLS")))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // toolCatalogFunc is overridden by tests (and set by internal/api at init)
@@ -443,7 +483,11 @@ func flattenMessages(messages []map[string]any) string {
 // toOpenAIMessage converts a parsed Needle response into the same
 // role/content/tool_calls map shape internal/api/ai_chat.go already expects
 // back from callChatCompletion, so the tool-calling loop needs no special
-// case for this provider.
+// case for this provider. nr.Reasoning — Needle's own explanation of what
+// it's about to do or why — rides along as "reasoning_content" whenever it
+// says something distinct from the final answer, the same field name a real
+// streaming reasoning model's delta uses (see ai_chat.go's
+// streamChunkDelta), so ai_chat.go's single check for that key covers both.
 func toOpenAIMessage(nr *needleResponse) (map[string]any, error) {
 	if nr.Error != "" {
 		return nil, fmt.Errorf("needle: %s", nr.Error)
@@ -464,13 +508,23 @@ func toOpenAIMessage(nr *needleResponse) (map[string]any, error) {
 				},
 			})
 		}
-		return map[string]any{"role": "assistant", "content": nil, "tool_calls": calls}, nil
+		msg := map[string]any{"role": "assistant", "content": nil, "tool_calls": calls}
+		if nr.Reasoning != "" {
+			msg["reasoning_content"] = nr.Reasoning
+		}
+		return msg, nil
 	}
-	content := nr.Text
-	if content == "" {
-		content = nr.Reasoning
+	if nr.Text != "" {
+		msg := map[string]any{"role": "assistant", "content": nr.Text}
+		if nr.Reasoning != "" && nr.Reasoning != nr.Text {
+			msg["reasoning_content"] = nr.Reasoning
+		}
+		return msg, nil
 	}
-	return map[string]any{"role": "assistant", "content": content}, nil
+	// No text and no function calls: Reasoning (if any) IS the answer here,
+	// not a distinct "thinking" aside — surfacing it twice would just show
+	// the same sentence in both the thinking block and the reply.
+	return map[string]any{"role": "assistant", "content": nr.Reasoning}, nil
 }
 
 // ChatCompletion is Needle's counterpart to internal/api/ai_chat.go's

@@ -5,11 +5,13 @@ import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Combobox } from "@/components/ui/combobox"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { EmptyState } from "@/components/ui/empty-state"
 import { ErrorState } from "@/components/ui/error-state"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { ListSearch } from "@/components/ui/list-search"
 import { PageHeader } from "@/components/ui/page-header"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -192,6 +194,10 @@ function PoolRow({
   const queryClient = useQueryClient()
   const confirm = useConfirm()
   const [vmid, setVmid] = useState("")
+  const [memberFilter, setMemberFilter] = useState("")
+  const members = (detailQuery.data?.members ?? []).filter(
+    (m) => !memberFilter || (m.name ?? String(m.id)).toLowerCase().includes(memberFilter.toLowerCase()) || String(m.vmid ?? "").includes(memberFilter),
+  )
 
   const addMember = useMutation({
     mutationFn: () => api.put(`/connections/${connId}/pools/${encodeURIComponent(pool.poolid)}/members`, { vmids: [Number(vmid)], remove: false }),
@@ -243,44 +249,53 @@ function PoolRow({
           )}
           {detailQuery.isError && <p className="text-xs text-[var(--text-muted)]">Couldn't load pool members.</p>}
           {detailQuery.data?.members?.length === 0 && <p className="text-xs text-[var(--text-muted)]">No members yet — add a guest below.</p>}
-          {detailQuery.data?.members?.map((m) => (
-            <div key={m.id} className="flex items-center gap-2 text-xs">
-              <Badge variant="default">{m.type}</Badge>
-              <span>{m.name ?? m.id}</span>
-              {m.vmid && <span className="font-mono text-[var(--text-muted)] tabular">#{m.vmid}</span>}
-              {m.vmid && (
-                <Hint label="Remove from pool">
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    aria-label={`Remove ${m.name ?? m.vmid} from pool`}
-                    onClick={async () => {
-                      if (await confirm({ title: `Remove ${m.name ?? m.vmid} from pool?`, destructive: false, confirmLabel: "Remove" })) {
-                        removeMember.mutate(m.vmid!)
-                      }
-                    }}
-                  >
-                    <Minus className="h-3 w-3" />
-                  </Button>
-                </Hint>
-              )}
-            </div>
-          ))}
+          {(detailQuery.data?.members?.length ?? 0) > 8 && (
+            <ListSearch value={memberFilter} onChange={setMemberFilter} placeholder="Search members..." className="mb-1.5" />
+          )}
+          {(detailQuery.data?.members?.length ?? 0) > 0 && members.length === 0 && (
+            <p className="text-xs text-[var(--text-muted)]">No members match "{memberFilter}".</p>
+          )}
+          {/* Past a screenful, this scrolls internally instead of growing the
+              whole page — search narrows the list, but clearing it (or a
+              broad match) shouldn't turn the pool card into the entire page. */}
+          <div className={members.length > 10 ? "max-h-64 space-y-1 overflow-y-auto pr-1" : "space-y-1"}>
+            {members.map((m) => (
+              <div key={m.id} className="flex items-center gap-2 text-xs">
+                <Badge variant="default">{m.type}</Badge>
+                <span>{m.name ?? m.id}</span>
+                {m.vmid && <span className="font-mono text-[var(--text-muted)] tabular">#{m.vmid}</span>}
+                {m.vmid && (
+                  <Hint label="Remove from pool">
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      aria-label={`Remove ${m.name ?? m.vmid} from pool`}
+                      onClick={async () => {
+                        if (await confirm({ title: `Remove ${m.name ?? m.vmid} from pool?`, destructive: false, confirmLabel: "Remove" })) {
+                          removeMember.mutate(m.vmid!)
+                        }
+                      }}
+                    >
+                      <Minus className="h-3 w-3" />
+                    </Button>
+                  </Hint>
+                )}
+              </div>
+            ))}
+          </div>
           <div className="flex items-center gap-2 pt-1">
             {/* Guests on this connection, straight from inventory — no more
-                typing raw VMIDs and hoping they exist. */}
-            <Select value={vmid} onValueChange={setVmid}>
-              <SelectTrigger className="h-7 w-56 text-xs">
-                <SelectValue placeholder="Pick a guest to add…" />
-              </SelectTrigger>
-              <SelectContent>
-                {guestOptions.map((g) => (
-                  <SelectItem key={g.id} value={String(g.vmid)}>
-                    {g.name} <span className="font-mono text-[var(--text-muted)]">#{g.vmid}</span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+                typing raw VMIDs and hoping they exist. A Combobox (not
+                Select) so a pool on a fleet with hundreds of guests can
+                actually search this list instead of blind-scrolling it. */}
+            <Combobox
+              value={vmid}
+              onChange={setVmid}
+              placeholder="Pick a guest to add…"
+              searchPlaceholder="Search guests..."
+              className="h-7 w-56 text-xs"
+              options={guestOptions.map((g) => ({ value: String(g.vmid), label: `${g.name} #${g.vmid}` }))}
+            />
             <Button size="sm" variant="secondary" loading={addMember.isPending} disabled={!vmid} onClick={() => addMember.mutate()}>
               {!addMember.isPending && <Plus className="h-3 w-3" />} Add
             </Button>

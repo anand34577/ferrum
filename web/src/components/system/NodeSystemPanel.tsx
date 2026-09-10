@@ -9,6 +9,7 @@ import { useConfirm } from "@/components/ui/confirm-dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Textarea } from "@/components/ui/textarea"
 import { api, ApiError, type NodeCertificate, type NodeDNSConfig, type NodeHosts, type NodeService, type NodeTimeInfo } from "@/lib/api"
 
 // Services critical to reachability/cluster membership — restarting or
@@ -219,12 +220,7 @@ export function NodeSystemPanel({ connId, node }: NodeSystemPanelProps) {
             <Skeleton className="h-32" />
           ) : (
             <>
-              <textarea
-                className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 font-mono text-xs"
-                rows={6}
-                value={hostsData}
-                onChange={(e) => setHostsData(e.target.value)}
-              />
+              <Textarea className="text-xs" rows={6} value={hostsData} onChange={(e) => setHostsData(e.target.value)} />
               <Button size="sm" disabled={saveHosts.isPending} onClick={() => saveHosts.mutate()}>
                 {saveHosts.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Save hosts file
               </Button>
@@ -312,15 +308,15 @@ export function NodeSystemPanel({ connId, node }: NodeSystemPanelProps) {
 
           <div className="space-y-1.5 border-t border-[var(--border)] pt-3">
             <Label>Upload custom certificate (PEM)</Label>
-            <textarea
-              className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 font-mono text-xs"
+            <Textarea
+              className="text-xs"
               rows={4}
               placeholder="-----BEGIN CERTIFICATE-----"
               value={certPem}
               onChange={(e) => setCertPem(e.target.value)}
             />
-            <textarea
-              className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 font-mono text-xs"
+            <Textarea
+              className="text-xs"
               rows={4}
               placeholder="-----BEGIN PRIVATE KEY----- (leave blank to keep the existing key)"
               value={keyPem}

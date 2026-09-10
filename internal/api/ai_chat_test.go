@@ -84,6 +84,30 @@ func TestParseChatCompletionStreamForwardsContentLive(t *testing.T) {
 	}
 }
 
+func TestParseChatCompletionStreamForwardsReasoningSeparatelyFromContent(t *testing.T) {
+	rec := httptest.NewRecorder()
+	body := sseBody(
+		`{"choices":[{"delta":{"reasoning_content":"Let me check "}}]}`,
+		`{"choices":[{"delta":{"reasoning_content":"the nodes."}}]}`,
+		`{"choices":[{"delta":{"content":"Here you go."}}]}`,
+	)
+
+	msg, _, err := parseChatCompletionStream(body, rec, rec, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := msg["content"]; got != "Here you go." {
+		t.Fatalf("content = %q, want %q", got, "Here you go.")
+	}
+	if _, ok := msg["reasoning_content"]; ok {
+		t.Fatal("reasoning must never land in the returned message — it would pollute conversation history")
+	}
+	body2 := rec.Body.String()
+	if !strings.Contains(body2, `"ferrum_reasoning":"Let me check "`) || !strings.Contains(body2, `"ferrum_reasoning":"the nodes."`) {
+		t.Fatalf("expected reasoning chunks forwarded as ferrum_reasoning envelopes, got %q", body2)
+	}
+}
+
 func TestParseChatCompletionStreamReconstructsFragmentedToolCall(t *testing.T) {
 	rec := httptest.NewRecorder()
 	// A real provider streams a tool call's id/name/arguments across many

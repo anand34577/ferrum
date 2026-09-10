@@ -134,8 +134,11 @@ export function ResourceAreaChart({
         {/* Margins reserve real room for the axis tick text and hover dots —
             a negative left margin (the old value) made recharts clip the Y
             labels, and a near-zero top clipped the first tick/dot. The YAxis
-            width below owns the left gutter instead. */}
-        <AreaChart data={data} margin={{ top: 8, right: 14, left: 0, bottom: 4 }} syncId={syncId}>
+            width below owns the left gutter instead; the extra top margin
+            covers recharts wrapping a wide tick ("47.68 MB/s") onto two
+            lines — with only 8px above the topmost tick, that wrap's first
+            line rendered off the top of the chart. */}
+        <AreaChart data={data} margin={{ top: 14, right: 14, left: 0, bottom: 4 }} syncId={syncId}>
           <defs>
             {series.map((s) => (
               <linearGradient key={s.key} id={`grad-${s.key}`} x1="0" y1="0" x2="0" y2="1">
@@ -157,7 +160,7 @@ export function ResourceAreaChart({
             tick={{ fontSize: 11, fill: "var(--text-muted)" }}
             axisLine={false}
             tickLine={false}
-            width={56}
+            width={64}
             tickFormatter={effectiveTickFormatter}
             domain={effectiveDomain}
             ticks={niceTicksList}

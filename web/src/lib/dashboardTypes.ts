@@ -20,6 +20,8 @@ export type WidgetType =
   | "alert-activity"
   | "backup-activity"
   | "uptime-leaderboard"
+  | "capacity-forecast"
+  | "health-score"
 
 /** A widget's own configuration — e.g. which metric a bar chart ranks by,
  * or how many rows a list shows. Lives inside the same WidgetSpec that's
@@ -297,6 +299,26 @@ export const WIDGET_CATALOG: {
       },
     ],
   },
+  {
+    type: "capacity-forecast",
+    label: "Capacity Forecast",
+    defaultSize: { w: 6, h: 8 },
+    defaultSettings: { horizonDays: "30" },
+    settingsFields: [
+      CONNECTION_FIELD,
+      {
+        key: "horizonDays",
+        label: "Horizon",
+        options: [
+          { value: "14", label: "14 days" },
+          { value: "30", label: "30 days" },
+          { value: "60", label: "60 days" },
+          { value: "90", label: "90 days" },
+        ],
+      },
+    ],
+  },
+  { type: "health-score", label: "Fleet Health Score", defaultSize: { w: 4, h: 8 }, settingsFields: [CONNECTION_FIELD] },
 ]
 
 export function widgetLabel(type: WidgetType): string {
