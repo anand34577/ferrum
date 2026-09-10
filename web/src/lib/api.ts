@@ -81,6 +81,7 @@ export interface User {
 export interface Connection {
   id: string
   name: string
+  type: "pve" | "pbs"
   host: string
   port: number
   authType: "token" | "password"

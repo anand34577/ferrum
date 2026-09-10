@@ -7,6 +7,8 @@ import { AgentSettingsCard } from "@/components/settings/AgentSettingsCard"
 import { AIProvidersCard } from "@/components/settings/AIProvidersCard"
 import { AppearanceCard } from "@/components/settings/AppearanceCard"
 import { DefaultPreferencesCard } from "@/components/settings/DefaultPreferencesCard"
+import { DigestSettingsCard } from "@/components/settings/DigestSettingsCard"
+import { LifecycleSettingsCard } from "@/components/settings/LifecycleSettingsCard"
 import { NotificationsSettingsCard } from "@/components/settings/NotificationsSettingsCard"
 import { OIDCSettingsCard } from "@/components/settings/OIDCSettingsCard"
 import { SecuritySettingsCard } from "@/components/settings/SecuritySettingsCard"
@@ -55,6 +57,8 @@ export function SettingsPage() {
       <SecuritySettingsCard />
       <SystemSettingsCard />
       <NotificationsSettingsCard />
+      <DigestSettingsCard />
+      <LifecycleSettingsCard />
 
       <Link
         to="/alerts"
