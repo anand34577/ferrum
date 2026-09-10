@@ -1,7 +1,8 @@
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Bell, Loader2 } from "lucide-react"
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
+import { toast } from "sonner"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,15 +12,19 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { api, type AlertInstance } from "@/lib/api"
+import { useEventStream } from "@/lib/useEventStream"
 import { cn } from "@/lib/utils"
 
 const SEVERITY_DOT: Record<string, string> = { critical: "bg-[var(--status-error)]", warning: "bg-[var(--status-warn)]" }
 
 /** Header notification bell — the only place an active alert is visible
- * outside the Alerts page itself. The count polls continuously (cheap); the
- * list underneath is only fetched once the panel opens (heavier, on demand). */
+ * outside the Alerts page itself. The 30s poll is the fallback; the SSE
+ * subscription below invalidates both queries the moment the poller
+ * actually detects a change, so in practice the badge updates live instead
+ * of waiting out the interval. */
 export function NotificationBell() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
 
   const summaryQuery = useQuery({
@@ -34,6 +39,27 @@ export function NotificationBell() {
     queryFn: () => api.get<AlertInstance[]>("/alerts/?status=active"),
     enabled: open,
     staleTime: 10_000,
+  })
+
+  // Live push: a triggered/resolved alert invalidates both queries
+  // immediately instead of waiting up to 30s for the next poll. A brand new
+  // critical alert also gets a toast, since it's the one case worth
+  // interrupting the operator for even if the bell is closed.
+  useEventStream({
+    types: ["alert.triggered", "alert.resolved"],
+    maxBuffered: 0,
+    onEvent: (evt) => {
+      queryClient.invalidateQueries({ queryKey: ["alerts-summary"] })
+      queryClient.invalidateQueries({ queryKey: ["alerts", "active"] })
+      if (evt.type === "alert.triggered") {
+        const payload = evt.payload as { severity?: string; resourceName?: string } | undefined
+        if (payload?.severity === "critical") {
+          toast.error(payload.resourceName ? `Critical alert: ${payload.resourceName}` : "New critical alert", {
+            action: { label: "View", onClick: () => navigate("/alerts") },
+          })
+        }
+      }
+    },
   })
 
   return (

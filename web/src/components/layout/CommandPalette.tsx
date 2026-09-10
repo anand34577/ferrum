@@ -11,6 +11,7 @@ import {
   Keyboard,
   LayoutDashboard,
   Layers,
+  Layers3,
   Monitor,
   Moon,
   Network,
@@ -23,6 +24,7 @@ import {
   Terminal,
   Users,
   Waypoints,
+  Webhook,
 } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
@@ -42,8 +44,10 @@ const pages = [
   { to: "/firewall", label: "Firewall", icon: Shield },
   { to: "/alerts", label: "Alerts", icon: AlertTriangle },
   { to: "/tasks", label: "Task Center", icon: Terminal },
+  { to: "/bulk-operations", label: "Bulk Operations", icon: Layers3, adminOnly: true },
   { to: "/connections", label: "Connections", icon: Network, adminOnly: true },
   { to: "/users", label: "Users", icon: Users, adminOnly: true },
+  { to: "/webhooks", label: "Webhooks", icon: Webhook, adminOnly: true },
   { to: "/audit", label: "Audit Log", icon: ClipboardList, adminOnly: true },
   { to: "/settings", label: "Settings", icon: Settings, adminOnly: true },
 ]
@@ -55,9 +59,22 @@ const pages = [
 // to the full set so search still reaches every guest, just not pre-mounted.
 const DEFAULT_GUEST_LIMIT = 200
 
+// Mirrors internal/api/search.go's searchResult.
+interface RemoteSearchResult {
+  id: string
+  connectionId: string
+  connectionName: string
+  type: "qemu" | "lxc"
+  vmid: number
+  name?: string
+  node: string
+  tags?: string
+}
+
 export function CommandPalette() {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState("")
+  const [debouncedSearch, setDebouncedSearch] = useState("")
   const navigate = useNavigate()
   const { user } = useAuth()
   const { theme, setTheme } = useTheme()
@@ -75,8 +92,30 @@ export function CommandPalette() {
     staleTime: 10_000,
   })
 
+  // Debounced so every keystroke doesn't fire a request; 150ms keeps it
+  // feeling instant without hammering the server while typing fast.
   useEffect(() => {
-    if (!open) setSearch("")
+    const id = window.setTimeout(() => setDebouncedSearch(search.trim()), 150)
+    return () => window.clearTimeout(id)
+  }, [search])
+
+  // Once there's a query, GET /api/v1/search ranks a match across every
+  // connection server-side instead of relying on the capped/full local
+  // inventory fetch below — the fix for this file's own "thousands of DOM
+  // nodes" concern: nothing extra gets mounted just because the fleet is
+  // large, since the server already narrowed the list before it reaches here.
+  const { data: remoteResults } = useQuery({
+    queryKey: ["command-palette-search", debouncedSearch],
+    queryFn: () => api.get<RemoteSearchResult[]>(`/search?q=${encodeURIComponent(debouncedSearch)}`),
+    enabled: open && debouncedSearch.length > 0,
+    staleTime: 5_000,
+  })
+
+  useEffect(() => {
+    if (!open) {
+      setSearch("")
+      setDebouncedSearch("")
+    }
   }, [open])
 
   useEffect(() => {
@@ -102,7 +141,7 @@ export function CommandPalette() {
 
   // Derived lists are memoized: rebuilding them on every render walked the
   // full inventory twice per keystroke.
-  const guests = useMemo<Array<{ connId: string; guest: ClusterResource }>>(() => {
+  const localGuests = useMemo<Array<{ connId: string; guest: ClusterResource }>>(() => {
     const out: Array<{ connId: string; guest: ClusterResource }> = []
     for (const conn of inventory ?? []) {
       for (const r of conn.resources ?? []) {
@@ -123,7 +162,37 @@ export function CommandPalette() {
   }, [inventory])
 
   const visiblePages = useMemo(() => pages.filter((p) => !p.adminOnly || user?.isAdmin), [user?.isAdmin])
-  const visibleGuests = search.trim() ? guests : guests.slice(0, DEFAULT_GUEST_LIMIT)
+
+  // A shared shape for either source: while there's a query, the ranked
+  // cross-connection /search results (every configured connection, not just
+  // whichever the local inventory fetch happened to include); with no query,
+  // the capped local list so opening the palette still shows something to
+  // browse without firing a request for an empty search.
+  type GuestItem = { key: string; connId: string; id: string; type: "qemu" | "lxc"; name: string; vmid: number; tags?: string; node: string }
+  const guestItems = useMemo<GuestItem[]>(() => {
+    if (debouncedSearch) {
+      return (remoteResults ?? []).map((r) => ({
+        key: `${r.connectionId}/${r.id}`,
+        connId: r.connectionId,
+        id: r.id,
+        type: r.type,
+        name: r.name || `#${r.vmid}`,
+        vmid: r.vmid,
+        tags: r.tags,
+        node: r.node,
+      }))
+    }
+    return localGuests.slice(0, DEFAULT_GUEST_LIMIT).map(({ connId, guest }) => ({
+      key: `${connId}/${guest.id}`,
+      connId,
+      id: guest.id,
+      type: guest.type as "qemu" | "lxc",
+      name: guest.name || `#${guest.vmid}`,
+      vmid: guest.vmid ?? 0,
+      tags: guest.tags,
+      node: guest.node,
+    }))
+  }, [debouncedSearch, remoteResults, localGuests])
 
   function go(to: string) {
     navigate(to)
@@ -247,19 +316,23 @@ export function CommandPalette() {
           </Command.Group>
         )}
 
-        {guests.length > 0 && (
+        {guestItems.length > 0 && (
           <Command.Group
             heading={
-              visibleGuests.length < guests.length
-                ? `Guests (first ${visibleGuests.length} of ${guests.length} — keep typing to search them all)`
-                : "Guests"
+              debouncedSearch
+                ? "Guests (matched across every connection)"
+                : `Guests${localGuests.length > guestItems.length ? ` (first ${guestItems.length} of ${localGuests.length} — keep typing to search them all)` : ""}`
             }
             className="text-xs text-[var(--text-muted)] [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.08em]"
           >
-            {visibleGuests.map(({ guest }) => (
+            {guestItems.map((guest) => (
               <Command.Item
-                key={guest.id}
-                value={`${guest.name} ${guest.vmid} ${guest.tags?.replace(/[;,]/g, " ") ?? ""}`}
+                key={guest.key}
+                // Includes node so a match found only via node name (matchResources
+                // ranks that too) still passes cmdk's own client-side re-filter —
+                // the results above are already the authoritative match, this
+                // value just needs to not accidentally hide them.
+                value={`${guest.name} ${guest.vmid} ${guest.node} ${guest.tags?.replace(/[;,]/g, " ") ?? ""}`}
                 onSelect={() => {
                   navigate("/inventory", { state: { focusGuestId: guest.id, focusGuestName: guest.name } })
                   setOpen(false)

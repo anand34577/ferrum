@@ -32,6 +32,8 @@ const UsersPage = lazy(() => import("@/pages/UsersPage").then((m) => ({ default:
 const AlertsPage = lazy(() => import("@/pages/AlertsPage").then((m) => ({ default: m.AlertsPage })))
 const TopologyPage = lazy(() => import("@/pages/TopologyPage").then((m) => ({ default: m.TopologyPage })))
 const ProfilePage = lazy(() => import("@/pages/ProfilePage").then((m) => ({ default: m.ProfilePage })))
+const BulkOperationsPage = lazy(() => import("@/pages/BulkOperationsPage").then((m) => ({ default: m.BulkOperationsPage })))
+const WebhooksPage = lazy(() => import("@/pages/WebhooksPage").then((m) => ({ default: m.WebhooksPage })))
 
 function PageFallback() {
   return (
@@ -147,6 +149,8 @@ export default function App() {
             <Route path="/alerts" element={route(<AlertsPage />)} />
             <Route path="/tasks" element={route(<TasksPage />)} />
             <Route path="/ai-assistant" element={route(<AIAssistantPage />)} />
+            <Route path="/bulk-operations" element={route(<BulkOperationsPage />, true)} />
+            <Route path="/webhooks" element={route(<WebhooksPage />, true)} />
             <Route path="/connections" element={route(<ConnectionsPage />, true)} />
             <Route path="/users" element={route(<UsersPage />, true)} />
             <Route path="/audit" element={route(<AuditPage />, true)} />

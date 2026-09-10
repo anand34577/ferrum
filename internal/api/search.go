@@ -14,6 +14,7 @@ import (
 // carries connection/type/node/vmid so the frontend can route straight to
 // the result without a follow-up lookup.
 type searchResult struct {
+	ID             string `json:"id"` // PVE's own resource id (e.g. "qemu/100") — matches ClusterResource.ID, usable as InventoryPage's focusGuestId
 	ConnectionID   string `json:"connectionId"`
 	ConnectionName string `json:"connectionName"`
 	Type           string `json:"type"` // "qemu" | "lxc"
@@ -130,6 +131,7 @@ func matchResources(connID, connName string, resources []pve.ClusterResource, q 
 			continue
 		}
 		out = append(out, searchResult{
+			ID:           res.ID,
 			ConnectionID: connID, ConnectionName: connName,
 			Type: res.Type, VMID: res.VMID, Name: res.Name, Node: res.Node,
 			Tags: res.Tags, Status: res.Status, rank: rank,
