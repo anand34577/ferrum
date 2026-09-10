@@ -225,6 +225,9 @@ func (s *Server) putNotificationSettings(w http.ResponseWriter, r *http.Request)
 	if s.evaluator != nil {
 		s.evaluator.SetNotifier(s.notify)
 	}
+	if s.digestScheduler != nil {
+		s.digestScheduler.SetNotifier(s.notify)
+	}
 	s.audit(r, "settings.notifications", "settings", "updated")
 	writeJSON(w, http.StatusOK, toNotificationSettingsResponse(row))
 }

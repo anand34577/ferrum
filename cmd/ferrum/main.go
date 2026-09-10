@@ -21,6 +21,7 @@ import (
 	"ferrum/internal/auth"
 	"ferrum/internal/config"
 	"ferrum/internal/connections"
+	"ferrum/internal/digest"
 	"ferrum/internal/events"
 	"ferrum/internal/notify"
 	"ferrum/internal/poller"
@@ -164,6 +165,10 @@ func runServer(ctx context.Context, cfg config.Config) {
 
 	webhookDispatcher := notify.NewWebhookDispatcher(db)
 	srv.SetWebhookDispatcher(webhookDispatcher)
+
+	digestScheduler := digest.NewScheduler(db, connections.New(db, secretBox))
+	srv.SetDigestScheduler(digestScheduler)
+
 	if err := srv.BootstrapSettings(ctx, cfg.OIDC.Enabled, auth.OIDCConfig{
 		DisplayName:  cfg.OIDC.DisplayName,
 		IssuerURL:    cfg.OIDC.IssuerURL,
@@ -175,6 +180,7 @@ func runServer(ctx context.Context, cfg config.Config) {
 		os.Exit(1)
 	}
 	evaluator.SetNotifier(srv.Notifier())
+	digestScheduler.SetNotifier(srv.Notifier())
 
 	// ctx governs shutdown (process signals normally; the Windows SCM's stop
 	// request when running as a service). The poller derives from it so it
@@ -189,6 +195,8 @@ func runServer(ctx context.Context, cfg config.Config) {
 	// interval rather than sharing AlertPollInterval.
 	lifecycleEvaluator := poller.NewLifecycleEvaluator(db, connections.New(db, secretBox))
 	go lifecycleEvaluator.Run(pollerCtx, lifecycleSweepInterval)
+
+	go digestScheduler.Run(pollerCtx)
 
 	distFS, err := web.DistFS()
 	if err != nil {

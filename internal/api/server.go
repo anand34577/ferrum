@@ -20,6 +20,7 @@ import (
 
 	"ferrum/internal/auth"
 	"ferrum/internal/connections"
+	"ferrum/internal/digest"
 	"ferrum/internal/events"
 	"ferrum/internal/mcp"
 	"ferrum/internal/needle"
@@ -43,8 +44,9 @@ type Server struct {
 	oidcMu sync.RWMutex
 	oidc   *auth.OIDCClient // nil when SSO isn't configured; guarded because the settings UI can replace it at any time
 
-	evaluator *poller.AlertEvaluator // its SetNotifier is called when the notification settings are saved; nil until SetAlertEvaluator is called
-	notify    *notify.Notifier       // never nil — Notify is a no-op when no channel is enabled
+	evaluator       *poller.AlertEvaluator // its SetNotifier is called when the notification settings are saved; nil until SetAlertEvaluator is called
+	digestScheduler *digest.Scheduler      // its SetNotifier is called when the notification settings are saved; nil until SetDigestScheduler is called
+	notify          *notify.Notifier       // never nil — Notify is a no-op when no channel is enabled
 
 	events   *events.Bus               // in-process pub/sub backing SSE and outgoing webhooks; nil until SetEventBus is called (see cmd/ferrum/main.go)
 	webhooks *notify.WebhookDispatcher // nil until SetWebhookDispatcher is called
@@ -150,6 +152,14 @@ func (s *Server) SetEventBus(b *events.Bus) {
 // startup.
 func (s *Server) SetWebhookDispatcher(d *notify.WebhookDispatcher) {
 	s.webhooks = d
+}
+
+// SetDigestScheduler mirrors SetAlertEvaluator for the fleet digest
+// scheduler — lets the notification settings handler push a newly saved
+// Gotify/SMTP config into it, and lets the /settings/digest/send-now
+// handler trigger an immediate send.
+func (s *Server) SetDigestScheduler(d *digest.Scheduler) {
+	s.digestScheduler = d
 }
 
 func New(db *store.DB, authSvc *auth.Service, secretBox *secrets.Box, opts ServerOptions) *Server {
@@ -319,6 +329,16 @@ func (s *Server) Router() http.Handler {
 						r.Get("/tasks/{upid}/log", s.pbsTaskLog)
 					})
 					r.With(s.requireAdmin).Get("/certificates", s.connectionCertificates)
+
+					r.Route("/export", func(r chi.Router) {
+						// Exporting the full live inventory as IaC is
+						// sensitive infrastructure detail — admin-only
+						// regardless of the requireAdminForMutations
+						// read-passthrough this route tree otherwise allows.
+						r.Use(s.requireAdmin)
+						r.Get("/terraform", s.exportTerraform)
+						r.Get("/ansible", s.exportAnsible)
+					})
 
 					r.Route("/guests/{type}/{node}/{vmid}", func(r chi.Router) {
 						r.Post("/power/{action}", s.guestPowerAction)
@@ -653,6 +673,9 @@ func (s *Server) Router() http.Handler {
 					r.Put("/agent", s.putAgentSettings)
 					r.Get("/system", s.getSystemSettings)
 					r.Put("/system", s.putSystemSettings)
+					r.Get("/digest", s.getDigestSettings)
+					r.Put("/digest", s.putDigestSettings)
+					r.Post("/digest/send-now", s.sendDigestNow)
 
 					r.Route("/ai/providers", func(r chi.Router) {
 						r.Get("/", s.listAIProviders)
