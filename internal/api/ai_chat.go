@@ -27,11 +27,59 @@ import (
 // never guessed.
 const systemPrompt = `You are the Ferrum AI Assistant, built into the Ferrum fleet-control application for managing Proxmox VE infrastructure.
 
-Scope: you help ONLY with this application and the user's Proxmox/Ferrum-managed infrastructure — nodes, VMs, containers, storage, backups, replication, high availability, firewall rules, cluster/SDN configuration, alerts, resource pools, and how to use Ferrum's own features. You are a specialized operations assistant, not a general-purpose chatbot: politely decline requests unrelated to this domain (general programming help, trivia, personal advice, creative writing, etc.) and steer the conversation back to fleet management.
+Scope: you help ONLY with this application and the user's Proxmox/Ferrum-managed infrastructure — nodes, VMs, containers, storage, backups, replication, high availability, firewall rules, cluster/SDN configuration, alerts, resource pools, and how to use Ferrum's own features. You are a specialized operations assistant, not a general-purpose chatbot.
+
+If a request is unrelated to this domain — general programming help or code samples in a general-purpose language, trivia, personal advice, creative writing, math homework, etc. — do NOT answer it, not even briefly or as a courtesy before redirecting. Refuse immediately, in one short sentence, and say what you can help with instead. Never produce unrelated code, explanations, or examples "just this once."
 
 Tools: you have tools to query the user's real, live infrastructure (connections, nodes, guests, storage, pools, alerts, cluster status) and — for administrators only — to start/stop/reboot a guest. ALWAYS call a tool to look up current data before answering a question about the user's actual infrastructure; never guess or invent connection IDs, node names, VMIDs, or statuses. If a mutating tool call is rejected for lacking admin rights, say so plainly rather than pretending it succeeded.
 
 Style: be concise and technical. Use markdown — lists and fenced code blocks — when it improves clarity, but don't pad answers with filler.`
+
+// offTopicLanguagePattern/offTopicSignalPattern/infraKeywordPattern back the
+// system prompt's scope rule with an actual guarantee for the specific
+// failure this was written for: a small/local model (the ones most likely
+// to be run through an OpenAI-compatible provider here) answering a plain
+// "write me a Java program" request anyway, sometimes with a token
+// "by the way, I'm for Proxmox" note tacked on AFTER already answering it.
+// System-prompt instructions alone are advisory — a model that doesn't
+// reliably follow them just ignores this one too. This check runs before
+// the model is ever called, so a match is refused deterministically
+// regardless of what the model would have done.
+//
+// Deliberately narrow — a language name AND a generic "write me code"
+// signal AND *no* infrastructure keyword at all — to avoid false-positives
+// on real automation asks like "write a python script using proxmoxer to
+// migrate these VMs" (infra keyword present, sails through untouched).
+//
+// ponytail: a regex heuristic, not a classifier. A phrasing it doesn't
+// catch just falls through to the system prompt like before; upgrade this
+// to a real moderation/classification call only if this list visibly stops
+// catching real cases.
+var (
+	offTopicLanguagePattern = regexp.MustCompile(`(?i)\b(java|python|javascript|typescript|c\+\+|c#|golang|rust language|ruby|php|kotlin|swift)\b`)
+	offTopicSignalPattern   = regexp.MustCompile(`(?i)\b(sample program|sample code|code example|example code|write (me |a )*program)\b|\bprogram\b`)
+	infraKeywordPattern     = regexp.MustCompile(`(?i)\b(proxmox|ferrum|vms?|lxc|qemu|container|node|cluster|storage|backup|snapshot|firewall|\bha\b|resource pool|connection|guest|alert|sdn|webhook|replication|api key)\b`)
+)
+
+// looksLikeOffTopicCodeRequest is true only for the narrow, high-confidence
+// case documented above.
+func looksLikeOffTopicCodeRequest(text string) bool {
+	return offTopicLanguagePattern.MatchString(text) && offTopicSignalPattern.MatchString(text) && !infraKeywordPattern.MatchString(text)
+}
+
+// lastUserMessageText is what looksLikeOffTopicCodeRequest checks — only
+// the newest turn, so a stale off-topic message earlier in a long
+// conversation's history never blocks an otherwise on-topic follow-up.
+func lastUserMessageText(msgs []chatMessage) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			return msgs[i].Content
+		}
+	}
+	return ""
+}
+
+const offTopicRefusalMessage = "I'm scoped to Proxmox VE / Ferrum fleet management, so I can't help with general programming questions or code samples unrelated to your infrastructure. Ask me about nodes, guests, storage, backups, alerts, or anything else in your fleet instead."
 
 type chatMessage struct {
 	Role    string `json:"role"` // "system" | "user" | "assistant"
@@ -41,7 +89,36 @@ type chatMessage struct {
 type aiChatRequest struct {
 	ModelID  string        `json:"modelId,omitempty"` // an ai_provider_models row id; falls back to the configured default model
 	Messages []chatMessage `json:"messages"`
+	// ReasoningEffort maps straight through to the OpenAI-compatible
+	// "reasoning_effort" request field (o-series/gpt-5-class reasoning
+	// models) — "minimal" | "low" | "medium" | "high", or empty to omit it
+	// and let the provider use its own default. Forwarded as-is; a runtime
+	// that doesn't recognize the field just ignores it.
+	//
+	// It is ALSO mapped to chat_template_kwargs.enable_thinking (see
+	// thinkingEnabled), the knob Qwen3-class models exposed through vLLM /
+	// LM Studio / Ollama actually obey — those runtimes ignore
+	// reasoning_effort entirely, so on its own the selector had no visible
+	// effect there and "Reasoning off" still produced a thinking block.
+	// Hosted APIs that reject the unknown field are handled by the
+	// drop-and-retry in aiChat.
+	//
+	// ponytail: two knobs covers every runtime Ferrum talks to today.
+	// Anthropic's thinking.budget_tokens would be a third — add it if a
+	// native Anthropic provider ever lands.
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 }
+
+// thinkingEnabled maps the OpenAI-style effort levels onto the binary
+// on/off switch Qwen3-class chat templates expose. "" is the UI's
+// "Reasoning off", and "minimal" is the closest thing to off that a
+// graded model offers — both mean "don't think", everything else means
+// "do".
+func thinkingEnabled(reasoningEffort string) bool {
+	return reasoningEffort != "" && reasoningEffort != "minimal"
+}
+
+var validReasoningEfforts = map[string]bool{"minimal": true, "low": true, "medium": true, "high": true}
 
 // toolCallEnvelope is a Ferrum-specific SSE event (not part of the
 // OpenAI chunk format) that reports tool-calling activity as it happens, so
@@ -67,6 +144,32 @@ type toolActivity struct {
 // collapsible "Thinking" block.
 type reasoningEnvelope struct {
 	Reasoning string `json:"ferrum_reasoning"`
+}
+
+// usageInfo is token accounting for one /ai/chat request — real numbers
+// when the provider reports them (every OpenAI-compatible runtime that
+// honors stream_options.include_usage, or any non-streaming response's
+// "usage" object), estimated (Estimated=true, ~4 chars/token) when it
+// doesn't — Needle in particular has no token accounting of its own.
+type usageInfo struct {
+	PromptTokens     int     `json:"promptTokens"`
+	CompletionTokens int     `json:"completionTokens"`
+	ElapsedMs        int64   `json:"elapsedMs"`
+	TokensPerSecond  float64 `json:"tokensPerSecond,omitempty"`
+	Estimated        bool    `json:"estimated,omitempty"`
+}
+type usageEnvelope struct {
+	Usage *usageInfo `json:"ferrum_usage,omitempty"`
+}
+
+// estimatedTokens is the ~4-chars-per-token rule of thumb used only when a
+// provider gave us no real usage numbers to report instead.
+func estimatedTokens(s string) int {
+	return estimatedTokensFromLen(len(s))
+}
+
+func estimatedTokensFromLen(chars int) int {
+	return (chars + 3) / 4
 }
 
 // toolResultDisplayLimit caps how much of a tool's result text is sent to
@@ -212,6 +315,10 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 		writeErrorMsg(w, http.StatusBadRequest, "messages must not be empty")
 		return
 	}
+	if req.ReasoningEffort != "" && !validReasoningEfforts[req.ReasoningEffort] {
+		writeErrorMsg(w, http.StatusBadRequest, "reasoningEffort must be one of: minimal, low, medium, high")
+		return
+	}
 
 	modelRowID := req.ModelID
 	if modelRowID == "" {
@@ -270,10 +377,35 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	clearWriteDeadline(w)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
+
+	// Defense in depth: local/third-party OpenAI-compatible runtimes
+	// (LM Studio, LocalAI, ...) are known to return malformed or
+	// unexpected-shaped responses under load or after an error, and an
+	// unrecovered panic here doesn't fail cleanly — net/http's own recovery
+	// just kills the TCP connection mid-chunk, which the browser reports as
+	// a bare, unhelpful "network error" (see the nil-map fix a few lines
+	// down in callChatCompletion for one real instance of this). Turn any
+	// panic into a proper SSE error instead of a silent connection death.
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("ai chat handler panicked", "recovered", rec)
+			writeSSEError(w, flusher, "Something went wrong handling the AI provider's response — please try again.")
+		}
+	}()
+
+	// Deterministic guardrail — see looksLikeOffTopicCodeRequest's doc
+	// comment. Checked, and refused, before the model is ever called: a
+	// small/local model that doesn't reliably follow the system prompt's
+	// scope rule can't produce the off-topic answer if it's never asked.
+	if looksLikeOffTopicCodeRequest(lastUserMessageText(req.Messages)) {
+		streamText(w, flusher, offTopicRefusalMessage)
+		return
+	}
 
 	messages := make([]map[string]any, 0, len(req.Messages)+1)
 	messages = append(messages, map[string]any{"role": "system", "content": systemPrompt})
@@ -281,10 +413,16 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 		messages = append(messages, map[string]any{"role": m.Role, "content": m.Content})
 	}
 
+	start := time.Now()
 	tools := buildToolDefs()
 	toolsSupported := true
 	var finalContent string
 	var finalAlreadyStreamed bool
+	// Token accounting across every round of this request's tool-calling
+	// loop — see the usageInfo doc comment for why it's real numbers when
+	// the provider reports them and an estimate otherwise.
+	var totalPromptTokens, totalCompletionTokens int
+	var haveRealUsage bool
 	// lastToolRound holds the most recent batch of tool calls/results — used
 	// as a fallback answer when a provider (Needle, in practice: it's a pure
 	// tool-router with no narrative output of its own) finishes calling tools
@@ -293,6 +431,11 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 	// "what just happened" going into the empty final reply.
 	var lastToolRound []toolRoundResult
 	ranOutOfIterations := true
+	// chat_template_kwargs is understood by local runtimes and rejected with
+	// a 400 by strict hosted APIs (OpenAI: "Unrecognized request argument").
+	// Offer it, drop it on the first such rejection — same shape as the
+	// tools fallback below.
+	thinkingHint := true
 
 	for i := 0; i < agentSettings.maxToolIterations; i++ {
 		reqTools := tools
@@ -303,10 +446,18 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 		// once we've fallen back to plain-text mode, JSON-shaped content is
 		// just as likely to be a legitimate answer as a leaked tool call.
 		allowLeakCheck := toolsSupported
-		respMsg, status, streamedLive, err := s.callChatCompletion(ctx, w, flusher, baseURL, apiKey, model, messages, reqTools, allowLeakCheck)
+		respMsg, status, streamedLive, err := s.callChatCompletion(ctx, w, flusher, baseURL, apiKey, model, messages, reqTools, allowLeakCheck, req.ReasoningEffort, thinkingHint)
 		if err != nil {
-			if ctx.Err() != nil {
-				return // client disconnected or the request's own timeout hit — nothing left to report
+			if errors.Is(ctx.Err(), context.Canceled) {
+				return // real client disconnect — nothing left to report
+			}
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				// Our own 4-minute ceiling fired, typically after several slow
+				// tool round-trips — was previously swallowed as a silent
+				// stream close, which the browser's fetch reader surfaced as
+				// a bare "network error" with no explanation.
+				writeSSEError(w, flusher, "The AI provider took too long to respond across several tool calls and this request timed out — try a smaller question or fewer tool calls at once.")
+				return
 			}
 			// A streamError means we connected fine and the provider was
 			// already responding (possibly with some content already
@@ -326,13 +477,41 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 			// Some OpenAI-compatible runtimes (older LocalAI/LM Studio
 			// builds) reject an unrecognized "tools" field outright — retry
 			// once without it rather than failing the whole conversation.
-			if toolsSupported && i == 0 {
+			// Checked before the tools fallback: a strict hosted API rejects
+			// the whole request over chat_template_kwargs, so blaming tools
+			// for that 400 would drop function-calling for the rest of the
+			// conversation over an unrelated field.
+			if thinkingHint && status == http.StatusBadRequest {
+				thinkingHint = false
+				i--
+				continue
+			}
+			// Only a "you sent something I don't understand" rejection is worth
+			// retrying without tools — a 429 or a 5xx says nothing about the
+			// tools field, and retrying it immediately just spends another
+			// request against a provider that already asked us to slow down.
+			if toolsSupported && i == 0 && status < 500 && status != http.StatusTooManyRequests {
 				toolsSupported = false
 				i--
 				continue
 			}
+			if status == http.StatusTooManyRequests {
+				writeSSEError(w, flusher, "The AI provider is rate-limiting this key (429) — wait a moment and retry, or switch to another model/provider.")
+				return
+			}
 			writeSSEError(w, flusher, fmt.Sprintf("AI provider returned %d", status))
 			return
+		}
+
+		// Pulled off respMsg (not left in it) before anything below appends
+		// respMsg into the running `messages` history — a raw *rawUsage value
+		// there would otherwise get JSON-marshaled back to the provider as
+		// part of an "assistant" history message on the next tool-call round.
+		if u, _ := respMsg["usage"].(*rawUsage); u != nil {
+			totalPromptTokens += u.PromptTokens
+			totalCompletionTokens += u.CompletionTokens
+			haveRealUsage = true
+			delete(respMsg, "usage")
 		}
 
 		// Non-streaming providers (Needle) can only hand back reasoning once
@@ -406,6 +585,27 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 		// below can't be un-sent.
 		finalContent = "This model attempted to use a tool but doesn't reliably support function-calling, so I can't confirm real data from your infrastructure this way. Try rephrasing without asking it to \"use tools,\" or switch to a model/provider known to support function-calling (e.g. GPT-4o-mini, or a larger Qwen2.5/Llama 3.1 build) for questions that need live fleet data."
 	}
+
+	elapsed := time.Since(start)
+	usage := usageInfo{ElapsedMs: elapsed.Milliseconds()}
+	if haveRealUsage {
+		usage.PromptTokens = totalPromptTokens
+		usage.CompletionTokens = totalCompletionTokens
+	} else {
+		usage.Estimated = true
+		usage.CompletionTokens = estimatedTokens(finalContent)
+		var promptChars int
+		for _, m := range messages {
+			if c, ok := m["content"].(string); ok {
+				promptChars += len(c)
+			}
+		}
+		usage.PromptTokens = estimatedTokensFromLen(promptChars)
+	}
+	if secs := elapsed.Seconds(); secs > 0 {
+		usage.TokensPerSecond = float64(usage.CompletionTokens) / secs
+	}
+	writeSSEJSON(w, flusher, usageEnvelope{Usage: &usage})
 
 	if finalAlreadyStreamed {
 		// Already flushed to the browser token-by-token as the provider
@@ -487,17 +687,27 @@ const leakPrefixWindow = 96
 // (rare in practice: the documented shapes all start right at the top).
 func (s *Server) callChatCompletion(
 	ctx context.Context, w http.ResponseWriter, flusher http.Flusher,
-	baseURL, apiKey, model string, messages []map[string]any, tools []map[string]any, allowLeakCheck bool,
+	baseURL, apiKey, model string, messages []map[string]any, tools []map[string]any, allowLeakCheck bool, reasoningEffort string, thinkingHint bool,
 ) (respMsg map[string]any, status int, streamedLive bool, err error) {
 	if needle.IsBuiltin(baseURL) {
 		respMsg, status, err = s.needle.ChatCompletion(ctx, messages, tools)
 		return respMsg, status, false, err
 	}
 
-	payload := map[string]any{"model": model, "messages": messages, "stream": true}
+	// stream_options.include_usage asks any OpenAI-compatible runtime that
+	// supports it to append one final chunk carrying real prompt/completion
+	// token counts (see parseChatCompletionStream) — ignored harmlessly by
+	// runtimes that don't recognize the field.
+	payload := map[string]any{"model": model, "messages": messages, "stream": true, "stream_options": map[string]any{"include_usage": true}}
 	if len(tools) > 0 {
 		payload["tools"] = tools
 		payload["tool_choice"] = "auto"
+	}
+	if reasoningEffort != "" {
+		payload["reasoning_effort"] = reasoningEffort
+	}
+	if thinkingHint {
+		payload["chat_template_kwargs"] = map[string]any{"enable_thinking": thinkingEnabled(reasoningEffort)}
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -535,6 +745,7 @@ func (s *Server) callChatCompletion(
 			Choices []struct {
 				Message map[string]any `json:"message"`
 			} `json:"choices"`
+			Usage *rawUsage `json:"usage"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 			return nil, 0, false, err
@@ -542,11 +753,37 @@ func (s *Server) callChatCompletion(
 		if len(parsed.Choices) == 0 {
 			return nil, 0, false, fmt.Errorf("provider returned no choices")
 		}
-		return parsed.Choices[0].Message, resp.StatusCode, false, nil
+		msg := parsed.Choices[0].Message
+		if msg == nil {
+			// A choice with a null/missing "message" — seen from local
+			// runtimes (LM Studio, older LocalAI builds) when generation
+			// errors out after a rough tool-call round. json.Unmarshal
+			// leaves a `map[string]any` nil for a JSON null, and writing
+			// into a nil map panics — which net/http "recovers" from by
+			// abruptly killing the TCP connection mid-response (no clean
+			// chunked terminator), which the browser's fetch reader then
+			// reports as a bare "network error" with zero context. Treat it
+			// as an empty (contentless) message instead.
+			msg = map[string]any{}
+		}
+		if parsed.Usage != nil {
+			msg["usage"] = parsed.Usage
+		}
+		return msg, resp.StatusCode, false, nil
 	}
 
 	respMsg, streamedLive, err = parseChatCompletionStream(resp.Body, w, flusher, allowLeakCheck)
 	return respMsg, resp.StatusCode, streamedLive, err
+}
+
+// rawUsage mirrors the OpenAI-compatible "usage" object — present on every
+// non-streaming response, and on a streaming response's final chunk only
+// when the request set stream_options.include_usage (see
+// callChatCompletion). Stashed verbatim onto respMsg["usage"] so aiChat can
+// turn it into the real (non-estimated) half of usageInfo.
+type rawUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
 }
 
 // streamChunkDelta mirrors the OpenAI streaming-chunk "delta" shape enough
@@ -606,6 +843,7 @@ func parseChatCompletionStream(body io.Reader, w http.ResponseWriter, flusher ht
 	var full, pending strings.Builder
 	flushing := false
 	leakSuppressed := false
+	var usage *rawUsage
 
 	flush := func(s string) {
 		if s == "" {
@@ -633,6 +871,10 @@ func parseChatCompletionStream(body io.Reader, w http.ResponseWriter, flusher ht
 			Error *struct {
 				Message string `json:"message"`
 			} `json:"error"`
+			// Usage arrives on its own final chunk (empty Choices) only when
+			// the request set stream_options.include_usage — see
+			// callChatCompletion.
+			Usage *rawUsage `json:"usage"`
 		}
 		if json.Unmarshal([]byte(payload), &chunk) != nil {
 			continue
@@ -643,6 +885,9 @@ func parseChatCompletionStream(body io.Reader, w http.ResponseWriter, flusher ht
 				msg = "provider reported an error mid-stream"
 			}
 			return respMsg, streamedLive, &streamError{fmt.Errorf("%s", msg)}
+		}
+		if chunk.Usage != nil {
+			usage = chunk.Usage
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -718,6 +963,9 @@ func parseChatCompletionStream(body io.Reader, w http.ResponseWriter, flusher ht
 		}
 		respMsg["tool_calls"] = calls
 	}
+	if usage != nil {
+		respMsg["usage"] = usage
+	}
 	return respMsg, streamedLive, nil
 }
 
@@ -751,6 +999,17 @@ func streamText(w http.ResponseWriter, flusher http.Flusher, text string) {
 		time.Sleep(8 * time.Millisecond)
 	}
 	writeSSEDone(w, flusher)
+}
+
+// clearWriteDeadline lifts the server's global WriteTimeout (see
+// cmd/ferrum/main.go) for one response. That timeout is right for normal
+// request/response endpoints but fatal for SSE: once it fires, net/http kills
+// the TCP connection mid-chunk with no [DONE] and no error event, which the
+// browser's fetch reader reports as a bare "network error" — the exact
+// failure seen after a few slow tool round-trips against a local model, since
+// the handler's own 4-minute ceiling could never be reached.
+func clearWriteDeadline(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 }
 
 func writeSSEDone(w http.ResponseWriter, flusher http.Flusher) {

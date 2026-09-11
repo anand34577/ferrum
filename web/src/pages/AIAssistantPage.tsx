@@ -41,7 +41,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton"
 import { api, type ToolCallRecord, type UsableAIProvider } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
-import { type Conversation, type DisplayMessage, type ToolCallEntry, useAIConversations } from "@/lib/useAIConversations"
+import { type Conversation, type DisplayMessage, type MessageUsage, type ReasoningEffort, type ToolCallEntry, useAIConversations } from "@/lib/useAIConversations"
 import { cn, formatRelativeTime } from "@/lib/utils"
 
 function newId() {
@@ -91,6 +91,7 @@ function parseSSELine(line: string): {
   reasoning?: string
   toolCall?: { name: string; args?: unknown }
   toolResult?: { name: string; ok: boolean; result?: string }
+  usage?: MessageUsage
   error?: string
   done?: boolean
 } {
@@ -104,20 +105,26 @@ function parseSSELine(line: string): {
     if (parsed.ferrum_tool_call) return { toolCall: { name: parsed.ferrum_tool_call.name, args: parsed.ferrum_tool_call.args } }
     if (parsed.ferrum_tool_result)
       return { toolResult: { name: parsed.ferrum_tool_result.name, ok: !!parsed.ferrum_tool_result.ok, result: parsed.ferrum_tool_result.result } }
+    if (parsed.ferrum_usage) return { usage: parsed.ferrum_usage }
     return { delta: parsed.choices?.[0]?.delta?.content ?? undefined }
   } catch {
     return {}
   }
 }
 
-const SHOW_THINKING_KEY = "ferrum.ai-assistant.show-thinking"
+/** "128 tok · 42 tok/s" — the assistant-message metadata line's token half.
+ * "~" prefix when the numbers are Ferrum's own estimate, not the provider's. */
+function formatUsage(u: MessageUsage): string {
+  const prefix = u.estimated ? "~" : ""
+  const parts = [`${prefix}${u.completionTokens} tok`]
+  if (u.tokensPerSecond && u.tokensPerSecond > 0) parts.push(`${u.tokensPerSecond.toFixed(1)} tok/s`)
+  return parts.join(" · ")
+}
 
-function loadShowThinking(): boolean {
-  try {
-    return localStorage.getItem(SHOW_THINKING_KEY) !== "0"
-  } catch {
-    return true
-  }
+function formatTimestamp(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ""
+  return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
 }
 
 interface SlashCommand {
@@ -180,6 +187,13 @@ export function AIAssistantPage() {
 
   const { conversations, active, activeId, setActiveId, createConversation, deleteConversation, deleteConversations, updateConversation, setMessages } =
     useAIConversations(defaultModelId)
+  // The model picker needs somewhere to live before any conversation exists
+  // yet (fresh page load, no chat started) — otherwise onValueChange had
+  // nothing to update and picking a model silently did nothing until the
+  // first message created a conversation (which then reset to the default).
+  const [pendingModelId, setPendingModelId] = useState(defaultModelId)
+  // Same story as pendingModelId, for the reasoning-effort picker.
+  const [pendingReasoningEffort, setPendingReasoningEffort] = useState<ReasoningEffort>("")
 
   const [input, setInput] = useState("")
   const [streamingText, setStreamingText] = useState<string | null>(null)
@@ -187,21 +201,8 @@ export function AIAssistantPage() {
   const [toolActivity, setToolActivity] = useState<ToolActivity[]>([])
   const [streaming, setStreaming] = useState(false)
   const [slashIndex, setSlashIndex] = useState(0)
-  const [showThinking, setShowThinking] = useState(loadShowThinking)
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-
-  function toggleShowThinking() {
-    setShowThinking((prev) => {
-      const next = !prev
-      try {
-        localStorage.setItem(SHOW_THINKING_KEY, next ? "1" : "0")
-      } catch {
-        // private browsing / storage blocked — the toggle still works for this session
-      }
-      return next
-    })
-  }
 
   function toggleSelected(id: string) {
     setSelectedIds((prev) => {
@@ -243,8 +244,16 @@ export function AIAssistantPage() {
   const stickToBottomRef = useRef(true)
   const [atBottom, setAtBottom] = useState(true)
   const [newBelow, setNewBelow] = useState(false)
+  // A fast/local provider can emit dozens of SSE lines per second — pushing
+  // each straight into state meant a React re-render (and the auto-follow
+  // effect's forced scrollTop write) on every single token, which starved
+  // the browser of idle time to process the user's own scroll-wheel input
+  // and made "scroll up mid-response" feel frozen. Coalesced to at most one
+  // flush per animation frame instead.
+  const flushRafRef = useRef<number | null>(null)
 
-  const modelId = active?.modelId || defaultModelId
+  const modelId = active?.modelId || pendingModelId || defaultModelId
+  const reasoningEffort: ReasoningEffort = active?.reasoningEffort ?? pendingReasoningEffort
   const selectedModel = flatModels.find((m) => m.modelRowId === modelId)
   const committedMessages = active?.messages ?? []
   const displayMessages: (DisplayMessage & { streaming?: boolean })[] = streaming
@@ -308,7 +317,7 @@ export function AIAssistantPage() {
     if (near) setNewBelow(false)
   }
 
-  async function runCompletion(convId: string, history: DisplayMessage[], useModelId: string) {
+  async function runCompletion(convId: string, history: DisplayMessage[], useModelId: string, useReasoningEffort: ReasoningEffort) {
     setStreaming(true)
     setStreamingText("")
     setStreamingReasoning(null)
@@ -317,6 +326,7 @@ export function AIAssistantPage() {
     abortRef.current = controller
     let assistantText = ""
     let reasoningText = ""
+    let usage: MessageUsage | undefined
     let midStreamError: string | null = null
     let aborted = false
     // Mirrors the toolActivity state updates below, but as a plain array so
@@ -326,6 +336,15 @@ export function AIAssistantPage() {
     // would vanish the moment the response finished.
     const toolLog: ToolCallEntry[] = []
 
+    function scheduleFlush() {
+      if (flushRafRef.current != null) return
+      flushRafRef.current = requestAnimationFrame(() => {
+        flushRafRef.current = null
+        setStreamingText(assistantText)
+        if (reasoningText) setStreamingReasoning(reasoningText)
+      })
+    }
+
     try {
       const res = await fetch("/api/v1/ai/chat", {
         method: "POST",
@@ -334,6 +353,7 @@ export function AIAssistantPage() {
         signal: controller.signal,
         body: JSON.stringify({
           modelId: useModelId || undefined,
+          reasoningEffort: useReasoningEffort || undefined,
           messages: history.map(({ role, content }) => ({ role, content })),
         }),
       })
@@ -355,10 +375,10 @@ export function AIAssistantPage() {
           const evt = parseSSELine(line)
           if (evt.delta) {
             assistantText += evt.delta
-            setStreamingText(assistantText)
+            scheduleFlush()
           } else if (evt.reasoning) {
             reasoningText += evt.reasoning
-            setStreamingReasoning(reasoningText)
+            scheduleFlush()
           } else if (evt.toolCall) {
             const { name, args } = evt.toolCall
             setToolActivity((prev) => [...prev, { name, args, status: "running" }])
@@ -378,6 +398,8 @@ export function AIAssistantPage() {
               const realIdx = toolLog.length - 1 - logIdx
               toolLog[realIdx] = { ...toolLog[realIdx], ok, result }
             }
+          } else if (evt.usage) {
+            usage = evt.usage
           } else if (evt.error) {
             midStreamError = evt.error
           }
@@ -396,6 +418,10 @@ export function AIAssistantPage() {
         toast.error(message)
       }
     } finally {
+      if (flushRafRef.current != null) {
+        cancelAnimationFrame(flushRafRef.current)
+        flushRafRef.current = null
+      }
       setStreaming(false)
       setStreamingText(null)
       setStreamingReasoning(null)
@@ -418,6 +444,8 @@ export function AIAssistantPage() {
             reasoning: reasoningText || undefined,
             toolCalls: toolLog.length > 0 ? toolLog : undefined,
             error: !aborted ? (midStreamError ?? undefined) : undefined,
+            createdAt: new Date().toISOString(),
+            usage,
           },
         ])
       }
@@ -430,8 +458,8 @@ export function AIAssistantPage() {
     setInput("")
     follow()
 
-    const convId = activeId ?? createConversation(modelId)
-    const userMsg: DisplayMessage = { id: newId(), role: "user", content: text }
+    const convId = activeId ?? createConversation(modelId, reasoningEffort)
+    const userMsg: DisplayMessage = { id: newId(), role: "user", content: text, createdAt: new Date().toISOString() }
     const history = [...committedMessages, userMsg]
     setMessages(convId, history)
     // Park the message just sent near the top of the viewport so the answer
@@ -441,7 +469,7 @@ export function AIAssistantPage() {
     requestAnimationFrame(() =>
       scrollRef.current?.querySelector(`[data-mid="${userMsg.id}"]`)?.scrollIntoView({ block: "start" }),
     )
-    await runCompletion(convId, history, modelId)
+    await runCompletion(convId, history, modelId, reasoningEffort)
   }
 
   function runSlashCommand(command: SlashCommand) {
@@ -449,7 +477,7 @@ export function AIAssistantPage() {
     follow()
     if (!command.prompt) {
       // Purely local — answer immediately without involving the provider.
-      const convId = activeId ?? createConversation(modelId)
+      const convId = activeId ?? createConversation(modelId, reasoningEffort)
       const userMsg: DisplayMessage = { id: newId(), role: "user", content: command.cmd }
       const helpMsg: DisplayMessage = { id: newId(), role: "assistant", content: HELP_TEXT }
       setMessages(convId, [...committedMessages, userMsg, helpMsg])
@@ -470,7 +498,7 @@ export function AIAssistantPage() {
     const history = committedMessages.slice(0, cutoff)
     follow()
     setMessages(active.id, history)
-    await runCompletion(active.id, history, modelId)
+    await runCompletion(active.id, history, modelId, reasoningEffort)
   }
 
   async function handleDelete(id: string, title: string) {
@@ -540,7 +568,7 @@ export function AIAssistantPage() {
             same list through the History button in the chat panel's header. */}
         <div className="hidden w-60 shrink-0 flex-col gap-2 md:flex">
           <div className="flex items-center gap-1">
-            <Button size="sm" variant="secondary" className="flex-1 justify-start" onClick={() => createConversation(modelId)}>
+            <Button size="sm" variant="secondary" className="flex-1 justify-start" onClick={() => createConversation(modelId, reasoningEffort)}>
               <MessageSquarePlus className="h-3.5 w-3.5" /> New chat
             </Button>
             {conversations.length > 0 && (
@@ -554,7 +582,14 @@ export function AIAssistantPage() {
               </Button>
             )}
           </div>
-          {selectMode && <SelectionBar count={selectedIds.size} onDelete={deleteSelected} />}
+          {selectMode && (
+            <SelectionBar
+              count={selectedIds.size}
+              total={conversations.length}
+              onSelectAll={() => setSelectedIds(new Set(conversations.map((c) => c.id)))}
+              onDelete={deleteSelected}
+            />
+          )}
           <div className="flex-1 space-y-1 overflow-y-auto">
             <ConversationList
               conversations={conversations}
@@ -577,7 +612,7 @@ export function AIAssistantPage() {
               <DialogTitle>Conversations</DialogTitle>
             </DialogHeader>
             <div className="flex items-center gap-1">
-              <Button size="sm" variant="secondary" className="flex-1 justify-start" onClick={() => { createConversation(modelId); setHistoryOpen(false) }}>
+              <Button size="sm" variant="secondary" className="flex-1 justify-start" onClick={() => { createConversation(modelId, reasoningEffort); setHistoryOpen(false) }}>
                 <MessageSquarePlus className="h-3.5 w-3.5" /> New chat
               </Button>
               {conversations.length > 0 && (
@@ -591,7 +626,14 @@ export function AIAssistantPage() {
                 </Button>
               )}
             </div>
-            {selectMode && <SelectionBar count={selectedIds.size} onDelete={deleteSelected} />}
+            {selectMode && (
+              <SelectionBar
+                count={selectedIds.size}
+                total={conversations.length}
+                onSelectAll={() => setSelectedIds(new Set(conversations.map((c) => c.id)))}
+                onDelete={deleteSelected}
+              />
+            )}
             <div className="max-h-[60vh] space-y-1 overflow-y-auto">
               <ConversationList
                 conversations={conversations}
@@ -611,7 +653,7 @@ export function AIAssistantPage() {
           <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] bg-[var(--bg-elevated)]/60 px-4 py-2.5 backdrop-blur-sm">
             <Select
               value={modelId}
-              onValueChange={(v) => (active ? updateConversation(active.id, { modelId: v }) : undefined)}
+              onValueChange={(v) => (active ? updateConversation(active.id, { modelId: v }) : setPendingModelId(v))}
             >
               <SelectTrigger
                 className="w-auto max-w-[60%] min-w-0 gap-2 overflow-hidden sm:max-w-xs"
@@ -628,21 +670,41 @@ export function AIAssistantPage() {
               </SelectContent>
             </Select>
             <div className="flex shrink-0 items-center gap-2">
-              <Badge variant="brand" className="hidden sm:inline-flex">Fleet-focused</Badge>
-              <Button
-                size="sm"
-                variant="ghost"
-                title={showThinking ? "Hide model reasoning" : "Show model reasoning"}
-                aria-pressed={showThinking}
-                className={cn("hidden sm:inline-flex", showThinking && "text-brand-500")}
-                onClick={toggleShowThinking}
+              <Select
+                value={reasoningEffort || "off"}
+                onValueChange={(v) => {
+                  const val = (v === "off" ? "" : v) as ReasoningEffort
+                  if (active) updateConversation(active.id, { reasoningEffort: val })
+                  else setPendingReasoningEffort(val)
+                }}
               >
-                <BrainCircuit className="h-3.5 w-3.5" /> Thinking
-              </Button>
+                <SelectTrigger
+                  className="hidden w-auto gap-1.5 sm:flex"
+                  title="Reasoning effort — passed through as the OpenAI-compatible `reasoning_effort` field; ignored by providers/models that don't support it. When on, the model's reasoning is always shown inline as it thinks."
+                >
+                  {/* SelectTrigger's own wrapper span isn't a flex container,
+                      and Tailwind's preflight makes <svg> block-level by
+                      default — without wrapping these two in their own flex
+                      row, the icon rendered on its own line above the text
+                      instead of beside it. */}
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <BrainCircuit className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                    <SelectValue />
+                  </span>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="off">Reasoning off</SelectItem>
+                  <SelectItem value="minimal">Minimal reasoning</SelectItem>
+                  <SelectItem value="low">Low reasoning</SelectItem>
+                  <SelectItem value="medium">Medium reasoning</SelectItem>
+                  <SelectItem value="high">High reasoning</SelectItem>
+                </SelectContent>
+              </Select>
+              <Badge variant="brand" className="hidden sm:inline-flex">Fleet-focused</Badge>
               <Button size="sm" variant="ghost" className="md:hidden" onClick={() => setHistoryOpen(true)}>
                 <History className="h-3.5 w-3.5" /> History
               </Button>
-              <Button size="sm" variant="ghost" className="md:hidden" onClick={() => createConversation(modelId)}>
+              <Button size="sm" variant="ghost" className="md:hidden" onClick={() => createConversation(modelId, reasoningEffort)}>
                 <MessageSquarePlus className="h-3.5 w-3.5" /> New
               </Button>
             </div>
@@ -705,8 +767,11 @@ export function AIAssistantPage() {
                     <div className={cn("min-w-0 max-w-[75%]", m.role === "user" && "flex flex-col items-end")}>
                       {/* The model's reasoning, if any — shown ahead of tool calls and
                           the answer itself, same ordering it actually happens in.
-                          Hidden entirely when the "Thinking" toggle is off. */}
-                      {showThinking && (m.streaming ? streamingReasoning : m.reasoning) && (
+                          Whenever a model actually sends reasoning content there's
+                          one to show here, so there's no separate on/off toggle for
+                          it — the "Reasoning" picker above controls whether the model
+                          reasons at all, not whether it's displayed. */}
+                      {(m.streaming ? streamingReasoning : m.reasoning) && (
                         <ThinkingBlock text={(m.streaming ? streamingReasoning : m.reasoning) ?? ""} active={!!m.streaming && !m.content} />
                       )}
                       {/* Live tool-call activity while this message is streaming, or —
@@ -760,14 +825,26 @@ export function AIAssistantPage() {
                           )}
                         </div>
                       )}
+                      {m.role === "user" && m.createdAt && (
+                        <span className="mt-1 text-[10px] text-[var(--text-muted)]">{formatTimestamp(m.createdAt)}</span>
+                      )}
                       {m.role === "assistant" && !m.streaming && (m.content || m.error) && (
-                        <div className={cn("mt-1 flex items-center gap-2 transition-opacity", !m.error && "opacity-0 group-hover:opacity-100")}>
-                          {m.content && <CopyMessageButton content={m.content} onCopy={copyMessage} />}
-                          {i === displayMessages.length - 1 && lastMessageIsAssistant && !streaming && (
-                            <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={regenerate}>
-                              <RotateCcw className="h-3 w-3" /> {m.error ? "Retry" : "Regenerate"}
-                            </Button>
+                        <div className="mt-1 flex items-center gap-2">
+                          {(m.createdAt || m.usage) && (
+                            <span className="text-[10px] text-[var(--text-muted)]">
+                              {m.createdAt && formatTimestamp(m.createdAt)}
+                              {m.createdAt && m.usage && " · "}
+                              {m.usage && formatUsage(m.usage)}
+                            </span>
                           )}
+                          <div className={cn("flex items-center gap-2 transition-opacity", !m.error && "opacity-0 group-hover:opacity-100")}>
+                            {m.content && <CopyMessageButton content={m.content} onCopy={copyMessage} />}
+                            {i === displayMessages.length - 1 && lastMessageIsAssistant && !streaming && (
+                              <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={regenerate}>
+                                <RotateCcw className="h-3 w-3" /> {m.error ? "Retry" : "Regenerate"}
+                              </Button>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -932,13 +1009,18 @@ function ActivityPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (o
 /** Shown above the conversation list while multi-select is active — the
  * running count plus the one bulk action, so clearing out old chats doesn't
  * mean confirming and clicking the trash icon once per conversation. */
-function SelectionBar({ count, onDelete }: { count: number; onDelete: () => void }) {
+function SelectionBar({ count, total, onSelectAll, onDelete }: { count: number; total: number; onSelectAll: () => void; onDelete: () => void }) {
   return (
     <div className="flex items-center justify-between gap-2 px-1 text-xs text-[var(--text-muted)]">
       <span>{count} selected</span>
-      <Button size="sm" variant="destructive" className="h-6 px-2 text-xs" disabled={count === 0} onClick={onDelete}>
-        <Trash2 className="h-3 w-3" /> Delete
-      </Button>
+      <div className="flex items-center gap-1">
+        <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" disabled={count === total} onClick={onSelectAll}>
+          Select all
+        </Button>
+        <Button size="sm" variant="destructive" className="h-6 px-2 text-xs" disabled={count === 0} onClick={onDelete}>
+          <Trash2 className="h-3 w-3" /> Delete
+        </Button>
+      </div>
     </div>
   )
 }

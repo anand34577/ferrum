@@ -19,7 +19,7 @@ Fleet control for Proxmox VE — a single dashboard for every cluster and standa
 
 ## Screenshots
 
-Captured against a mock Proxmox cluster (`prod-cluster`: 3 nodes, 16 VMs/LXCs, Ceph + NFS storage) to show the UI populated the way it looks on a real fleet. Click any thumbnail for the full-size image.
+A populated fleet — 3 connections, 6 nodes, 26 VMs/LXCs across two clusters and a standalone host, with Ceph and NFS storage. Click any thumbnail for the full-size image.
 
 <table>
 <tr>

@@ -35,6 +35,7 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 	ch, unsubscribe := s.events.Subscribe()
 	defer unsubscribe()
 
+	clearWriteDeadline(w)
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-cache")

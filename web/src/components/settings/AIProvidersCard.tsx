@@ -105,16 +105,29 @@ export function AIProvidersCard() {
         ? api.put(`/admin/settings/ai/providers/${editingId}`, body)
         : api.post<{ id: string }>("/admin/settings/ai/providers/", body)
     },
-    onSuccess: (res) => {
-      invalidate()
+    onSuccess: async (res) => {
       if (editingId) {
+        invalidate()
         toast.success("Provider updated")
-      } else {
-        // Stay open, switch into edit mode so the admin can add models
-        // immediately without a second "add provider" round trip.
-        toast.success("Provider added — now add a model below")
-        setEditingId((res as { id: string }).id)
+        return
       }
+      const providerId = (res as { id: string }).id
+      // Discovery already ran before Save (the "Discover" button works
+      // ad-hoc, pre-save) — if it found models, add them all now instead of
+      // making the admin click each one individually after the fact, so
+      // "add provider + fetch its models + save" is genuinely one action.
+      if (discoveredModels && discoveredModels.length > 0) {
+        await Promise.all(
+          discoveredModels.map((modelId, i) =>
+            api.post(`/admin/settings/ai/providers/${providerId}/models/`, { label: modelId, modelId, isDefault: i === 0 }),
+          ),
+        ).catch(() => toast.error("Provider saved, but adding some discovered models failed — add them below"))
+        toast.success(`Provider added with ${discoveredModels.length} model${discoveredModels.length === 1 ? "" : "s"}`)
+      } else {
+        toast.success("Provider added — now add a model below")
+      }
+      invalidate()
+      setEditingId(providerId)
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to save provider"),
   })

@@ -24,12 +24,35 @@ export interface DisplayMessage extends AIChatMessage {
    * `ferrum_error`) — kept on the message itself, not just a toast, so the
    * failure stays visible in the transcript after the fact. */
   error?: string
+  /** When this message was sent (user) or finished streaming (assistant) —
+   * ISO timestamp, rendered under the bubble. */
+  createdAt?: string
+  /** Token/speed accounting for an assistant reply — see ai_chat.go's
+   * `ferrum_usage` SSE envelope. */
+  usage?: MessageUsage
 }
+
+/** Token accounting for one request/response — mirrors api.usageInfo
+ * (internal/api/ai_chat.go's `ferrum_usage` SSE envelope). Real numbers when
+ * the provider reports them (any OpenAI-compatible runtime honoring
+ * stream_options.include_usage), a rough ~4-chars/token estimate otherwise. */
+export interface MessageUsage {
+  promptTokens: number
+  completionTokens: number
+  elapsedMs: number
+  tokensPerSecond?: number
+  estimated?: boolean
+}
+
+/** OpenAI's `reasoning_effort` request field (o-series/gpt-5-class reasoning
+ * models) — "" means omit it and let the provider use its own default. */
+export type ReasoningEffort = "" | "minimal" | "low" | "medium" | "high"
 
 export interface Conversation {
   id: string
   title: string
   modelId: string // an ai_provider_models row id (see lib/api.ts AIModel)
+  reasoningEffort?: ReasoningEffort
   messages: DisplayMessage[]
   updatedAt: string
 }
@@ -102,8 +125,8 @@ export function useAIConversations(defaultModelId: string) {
   const active = conversations.find((c) => c.id === activeId) ?? null
 
   const createConversation = useCallback(
-    (modelId = defaultModelId) => {
-      const conv: Conversation = { id: newId(), title: "New chat", modelId, messages: [], updatedAt: new Date().toISOString() }
+    (modelId = defaultModelId, reasoningEffort: ReasoningEffort = "") => {
+      const conv: Conversation = { id: newId(), title: "New chat", modelId, reasoningEffort, messages: [], updatedAt: new Date().toISOString() }
       setConversations((prev) => [conv, ...prev])
       setActiveId(conv.id)
       return conv.id
@@ -128,7 +151,7 @@ export function useAIConversations(defaultModelId: string) {
     setActiveId((cur) => (cur && doomed.has(cur) ? null : cur))
   }, [])
 
-  const updateConversation = useCallback((id: string, patch: Partial<Pick<Conversation, "title" | "modelId" | "messages">>) => {
+  const updateConversation = useCallback((id: string, patch: Partial<Pick<Conversation, "title" | "modelId" | "reasoningEffort" | "messages">>) => {
     setConversations((prev) =>
       prev
         .map((c) => (c.id === id ? { ...c, ...patch, updatedAt: new Date().toISOString() } : c))

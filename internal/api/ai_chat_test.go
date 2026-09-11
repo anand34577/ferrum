@@ -1,7 +1,10 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -231,4 +234,116 @@ func TestParseChatCompletionStreamSurfacesScanError(t *testing.T) {
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("expected the underlying read error to be wrapped in, got %v", err)
 	}
+}
+
+// TestCallChatCompletionHandlesNullMessageInNonStreamingFallback reproduces
+// a real failure: a local runtime (observed from LM Studio, typically after
+// a rough tool-call round) answering a stream:true request with a plain
+// (non-SSE) JSON body whose choice has "message": null. json.Unmarshal
+// leaves that Go map nil, and writing "usage" into it used to panic
+// ("assignment to entry in nil map") — which net/http's own panic recovery
+// turns into an abrupt, unframed connection close that browsers report as a
+// bare "network error" with zero context (see the nil-map guard in
+// callChatCompletion). Must return a usable, non-nil message instead.
+func TestCallChatCompletionHandlesNullMessageInNonStreamingFallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json") // deliberately not text/event-stream
+		_, _ = w.Write([]byte(`{"choices":[{"message":null}],"usage":{"prompt_tokens":5,"completion_tokens":0}}`))
+	}))
+	defer srv.Close()
+
+	rec := httptest.NewRecorder()
+	s := &Server{}
+	respMsg, status, _, err := s.callChatCompletion(context.Background(), rec, rec, srv.URL, "", "some-model", nil, nil, false, "", false)
+
+	if err != nil {
+		t.Fatalf("unexpected error (want a graceful empty message, not a panic/error): %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if respMsg == nil {
+		t.Fatal("respMsg is nil — should be an empty-but-usable map")
+	}
+}
+
+func TestLooksLikeOffTopicCodeRequest(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{"real-world case from a local model ignoring the system prompt", "I dont know how a Sample java program looked like", true},
+		{"plain write-me-a-program phrasing", "write me a python program", true},
+		{"infra keyword present — legitimate automation ask", "write a python script using proxmoxer to migrate these VMs", false},
+		{"language mentioned without a code-request signal", "does Ferrum's backend use Go or Java?", false},
+		{"on-topic question, no language/code signal at all", "what's the CPU usage on node pve1?", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := looksLikeOffTopicCodeRequest(tc.text); got != tc.want {
+				t.Errorf("looksLikeOffTopicCodeRequest(%q) = %v, want %v", tc.text, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCallChatCompletionSendsThinkingHint pins the mapping that makes the
+// reasoning selector actually do something on local runtimes: Qwen3-class
+// models served by vLLM/LM Studio/Ollama ignore reasoning_effort and obey
+// chat_template_kwargs.enable_thinking instead, so "Reasoning off" and
+// "minimal" must arrive as enable_thinking:false and the graded levels as
+// true.
+func TestCallChatCompletionSendsThinkingHint(t *testing.T) {
+	for _, tc := range []struct {
+		effort string
+		want   bool
+	}{{"", false}, {"minimal", false}, {"low", true}, {"high", true}} {
+		t.Run("effort="+tc.effort, func(t *testing.T) {
+			var got struct {
+				ChatTemplateKwargs struct {
+					EnableThinking *bool `json:"enable_thinking"`
+				} `json:"chat_template_kwargs"`
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&got)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+			}))
+			defer srv.Close()
+
+			rec := httptest.NewRecorder()
+			s := &Server{}
+			if _, _, _, err := s.callChatCompletion(context.Background(), rec, rec, srv.URL, "", "m", nil, nil, false, tc.effort, true); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.ChatTemplateKwargs.EnableThinking == nil {
+				t.Fatal("chat_template_kwargs.enable_thinking missing from the request")
+			}
+			if *got.ChatTemplateKwargs.EnableThinking != tc.want {
+				t.Errorf("enable_thinking = %v, want %v", *got.ChatTemplateKwargs.EnableThinking, tc.want)
+			}
+		})
+	}
+
+	// thinkingHint=false (the fallback after a strict hosted API 400s on the
+	// unknown field) must send a clean payload.
+	t.Run("dropped", func(t *testing.T) {
+		var raw map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewDecoder(r.Body).Decode(&raw)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+		}))
+		defer srv.Close()
+
+		rec := httptest.NewRecorder()
+		s := &Server{}
+		if _, _, _, err := s.callChatCompletion(context.Background(), rec, rec, srv.URL, "", "m", nil, nil, false, "high", false); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, present := raw["chat_template_kwargs"]; present {
+			t.Error("chat_template_kwargs sent even though the hint was dropped")
+		}
+	})
 }
