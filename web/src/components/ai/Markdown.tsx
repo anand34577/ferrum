@@ -4,7 +4,7 @@ import ReactMarkdown from "react-markdown"
 import rehypeKatex from "rehype-katex"
 import remarkGfm from "remark-gfm"
 import remarkMath from "remark-math"
-import { useState } from "react"
+import { memo, useState } from "react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 
@@ -13,8 +13,15 @@ import { cn } from "@/lib/utils"
  * LaTeX ($inline$ and $$block$$, via KaTeX) rendering for assistant replies.
  * Every element is restyled to the app's design tokens rather than trusting
  * react-markdown's default (unstyled) output.
+ *
+ * Memoized on `text`: AIAssistantPage re-renders its whole message list on
+ * every streamed token (see runCompletion), and without this every already-
+ * committed message's markdown — tables, KaTeX, GFM — got fully re-parsed
+ * from scratch on every single token of whatever's currently streaming,
+ * which is what made scrolling/typing feel frozen mid-response in anything
+ * but a brand-new conversation.
  */
-export function Markdown({ text }: { text: string }) {
+export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
     <div className="markdown-body space-y-2.5 text-sm leading-relaxed [overflow-wrap:anywhere]">
       <ReactMarkdown
@@ -67,7 +74,7 @@ export function Markdown({ text }: { text: string }) {
       </ReactMarkdown>
     </div>
   )
-}
+})
 
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
   const [copied, setCopied] = useState(false)
