@@ -1,0 +1,1235 @@
+@import "tailwindcss";
+/* Defines the `animate-in`/`fade-in`/`zoom-in-95`/`slide-in-from-*` utilities
+   used throughout ui/dialog.tsx, dropdown-menu.tsx, select.tsx, tooltip.tsx,
+   and multi-select.tsx — without this, those class names don't exist under
+   Tailwind v4 (which silently drops unrecognized utilities rather than
+   erroring), so every overlay in the app popped in/out with zero animation. */
+@import "tw-animate-css";
+
+/* The app toggles a .dark class on <html> (lib/theme.tsx) — point Tailwind's
+   dark: variant at the class instead of the OS media query so every dark:
+   utility follows the in-app theme toggle. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Self-hosted (not CDN) so the UI renders correctly with zero network access. */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/inter-variable.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("/fonts/space-grotesk-variable.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-variable.woff2") format("woff2");
+}
+/* Used only by the Glass Flight Deck look's panel-label register — declared
+   here so it loads once regardless of which look is active. */
+@font-face {
+  font-family: "Oswald";
+  font-style: normal;
+  font-weight: 200 700;
+  font-display: swap;
+  src: url("/fonts/oswald-variable.woff2") format("woff2");
+}
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  /* Ferrum's default brand color is oxide — the color of weathered iron, and
+     the namesake reaction (ferrum + oxygen = rust). The ramp itself lives in
+     --accent-* below (a runtime token, like --elev-* for shadows) so a user's
+     accent preference can repaint every brand-* utility by swapping those
+     variables via [data-accent] — Tailwind v4 inlines @theme color values
+     directly into utility CSS, so referencing them here (rather than putting
+     hex literals straight in @theme) is what keeps them swappable at runtime. */
+  --color-brand-50: var(--accent-50);
+  --color-brand-100: var(--accent-100);
+  --color-brand-200: var(--accent-200);
+  --color-brand-300: var(--accent-300);
+  --color-brand-400: var(--accent-400);
+  --color-brand-500: var(--accent-500);
+  --color-brand-600: var(--accent-600);
+  --color-brand-700: var(--accent-700);
+  --color-brand-800: var(--accent-800);
+
+  /* Slightly tighter than the generic "bubbly SaaS" 8/12/16px scale —
+     reads more like a technical instrument panel than a consumer app. Every
+     [data-look] block below overrides this radius scale (and --elev-*,
+     --font-*, --bg/--border/--text) as a whole, so switching looks never
+     needs a component-level conditional. */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.625rem;
+
+  /* Elevation utilities reference runtime tokens (defined in :root/.dark
+     below) so dark mode can swap to darker, tighter shadows — Tailwind v4
+     inlines literal values, so the indirection is what keeps them themable. */
+  --shadow-xs: var(--elev-xs);
+  --shadow-sm: var(--elev-sm);
+  --shadow-md: var(--elev-md);
+  --shadow-lg: var(--elev-lg);
+  --shadow-card: var(--elev-card);
+}
+
+/* ==========================================================================
+ * Enterprise SaaS — the default look. Restrained neutrals, one accent,
+ * Inter + Space Grotesk, moderate radius, soft shadows: the clean B2B
+ * dashboard register (Linear/Vercel/Stripe-adjacent). Every other look
+ * (see the "Look-and-feel presets" section further down) overrides this
+ * :root/.dark baseline — this block is never itself gated by [data-look],
+ * so it can never again silently inherit another look's leftovers.
+ * ========================================================================== */
+:root {
+  color-scheme: light;
+
+  /* Cool steel neutrals, not the warm-cream default — this is a fleet of
+     iron and silicon, not a stationery brand. */
+  --bg: #eef0f3;
+  --bg-surface: #ffffff;
+  --bg-surface-hover: #f4f6f8;
+  --bg-elevated: #ffffff;
+  --bg-muted: #e4e7ec;
+  --border: #d7dbe2;
+  --border-strong: #c2c8d2;
+  --text: #14171c;
+  --text-muted: #5b6270;
+  --text-faint: #6e7480; /* 4.6:1 on white — WCAG AA for the 10-11px text that uses it */
+  --ring: var(--accent-600);
+
+  /* Default accent ramp — oxide, the color of weathered iron (see the brand
+     comment in @theme above). A user's accent preference is persisted server-
+     side (PUT /auth/me/preferences) and applied as [data-accent] on <html>;
+     the presets below override this ramp, and [data-accent] wins over :root
+     by specificity alone (equal ordering, one more selector). */
+  --accent-50: #fbeee6;
+  --accent-100: #f5dac6;
+  --accent-200: #eec0a0;
+  --accent-300: #e39e72;
+  --accent-400: #d97a49;
+  --accent-500: #bd5a2c;
+  --accent-600: #9c481f;
+  --accent-700: #7c3a19;
+  --accent-800: #5e2c13;
+
+  /* Status hues are deliberately spaced away from the brand oxide (~18°)
+     so "this needs attention" never gets mistaken for "this is Ferrum's
+     accent": ok is green (~150°), warn is gold (~42°), error is crimson
+     (~4°). */
+  --status-ok: #1f8a4c;
+  --status-warn: #8a6208; /* 5.1:1 on white */
+  --status-error: #c62828;
+  --status-info: #3667b6;
+
+  /* Chart/gauge/bar "remaining capacity" tracks. --bg-muted fails here in
+     dark mode: #20242a on the #1a1d22 surface reads as transparent, which
+     made unfilled donuts and bars look broken. This sits between border and
+     muted so it reads on every surface token in its theme. */
+  --track: #d5dae1;
+
+  /* Elevation. Kept as runtime tokens so dark mode can swap to darker,
+     tighter shadows (shadow color reads differently on near-black surfaces). */
+  --elev-xs: 0 1px 2px rgb(16 20 26 / 0.05);
+  --elev-sm: 0 1px 2px rgb(16 20 26 / 0.06), 0 1px 3px rgb(16 20 26 / 0.05);
+  --elev-md: 0 2px 4px rgb(16 20 26 / 0.05), 0 4px 12px rgb(16 20 26 / 0.08);
+  --elev-lg: 0 4px 8px rgb(16 20 26 / 0.06), 0 12px 32px rgb(16 20 26 / 0.12);
+  --elev-card: 0 1px 3px rgb(16 20 26 / 0.05);
+  /* Card hover state as its own token (not just shadow-md) so a look can
+     give hover a completely different treatment (glow, lift, none) instead
+     of only scaling the same shadow up. */
+  --card-shadow-hover: var(--elev-md);
+
+  /* A small categorical palette for charts with more than one series,
+     kept separate from the semantic status colors above. */
+  --chart-1: #bd5a2c;
+  --chart-2: #1f7a78;
+  --chart-3: #5b6cad;
+  --chart-4: #8a7226;
+  --chart-5: #a14f74;
+  --chart-6: #4f7a5a;
+
+  /* The sidebar is a fixed dark "control panel" regardless of the content
+     theme — like an instrument rail bolted onto whichever room it's in,
+     rather than a surface that repaints itself with the rest of the app. */
+  --sidebar-bg: #15171b;
+  --sidebar-border: #262930;
+  --sidebar-text: #e7e9ec;
+  --sidebar-text-muted: #8b919c;
+  --sidebar-active-bg: #21242b;
+  --sidebar-active-text: #ffffff;
+
+  /* Body-background texture, off by default (plain flat --bg) — only the
+     Glass Flight Deck look below turns this into a blueprint grid. */
+  --page-grid: none;
+
+  /* Structural knobs — AppShell reads these via inline style (not Tailwind
+     classes) so a look can genuinely change the chrome's proportions, not
+     just its colors. Values below match the pre-existing hardcoded classes
+     (w-60/w-16/h-14) so "enterprise" (the baseline) is pixel-identical to
+     before this existed. */
+  --sidebar-width: 15rem;
+  --sidebar-width-collapsed: 4rem;
+  --header-height: 3.5rem;
+  --sidebar-border-width: 0px;
+  --header-blur: blur(12px);
+}
+
+.dark {
+  color-scheme: dark;
+
+  --bg: #121417;
+  --bg-surface: #1a1d22;
+  --bg-surface-hover: #20242a;
+  --bg-elevated: #1f2329;
+  --bg-muted: #20242a;
+  --border: #2b3038;
+  --border-strong: #3a414c;
+  --text: #e7e9ec;
+  --text-muted: #969ea9;
+  --text-faint: #9aa3b0; /* 5.5:1 on the dark surface */
+  --ring: var(--accent-400);
+
+  --status-ok: #3ecb7d;
+  --status-warn: #dfab3c;
+  --status-error: #ef5b52;
+  --status-info: #6d9ee8;
+
+  --track: #3a414c;
+
+  --elev-xs: 0 1px 2px rgb(0 0 0 / 0.4);
+  --elev-sm: 0 1px 2px rgb(0 0 0 / 0.45), 0 1px 3px rgb(0 0 0 / 0.35);
+  --elev-md: 0 2px 4px rgb(0 0 0 / 0.4), 0 4px 12px rgb(0 0 0 / 0.45);
+  --elev-lg: 0 4px 8px rgb(0 0 0 / 0.4), 0 12px 32px rgb(0 0 0 / 0.55);
+  --elev-card: inset 0 1px 0 0 rgb(255 255 255 / 0.05), 0 1px 3px rgb(0 0 0 / 0.4);
+  --card-shadow-hover: inset 0 1px 0 0 rgb(255 255 255 / 0.08), 0 8px 24px rgb(0 0 0 / 0.6);
+
+  --chart-1: #d97a49;
+  --chart-2: #3fa19e;
+  --chart-3: #8b98d6;
+  --chart-4: #c2a544;
+  --chart-5: #c97ba0;
+  --chart-6: #7aa885;
+}
+
+/* Accent presets — same 9-step ramp shape as the default oxide, just hue-
+   shifted, so contrast and the light/dark split stay correct for every
+   choice. Applied via [data-accent] on <html> alongside the .dark class;
+   "oxide" needs no rule since it's already :root's default. Every look
+   above and below shares this same accent system. */
+[data-accent="azure"] {
+  --accent-50: #eaf1fb;
+  --accent-100: #cfe0f6;
+  --accent-200: #a3c6ed;
+  --accent-300: #70a7e0;
+  --accent-400: #4a8ad2;
+  --accent-500: #3568b8;
+  --accent-600: #2a5595;
+  --accent-700: #234674;
+  --accent-800: #1c3759;
+}
+
+[data-accent="verdant"] {
+  --accent-50: #e8f6ef;
+  --accent-100: #c7ecdc;
+  --accent-200: #98dabd;
+  --accent-300: #63c299;
+  --accent-400: #3aa87c;
+  --accent-500: #268a64;
+  --accent-600: #1d6f51;
+  --accent-700: #185940;
+  --accent-800: #134632;
+}
+
+[data-accent="violet"] {
+  --accent-50: #f1edfb;
+  --accent-100: #ddd2f4;
+  --accent-200: #c0abe9;
+  --accent-300: #9d7ddb;
+  --accent-400: #8058c9;
+  --accent-500: #6a3fb0;
+  --accent-600: #54318f;
+  --accent-700: #432772;
+  --accent-800: #341e59;
+}
+
+[data-accent="slate"] {
+  --accent-50: #eef1f4;
+  --accent-100: #d9e0e7;
+  --accent-200: #bcc7d1;
+  --accent-300: #98a7b6;
+  --accent-400: #76889b;
+  --accent-500: #5c6e82;
+  --accent-600: #495868;
+  --accent-700: #3b4756;
+  --accent-800: #2e3844;
+}
+
+[data-accent="amber"] {
+  --accent-50: #fbf1e2;
+  --accent-100: #f3ddb4;
+  --accent-200: #e9c37e;
+  --accent-300: #dba54c;
+  --accent-400: #c98d2c;
+  --accent-500: #ad741c;
+  --accent-600: #8c5c16;
+  --accent-700: #714a14;
+  --accent-800: #573910;
+}
+
+[data-accent="rose"] {
+  --accent-50: #fbebf1;
+  --accent-100: #f5cddc;
+  --accent-200: #eba3c0;
+  --accent-300: #dd739e;
+  --accent-400: #cd4c81;
+  --accent-500: #b23568;
+  --accent-600: #8f2a54;
+  --accent-700: #732244;
+  --accent-800: #591a35;
+}
+
+[data-accent="teal"] {
+  --accent-50: #e6f6f6;
+  --accent-100: #c3e8e7;
+  --accent-200: #92d5d3;
+  --accent-300: #5bbdba;
+  --accent-400: #2fa39f;
+  --accent-500: #16847f;
+  --accent-600: #0f6a66;
+  --accent-700: #0d5551;
+  --accent-800: #0a413e;
+}
+
+/* ==========================================================================
+ * Look-and-feel presets — a whole-app visual register, orthogonal to the
+ * light/dark toggle and the accent color. Applied as [data-look] on <html>
+ * (lib/theme.tsx). Every component reads --radius-*, --elev-*, --font-*,
+ * and the --bg/--border/--text ramp, so a look is a token repaint only —
+ * it never needs a component-level conditional, with two narrow, disclosed
+ * exceptions: MasterCautionBar's persistent-vs-reactive behavior, and the
+ * .panel-label / .corner-frame utilities' look-gated visual payload just
+ * below the nine blocks. "enterprise" needs no block: it's the :root/.dark
+ * baseline above, so it can never drift when a new look is added.
+ * ========================================================================== */
+
+/* Proxmox-native — utilitarian and dense, closer to traditional sysadmin
+   tools (Proxmox's own UI, PRTG, pfSense): plain system font at a smaller
+   root size (Tailwind's rem-based scale shrinks with it, so density is
+   real, not just thinner borders), zero radius, no shadows — bordered grid
+   panels, not floating cards, with the card surface folded into the page
+   background so regions read as one dense sheet split by rules. */
+[data-look="proxmox"] {
+  font-size: 92%;
+  --font-sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+  --font-display: var(--font-sans);
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --elev-xs: none;
+  --elev-sm: none;
+  --elev-md: none;
+  --elev-lg: none;
+  --elev-card: none;
+  --page-grid: none;
+  --sidebar-border-width: 1px;
+}
+[data-look="proxmox"]:not(.dark) {
+  --bg: #dde1e6;
+  --bg-surface: #eef0f3;
+  --bg-surface-hover: #e4e8ec;
+  --bg-elevated: #ffffff;
+  --bg-muted: #d2d7dd;
+  --border: #aeb5bf;
+  --border-strong: #8a919d;
+  --text: #1a1d21;
+}
+[data-look="proxmox"].dark {
+  --bg: #101214;
+  --bg-surface: #17191c;
+  --bg-surface-hover: #1d2023;
+  --bg-elevated: #1d2023;
+  --bg-muted: #202327;
+  --border: #34393f;
+  --border-strong: #4a5058;
+}
+
+/* Terminal — still technical, but quiet: the *entire* UI (not just data)
+   sets in monospace, no display face at all, flat near-zero-radius panels,
+   no shadows. Precision over metaphor — the unmistakable signature is the
+   face itself, not caution stripes or condensed caps. */
+[data-look="terminal"] {
+  --font-sans: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+  --font-display: var(--font-sans);
+  --radius-sm: 0.125rem;
+  --radius-md: 0.125rem;
+  --radius-lg: 0.1875rem;
+  --radius-xl: 0.25rem;
+  --elev-xs: none;
+  --elev-sm: none;
+  --elev-md: none;
+  --elev-lg: none;
+  --elev-card: none;
+  --page-grid: none;
+  --sidebar-border-width: 1px;
+  --header-blur: none;
+}
+[data-look="terminal"]:not(.dark) {
+  --bg: #f3f4f6;
+  --bg-surface: #ffffff;
+  --bg-surface-hover: #ececf0;
+  --bg-elevated: #ffffff;
+  --bg-muted: #e7e8ec;
+  --border: #d4d7dc;
+  --border-strong: #b7bcc4;
+}
+[data-look="terminal"].dark {
+  --bg: #0a0d10;
+  --bg-surface: #12151b;
+  --bg-surface-hover: #171b22;
+  --bg-elevated: #161a22;
+  --bg-muted: #181c24;
+  --border: #202632;
+  --border-strong: #2e3644;
+  --status-info: #22c1dd;
+}
+
+/* Glass Flight Deck — an aviation cockpit/EICAS instrument panel: near-black
+   ground, a strict amber/red/green/cyan caution hierarchy, condensed Oswald
+   caps for every label, targeting-reticle corner brackets on instrument
+   tiles, and a persistent master-caution nameplate (see the JS-level
+   exception in MasterCautionBar.tsx). The most maximalist of the nine —
+   opt-in, not a leftover baseline. */
+[data-look="glassFlightDeck"] {
+  --font-display: "Oswald", "Arial Narrow", sans-serif;
+  --radius-sm: 0.125rem;
+  --radius-md: 0.1875rem;
+  --radius-lg: 0.25rem;
+  --radius-xl: 0.375rem;
+  --elev-xs: none;
+  --elev-sm: none;
+  --elev-md: none;
+  --elev-lg: none;
+  --elev-card: none;
+  --page-grid:
+    linear-gradient(color-mix(in oklab, var(--border-strong) 30%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in oklab, var(--border-strong) 30%, transparent) 1px, transparent 1px),
+    linear-gradient(color-mix(in oklab, var(--border-strong) 45%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in oklab, var(--border-strong) 45%, transparent) 1px, transparent 1px);
+}
+[data-look="glassFlightDeck"]:not(.dark) {
+  --bg: #eef0f3;
+  --bg-surface: #ffffff;
+  --bg-elevated: #ffffff;
+  --status-ok: #15883f;
+  --status-warn: #b45f06;
+  --status-error: #c22525;
+  --status-info: #0e7f95;
+}
+[data-look="glassFlightDeck"].dark {
+  --bg: #090b0e;
+  --bg-surface: #12151b;
+  --bg-surface-hover: #181c24;
+  --bg-elevated: #161a22;
+  --bg-muted: #1a1e28;
+  --border: #202632;
+  --border-strong: #313a4b;
+  --text: #f1f5f9;
+  --text-muted: #94a3b8;
+  --status-ok: #2fbf62;
+  --status-warn: #f0a020;
+  --status-error: #ff4d4d;
+  --status-info: #22c1dd;
+  --caution-glow-warn: 0 0 10px rgb(240 160 32 / 0.35);
+  --caution-glow-error: 0 0 12px rgb(255 77 77 / 0.4);
+  --track: #1e2430;
+  --sidebar-bg: #090b0e;
+  --sidebar-border: #1a1e26;
+}
+
+/* Midnight — a modern dev-tool dark register (Nord/GitHub-dark-adjacent):
+   cool blue-slate ground, comfortable rounded surfaces, a soft glow instead
+   of a hard shadow. Meant to be lived in dark; the light variant below
+   keeps it coherent without pretending to be its own thing. */
+[data-look="midnight"] {
+  --font-display: "Space Grotesk", "Inter", sans-serif;
+  --radius-sm: 0.3125rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+}
+[data-look="midnight"]:not(.dark) {
+  --bg: #eef1f6;
+  --bg-surface: #ffffff;
+  --bg-surface-hover: #f3f5f9;
+  --bg-elevated: #ffffff;
+  --bg-muted: #e6e9f0;
+  --border: #d7dce6;
+  --border-strong: #b9c1d0;
+  --elev-xs: 0 1px 2px rgb(30 41 70 / 0.05);
+  --elev-sm: 0 1px 2px rgb(30 41 70 / 0.06), 0 1px 3px rgb(30 41 70 / 0.06);
+  --elev-md: 0 2px 4px rgb(30 41 70 / 0.05), 0 6px 16px rgb(30 41 70 / 0.09);
+  --elev-lg: 0 4px 10px rgb(30 41 70 / 0.08), 0 14px 32px rgb(30 41 70 / 0.12);
+  --elev-card: 0 1px 3px rgb(30 41 70 / 0.06);
+}
+[data-look="midnight"].dark {
+  /* Distinctly blue-slate, not near-black-neutral like the other five dark
+     variants — the temperature shift is the point, so it has to read at a
+     glance, not just survive a color picker. */
+  --bg: #0a0e1a;
+  --bg-surface: #141b30;
+  --bg-surface-hover: #1a2340;
+  --bg-elevated: #1c2544;
+  --bg-muted: #171f38;
+  --border: #2c3860;
+  --border-strong: #3f4f80;
+  --text: #e8ecfb;
+  --text-muted: #93a0c4;
+  --text-faint: #93a0c4;
+  --status-ok: #4fd087;
+  --status-warn: #e8b048;
+  --status-error: #f16d68;
+  --status-info: #6fb2f5;
+  --track: #2c3860;
+  /* A visible cool glow, not a hairline — every card gets a faint blue
+     rim-light plus a soft ambient bloom underneath it. */
+  --elev-xs: 0 0 0 1px rgb(90 130 255 / 0.12), 0 1px 3px rgb(0 0 15 / 0.5);
+  --elev-sm: 0 0 0 1px rgb(90 130 255 / 0.14), 0 2px 12px rgb(50 90 255 / 0.16), 0 2px 8px rgb(0 0 15 / 0.5);
+  --elev-md: 0 0 0 1px rgb(90 130 255 / 0.16), 0 4px 24px rgb(50 90 255 / 0.2), 0 6px 20px rgb(0 0 15 / 0.55);
+  --elev-lg: 0 0 0 1px rgb(90 130 255 / 0.18), 0 8px 40px rgb(50 90 255 / 0.24), 0 16px 40px rgb(0 0 15 / 0.65);
+  --elev-card: 0 0 0 1px rgb(90 130 255 / 0.14), 0 2px 16px rgb(50 90 255 / 0.14), 0 2px 10px rgb(0 0 15 / 0.45);
+}
+
+/* Paper — ultra-minimal, warm and quiet (Notion/plain-docs-adjacent): warm
+   off-white ground, no display face at all, zero shadow, hairline borders
+   doing all the separating. Its dark variant stays warm (charcoal, not
+   blue-black) — every other dark look here leans cool, so Paper is the one
+   genuine warm-toned dark surface in the set. */
+[data-look="paper"] {
+  --font-display: var(--font-sans);
+  --radius-sm: 0.1875rem;
+  --radius-md: 0.25rem;
+  --radius-lg: 0.375rem;
+  --radius-xl: 0.5rem;
+  --elev-xs: none;
+  --elev-sm: none;
+  --elev-md: none;
+  --elev-lg: none;
+  --elev-card: none;
+}
+[data-look="paper"]:not(.dark) {
+  --bg: #f6f4ef;
+  --bg-surface: #fffefb;
+  --bg-surface-hover: #f0ede5;
+  --bg-elevated: #fffefb;
+  --bg-muted: #ece8de;
+  --border: #e3ddce;
+  --border-strong: #cfc7b0;
+  --text: #221f19;
+  --text-muted: #6b6455;
+  --text-faint: #7a7364;
+  --track: #e3ddce;
+}
+[data-look="paper"].dark {
+  --bg: #18140f;
+  --bg-surface: #211c15;
+  --bg-surface-hover: #27221a;
+  --bg-elevated: #27221a;
+  --bg-muted: #241f18;
+  --border: #362f24;
+  --border-strong: #4a4131;
+  --text: #f1ece1;
+  --text-muted: #ac9f89;
+  --text-faint: #ac9f89;
+  --track: #362f24;
+}
+
+/* Glassmorphism — frosted, layered, airy: soft blurred color blobs behind
+   translucent panels (repurposing --page-grid, normally a hard blueprint
+   grid, as a gradient wash instead — same hook, opposite payload). Cards and
+   the sidebar itself pick up backdrop-filter blur via .card-surface /
+   .sidebar-shell, so "glass" isn't just a color, it visibly blurs whatever
+   scrolls underneath. */
+[data-look="glassmorphism"] {
+  --font-display: "Space Grotesk", "Inter", sans-serif;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1.125rem;
+  --radius-xl: 1.5rem;
+  --header-blur: blur(20px);
+  --sidebar-border-width: 1px;
+}
+[data-look="glassmorphism"]:not(.dark) {
+  --bg: #eef1fb;
+  --bg-surface: #ffffff;
+  --bg-surface-hover: #f4f6fd;
+  --bg-elevated: #ffffff;
+  --bg-muted: #e6eaf7;
+  --border: color-mix(in oklab, #ffffff 55%, #b9c2e6);
+  --border-strong: color-mix(in oklab, #ffffff 25%, #a6b0dc);
+  --sidebar-bg: color-mix(in oklab, #dfe4f8 55%, transparent);
+  --sidebar-border: color-mix(in oklab, #ffffff 50%, #b9c2e6);
+  --page-grid: radial-gradient(circle at 12% 8%, color-mix(in oklab, var(--color-brand-400) 30%, transparent), transparent 42%),
+    radial-gradient(circle at 88% 18%, color-mix(in oklab, #7aa2ff 32%, transparent), transparent 45%),
+    radial-gradient(circle at 30% 92%, color-mix(in oklab, #b98af0 28%, transparent), transparent 45%);
+  --elev-xs: 0 1px 2px rgb(60 70 120 / 0.06);
+  --elev-sm: 0 1px 3px rgb(60 70 120 / 0.08), 0 1px 2px rgb(60 70 120 / 0.06);
+  --elev-md: 0 8px 24px rgb(60 70 120 / 0.12);
+  --elev-lg: 0 16px 40px rgb(60 70 120 / 0.16);
+  --elev-card: 0 1px 0 0 rgb(255 255 255 / 0.6) inset, 0 8px 24px rgb(60 70 120 / 0.1);
+  --card-shadow-hover: 0 1px 0 0 rgb(255 255 255 / 0.7) inset, 0 16px 40px rgb(60 70 120 / 0.16);
+}
+[data-look="glassmorphism"].dark {
+  --bg: #0c0f1c;
+  --bg-surface: #141a2e;
+  --bg-surface-hover: #1a2138;
+  --bg-elevated: #171d33;
+  --bg-muted: #161c30;
+  --border: color-mix(in oklab, #6d7ecf 30%, transparent);
+  --border-strong: color-mix(in oklab, #6d7ecf 45%, transparent);
+  --text: #eef0fb;
+  --text-muted: #9aa3cc;
+  --text-faint: #9aa3cc;
+  --track: #262e4d;
+  --sidebar-bg: color-mix(in oklab, #171d33 60%, transparent);
+  --sidebar-border: color-mix(in oklab, #6d7ecf 25%, transparent);
+  --page-grid: radial-gradient(circle at 10% 10%, color-mix(in oklab, var(--color-brand-500) 22%, transparent), transparent 42%),
+    radial-gradient(circle at 90% 15%, color-mix(in oklab, #5468d6 26%, transparent), transparent 45%),
+    radial-gradient(circle at 25% 95%, color-mix(in oklab, #8f5fd6 20%, transparent), transparent 45%);
+  --elev-card: 0 1px 0 0 rgb(255 255 255 / 0.05) inset, 0 8px 28px rgb(0 0 10 / 0.55);
+  --card-shadow-hover: 0 1px 0 0 rgb(255 255 255 / 0.08) inset, 0 16px 44px rgb(0 0 10 / 0.65);
+}
+
+/* Neumorphism — soft, tactile, monochrome: surfaces are the *same* color as
+   the ground and separate purely through light/dark shadow pairs, never a
+   border. Cards, and the sidebar (via .card-surface / .sidebar-shell), drop
+   their border entirely — --border below matches --bg-surface so any
+   hairline that does render (inputs, dividers) stays nearly invisible
+   rather than fighting the shadow-only language. */
+[data-look="neumorphism"] {
+  --font-display: "Inter", sans-serif;
+  --radius-sm: 0.625rem;
+  --radius-md: 0.875rem;
+  --radius-lg: 1.25rem;
+  --radius-xl: 1.75rem;
+  --page-grid: none;
+}
+[data-look="neumorphism"]:not(.dark) {
+  --bg: #e6e9ef;
+  --bg-surface: #e6e9ef;
+  --bg-surface-hover: #eaedf3;
+  --bg-elevated: #e6e9ef;
+  --bg-muted: #dde1e9;
+  --border: #e6e9ef;
+  --border-strong: #cfd4de;
+  --sidebar-bg: #e6e9ef;
+  --sidebar-border: #e6e9ef;
+  --sidebar-text: #33384a;
+  --sidebar-text-muted: #6b7284;
+  --sidebar-active-bg: #dde1e9;
+  --sidebar-active-text: #14171c;
+  --track: #d3d8e1;
+  --elev-xs: 2px 2px 5px rgb(163 172 196 / 0.35), -2px -2px 5px rgb(255 255 255 / 0.75);
+  --elev-sm: 3px 3px 8px rgb(163 172 196 / 0.4), -3px -3px 8px rgb(255 255 255 / 0.8);
+  --elev-md: 6px 6px 14px rgb(163 172 196 / 0.45), -6px -6px 14px rgb(255 255 255 / 0.85);
+  --elev-lg: 9px 9px 22px rgb(163 172 196 / 0.5), -9px -9px 22px rgb(255 255 255 / 0.9);
+  --elev-card: 6px 6px 14px rgb(163 172 196 / 0.4), -6px -6px 14px rgb(255 255 255 / 0.85);
+  --card-shadow-hover: 8px 8px 18px rgb(163 172 196 / 0.45), -8px -8px 18px rgb(255 255 255 / 0.9);
+}
+[data-look="neumorphism"].dark {
+  --bg: #262a33;
+  --bg-surface: #262a33;
+  --bg-surface-hover: #2b2f39;
+  --bg-elevated: #262a33;
+  --bg-muted: #21252d;
+  --border: #262a33;
+  --border-strong: #363c48;
+  --text: #e9ebf0;
+  --text-muted: #9297a3;
+  --text-faint: #9297a3;
+  --sidebar-bg: #262a33;
+  --sidebar-border: #262a33;
+  --sidebar-text: #e9ebf0;
+  --sidebar-text-muted: #9297a3;
+  --sidebar-active-bg: #2b2f39;
+  --sidebar-active-text: #ffffff;
+  --track: #1f232a;
+  --elev-xs: 2px 2px 5px rgb(0 0 0 / 0.45), -2px -2px 5px rgb(255 255 255 / 0.04);
+  --elev-sm: 3px 3px 8px rgb(0 0 0 / 0.5), -3px -3px 8px rgb(255 255 255 / 0.05);
+  --elev-md: 6px 6px 14px rgb(0 0 0 / 0.55), -6px -6px 14px rgb(255 255 255 / 0.05);
+  --elev-lg: 9px 9px 22px rgb(0 0 0 / 0.6), -9px -9px 22px rgb(255 255 255 / 0.06);
+  --elev-card: 6px 6px 14px rgb(0 0 0 / 0.5), -6px -6px 14px rgb(255 255 255 / 0.05);
+  --card-shadow-hover: 8px 8px 18px rgb(0 0 0 / 0.55), -8px -8px 18px rgb(255 255 255 / 0.06);
+}
+
+/* Brutalist — raw and high-contrast: pure black hairlines everywhere (thick,
+   not subtle), zero radius, hard offset shadows with no blur at all (a flat
+   drop, not a soft glow), no backdrop blur on the header. The one look
+   that's deliberately loud rather than quiet. */
+[data-look="brutalist"] {
+  --font-display: "Space Grotesk", "Inter", sans-serif;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --header-blur: none;
+  --sidebar-border-width: 3px;
+  --page-grid: none;
+}
+[data-look="brutalist"]:not(.dark) {
+  --bg: #f2f1ec;
+  --bg-surface: #ffffff;
+  --bg-surface-hover: #ececE4;
+  --bg-elevated: #ffffff;
+  --bg-muted: #e6e4da;
+  --border: #14171c;
+  --border-strong: #000000;
+  --text: #0a0a0a;
+  --text-muted: #33342f;
+  --text-faint: #46473f;
+  --track: #d8d6c9;
+  --status-ok: #0f7a2e;
+  --status-warn: #a85b00;
+  --status-error: #b3121f;
+  --status-info: #164a9c;
+  --sidebar-bg: #0a0a0a;
+  --sidebar-border: #000000;
+  --elev-xs: 2px 2px 0 0 #14171c;
+  --elev-sm: 3px 3px 0 0 #14171c;
+  --elev-md: 5px 5px 0 0 #14171c;
+  --elev-lg: 8px 8px 0 0 #14171c;
+  --elev-card: 4px 4px 0 0 #14171c;
+  --card-shadow-hover: 6px 6px 0 0 #14171c;
+}
+[data-look="brutalist"].dark {
+  --bg: #121212;
+  --bg-surface: #1a1a1a;
+  --bg-surface-hover: #212121;
+  --bg-elevated: #1a1a1a;
+  --bg-muted: #1f1f1f;
+  --border: #f2f1ec;
+  --border-strong: #ffffff;
+  --text: #f7f6f0;
+  --text-muted: #c9c8bf;
+  --text-faint: #b3b2a8;
+  --track: #2c2c2c;
+  --status-ok: #4fdc7e;
+  --status-warn: #ffb020;
+  --status-error: #ff4d4d;
+  --status-info: #5aa6ff;
+  --sidebar-bg: #000000;
+  --sidebar-border: #f2f1ec;
+  --elev-xs: 2px 2px 0 0 #f2f1ec;
+  --elev-sm: 3px 3px 0 0 #f2f1ec;
+  --elev-md: 5px 5px 0 0 #f2f1ec;
+  --elev-lg: 8px 8px 0 0 #f2f1ec;
+  --elev-card: 4px 4px 0 0 #f2f1ec;
+  --card-shadow-hover: 6px 6px 0 0 #f2f1ec;
+}
+
+/* Solarized — the classic low-contrast, color-precise editor palette
+   (Ethan Schoonover's Solarized): warm paper-toned light, deep teal-black
+   dark, and both share the same restrained accent hues so switching
+   light/dark never looks like a different app. Gently rounded, soft
+   shadows — a calm, long-session register. */
+[data-look="solarized"] {
+  --font-display: var(--font-sans);
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+}
+[data-look="solarized"]:not(.dark) {
+  --bg: #fdf6e3;
+  --bg-surface: #fffdf7;
+  --bg-surface-hover: #f5efdc;
+  --bg-elevated: #fffdf7;
+  --bg-muted: #eee8d5;
+  --border: #ddd6bc;
+  --border-strong: #c3bb9c;
+  --text: #073642;
+  --text-muted: #657b83;
+  --text-faint: #7c8f96;
+  --status-ok: #6b8e00;
+  --status-warn: #9d7500;
+  --status-error: #d2282a;
+  --status-info: #1e7cb8;
+  --track: #e4dcc2;
+  --elev-xs: 0 1px 2px rgb(101 123 131 / 0.08);
+  --elev-sm: 0 1px 2px rgb(101 123 131 / 0.1), 0 1px 3px rgb(101 123 131 / 0.08);
+  --elev-md: 0 2px 6px rgb(101 123 131 / 0.14);
+  --elev-lg: 0 6px 18px rgb(101 123 131 / 0.18);
+  --elev-card: 0 1px 3px rgb(101 123 131 / 0.1);
+}
+[data-look="solarized"].dark {
+  --bg: #00212b;
+  --bg-surface: #073642;
+  --bg-surface-hover: #0a4152;
+  --bg-elevated: #0a4152;
+  --bg-muted: #0a4152;
+  --border: #114b5f;
+  --border-strong: #1c6280;
+  --text: #eee8d5;
+  --text-muted: #93a1a1;
+  --text-faint: #839496;
+  --status-ok: #a3be3c;
+  --status-warn: #e0a72e;
+  --status-error: #ff6e64;
+  --status-info: #5fb3e0;
+  --track: #114b5f;
+  --elev-xs: 0 1px 2px rgb(0 0 0 / 0.35);
+  --elev-sm: 0 1px 3px rgb(0 0 0 / 0.4);
+  --elev-md: 0 4px 12px rgb(0 0 0 / 0.45);
+  --elev-lg: 0 10px 28px rgb(0 0 0 / 0.5);
+  --elev-card: 0 1px 3px rgb(0 0 0 / 0.35);
+}
+
+/* High Contrast — an accessibility-first register: pure black/white ground,
+   thick 2px hairlines everywhere, no soft shadow to fight edge detection,
+   and status hues picked for a documented 7:1+ ratio against their surface.
+   Built for AAA legibility and low-vision use, not as a decorative option. */
+[data-look="highContrast"] {
+  --font-display: var(--font-sans);
+  --radius-sm: 0.125rem;
+  --radius-md: 0.1875rem;
+  --radius-lg: 0.25rem;
+  --radius-xl: 0.375rem;
+  --elev-xs: none;
+  --elev-sm: none;
+  --elev-md: none;
+  --elev-lg: none;
+  --elev-card: none;
+  --page-grid: none;
+  --sidebar-border-width: 2px;
+  --header-blur: none;
+}
+[data-look="highContrast"]:not(.dark) {
+  --bg: #ffffff;
+  --bg-surface: #ffffff;
+  --bg-surface-hover: #eaeaea;
+  --bg-elevated: #ffffff;
+  --bg-muted: #e8e8e8;
+  --border: #000000;
+  --border-strong: #000000;
+  --text: #000000;
+  --text-muted: #1f1f1f;
+  --text-faint: #333333;
+  --ring: #000000;
+  --status-ok: #005a1f;
+  --status-warn: #6b4300;
+  --status-error: #a3001e;
+  --status-info: #00358a;
+  --track: #cfcfcf;
+  --sidebar-bg: #000000;
+  --sidebar-border: #ffffff;
+  --sidebar-text: #ffffff;
+  --sidebar-text-muted: #d4d4d4;
+  --sidebar-active-bg: #ffffff;
+  --sidebar-active-text: #000000;
+}
+[data-look="highContrast"].dark {
+  --bg: #000000;
+  --bg-surface: #000000;
+  --bg-surface-hover: #1a1a1a;
+  --bg-elevated: #000000;
+  --bg-muted: #171717;
+  --border: #ffffff;
+  --border-strong: #ffffff;
+  --text: #ffffff;
+  --text-muted: #e6e6e6;
+  --text-faint: #cccccc;
+  --ring: #ffffff;
+  --status-ok: #33ff85;
+  --status-warn: #ffd23d;
+  --status-error: #ff6b6b;
+  --status-info: #6ec3ff;
+  --track: #2b2b2b;
+  --sidebar-bg: #ffffff;
+  --sidebar-border: #000000;
+  --sidebar-text: #000000;
+  --sidebar-text-muted: #333333;
+  --sidebar-active-bg: #000000;
+  --sidebar-active-text: #ffffff;
+}
+[data-look="highContrast"] .nav-item-active {
+  border: 2px solid currentColor;
+}
+
+/* Aurora — a saturated, dark-forward register: near-black ground, neon
+   cyan/violet glow standing in for shadow, comfortable rounding. The most
+   vivid of the twelve, meant for a dim room where the fleet status should
+   feel alive rather than a plain gray dashboard. */
+[data-look="aurora"] {
+  --font-display: "Space Grotesk", "Inter", sans-serif;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.375rem;
+  --header-blur: blur(16px);
+}
+[data-look="aurora"]:not(.dark) {
+  --bg: #eef4f7;
+  --bg-surface: #ffffff;
+  --bg-surface-hover: #f2f8fa;
+  --bg-elevated: #ffffff;
+  --bg-muted: #e2edf1;
+  --border: #cfe2e8;
+  --border-strong: #a9c7d0;
+  --status-ok: #0f9d68;
+  --status-warn: #b5790a;
+  --status-error: #d13f4f;
+  --status-info: #1f8fc4;
+  --elev-card: 0 8px 22px rgb(20 130 150 / 0.1);
+  --card-shadow-hover: 0 14px 32px rgb(20 130 150 / 0.16);
+}
+[data-look="aurora"].dark {
+  --bg: #04070c;
+  --bg-surface: #0b1220;
+  --bg-surface-hover: #101a2e;
+  --bg-elevated: #101a2e;
+  --bg-muted: #0e1626;
+  --border: color-mix(in oklab, #35e8c8 22%, #131c2e);
+  --border-strong: color-mix(in oklab, #35e8c8 38%, #131c2e);
+  --text: #eefaf7;
+  --text-muted: #8fa6ac;
+  --text-faint: #8fa6ac;
+  --status-ok: #35e8a0;
+  --status-warn: #f0c04a;
+  --status-error: #ff5c7a;
+  --status-info: #52c4ff;
+  --track: #16233a;
+  --sidebar-bg: #03060a;
+  --sidebar-border: color-mix(in oklab, #35e8c8 18%, #03060a);
+  --elev-xs: 0 0 0 1px color-mix(in oklab, #35e8c8 10%, transparent);
+  --elev-sm: 0 0 0 1px color-mix(in oklab, #35e8c8 12%, transparent), 0 2px 14px color-mix(in oklab, #8b5cf6 18%, transparent);
+  --elev-md: 0 0 0 1px color-mix(in oklab, #35e8c8 14%, transparent), 0 6px 26px color-mix(in oklab, #8b5cf6 22%, transparent);
+  --elev-lg: 0 0 0 1px color-mix(in oklab, #35e8c8 16%, transparent), 0 14px 44px color-mix(in oklab, #8b5cf6 26%, transparent);
+  --elev-card: 0 0 0 1px color-mix(in oklab, #35e8c8 12%, transparent), 0 6px 22px rgb(0 0 0 / 0.5);
+  --card-shadow-hover: 0 0 0 1px color-mix(in oklab, #35e8c8 20%, transparent), 0 16px 40px color-mix(in oklab, #8b5cf6 26%, transparent);
+}
+[data-look="aurora"] .nav-item-active {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, #35e8c8 35%, transparent);
+}
+
+/* Glassmorphism's actual "glass": cards and the sidebar are the only two
+   surfaces given translucency + blur — everywhere else (inputs, dropdowns,
+   dense tables) stays opaque on purpose, so frosted panels never fight
+   legibility. */
+[data-look="glassmorphism"] .card-surface {
+  background: color-mix(in oklab, var(--bg-surface) 70%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+[data-look="glassmorphism"] .sidebar-shell {
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+/* Brutalist's cards get a visibly thick hairline, not just a dark one — a
+   1px border reads as "restrained" no matter the color. */
+[data-look="brutalist"] .card-surface {
+  border-width: 2px;
+}
+
+/* The active/hover sidebar nav pill: a hard 1px box border is Enterprise's
+   signature, not universal. Glass and neumorphic surfaces never draw boxes
+   around anything — they separate with translucency or shadow instead — so
+   both drop the border and pick up a look-native indicator. Brutalist goes
+   the other way and thickens it, since a box is exactly its idiom. */
+[data-look="glassmorphism"] .nav-item-active {
+  border-color: transparent;
+  background: color-mix(in oklab, var(--color-brand-400) 22%, transparent);
+  backdrop-filter: blur(6px);
+}
+[data-look="neumorphism"] .nav-item-active {
+  border-color: transparent;
+  box-shadow: inset 2px 2px 5px rgb(0 0 0 / 0.35), inset -2px -2px 5px rgb(255 255 255 / 0.06);
+}
+[data-look="neumorphism"]:not(.dark) .nav-item-active {
+  box-shadow: inset 2px 2px 5px rgb(0 0 0 / 0.45), inset -2px -2px 5px rgb(255 255 255 / 0.08);
+}
+[data-look="brutalist"] .nav-item-active {
+  border: 2px solid var(--sidebar-text);
+}
+
+/* Density — "compact" tightens row padding across every DataTable (Tasks,
+   Alerts, Backups, Users, Connections, Audit, ...) and the Inventory tree,
+   so a screen with room to spare can show meaningfully more rows without
+   scrolling. Unlayered, so it beats the Tailwind `py-*` utility on the same
+   element regardless of specificity — same reasoning as the focus-visible
+   override above. */
+[data-density="compact"] .dt-cell {
+  padding-top: 0.375rem;
+  padding-bottom: 0.375rem;
+}
+[data-density="compact"] .inv-row {
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
+}
+
+* {
+  border-color: var(--border);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg);
+  background-image: var(--page-grid);
+  background-size:
+    8px 8px,
+    8px 8px,
+    32px 32px,
+    32px 32px;
+  background-attachment: fixed;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv05" 1; /* Inter: open numerals pair well with mono metrics */
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--color-brand-500);
+  color: white;
+}
+
+/* Keyboard focus is always visible, always the same shape: a 2px outline
+   with a hairline offset so it reads on both light and dark surfaces.
+   Components with their own focus-visible rings override this freely — the
+   outline respects the element's real border-radius (no re-shaping).
+
+   Must live in @layer base: Tailwind v4 emits utilities inside cascade
+   layers, and unlayered CSS beats every layer — unlayered, this rule won
+   over `outline-none` and stacked a square outline on top of components'
+   rounded focus rings. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+/* thin, unobtrusive scrollbars for the dense inventory/log panes */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* react-grid-layout (Dashboard widget rearranging) ships its own drag
+   placeholder and resize-handle glyph with hardcoded colors — a plain solid
+   red box for the placeholder (which reads as an error state, not "drop
+   here") and a near-black corner glyph for the resize handle (invisible on
+   a dark surface/look). Re-themed to the app's brand and text tokens so
+   dragging/resizing a widget looks intentional in every theme. */
+/* Selectors are ancestor-qualified beyond react-grid-layout's own rule
+   (which is otherwise equal-specificity) so this wins regardless of whether
+   its lazy-loaded route chunk's CSS happens to load before or after this
+   file. */
+.react-grid-layout .react-grid-item.react-grid-placeholder {
+  background: var(--color-brand-500);
+  border-radius: var(--radius-lg);
+}
+.react-grid-layout .react-grid-item > .react-resizable-handle::after {
+  border-right-color: var(--text-faint);
+  border-bottom-color: var(--text-faint);
+}
+
+/* React Flow chrome (Topology page) — the stock Controls/MiniMap/selection
+   styles hardcode light-theme whites and near-black strokes, which read
+   wrong in dark mode (and vice versa). Re-point them at the app tokens so
+   both themes follow the toggle.
+
+   The Controls' background/color/border are themed by defining xyflow's
+   own `--xy-controls-button-*` prop variables (the values its stylesheet
+   consumes) rather than overriding its rules: @xyflow's style.css is
+   bundled AFTER this file (it's imported inside TopologyPage), so plain
+   overrides lose the cascade — but CSS variables resolve regardless of
+   order. xyflow's dark defaults only activate under `.react-flow.dark`,
+   which never matches this app (we toggle `.dark` on <html>), so without
+   these the buttons stay white-on-white in dark mode. */
+:root {
+  --xy-controls-button-background-color: var(--bg-elevated);
+  --xy-controls-button-background-color-hover: var(--bg-surface-hover);
+  --xy-controls-button-color: var(--text-muted);
+  --xy-controls-button-color-hover: var(--text);
+  --xy-controls-button-border-color: var(--border);
+}
+
+.dark {
+  --xy-controls-button-background-color: var(--bg-elevated);
+  --xy-controls-button-background-color-hover: var(--bg-surface-hover);
+  --xy-controls-button-color: var(--text-muted);
+  --xy-controls-button-color-hover: var(--text);
+  --xy-controls-button-border-color: var(--border);
+}
+
+.react-flow__controls {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: var(--elev-sm);
+}
+
+.react-flow__controls-button svg {
+  fill: currentColor;
+}
+
+.react-flow__minimap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.react-flow__node.selected,
+.react-flow__node:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+/* Metric digits align in columns — every number in tables, stats and charts
+   should sit inside this utility. */
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The panel-label register: every page title, nav label, badge, tab, and
+   panel heading picks up the active look's display face and a little extra
+   weight. Tracked ALL-CAPS is Glass Flight Deck's signature specifically
+   (an engraved instrument placard), not a universal default — every other
+   look renders this in plain mixed case, so switching away from Glass
+   Flight Deck can never leave a shouty-caps residue behind. */
+@utility panel-label {
+  font-family: var(--font-display);
+  font-weight: 600;
+}
+[data-look="glassFlightDeck"] .panel-label {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Targeting-reticle corner brackets — Glass Flight Deck's one recurring
+   signature frame (instrument tiles, the page nameplate). The utility only
+   reserves the positioning; every other look leaves the pseudo-elements
+   borderless, so it costs nothing and paints nothing outside that look. */
+@utility corner-frame {
+  position: relative;
+  &::before,
+  &::after {
+    content: "";
+    position: absolute;
+    width: 9px;
+    height: 9px;
+    pointer-events: none;
+  }
+}
+[data-look="glassFlightDeck"] .corner-frame::before {
+  top: -1px;
+  left: -1px;
+  border-top: 2px solid var(--border-strong);
+  border-left: 2px solid var(--border-strong);
+}
+[data-look="glassFlightDeck"] .corner-frame::after {
+  bottom: -1px;
+  right: -1px;
+  border-bottom: 2px solid var(--border-strong);
+  border-right: 2px solid var(--border-strong);
+}
+
+/* The master-caution bar (AppShell, Glass Flight Deck only — see the
+   look-aware branch in MasterCautionBar.tsx) — quiet and collapsed when
+   nothing needs attention, a banded amber/red strip when it does. Bands run
+   at a shallow angle like hazard tape, not a flat fill, so the caution
+   state reads as a physical strip rather than a colored toast. */
+@utility caution-band {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in oklab, currentColor 16%, transparent) 0 10px,
+    transparent 10px 20px
+  );
+}
+
+/* Recharts portals its tooltip into the chart wrapper as an absolutely
+   positioned box that overflows the wrapper near the plot edges. Inside a
+   scroll container (widget bodies, the page) that overflow extends the
+   scrollable area on hover — a scrollbar flashes in and the chart visibly
+   resizes. Clipping at the wrapper bounds stops that; the tooltip placement
+   math already flips it to stay inside the plot area, so content is cut
+   only in the degenerate "tooltip bigger than the chart" case. */
+.recharts-wrapper {
+  overflow: clip;
+}
+
+/* Hides the scrollbar while keeping the element scrollable (wheel, touch,
+   keyboard) — used on the collapsed sidebar rail so the scrollbar can't
+   push the centered icons off the rail's midline. */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@utility animate-shimmer {
+  animation: shimmer 1.8s infinite linear;
+}
+
+@utility glass {
+  background-color: color-mix(in oklab, var(--bg-surface) 80%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* Respect the OS "reduce motion" setting: kill decorative movement but keep
+   opacity fades (they don't cause vestibular issues and state changes still
+   need to be perceivable). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

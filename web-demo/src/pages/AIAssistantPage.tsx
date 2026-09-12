@@ -1,0 +1,1195 @@
+import { useQuery } from "@tanstack/react-query"
+import {
+  Activity,
+  AlertTriangle,
+  ArrowDown,
+  Bot,
+  BrainCircuit,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  Copy,
+  History,
+  ListChecks,
+  Loader2,
+  MessageSquarePlus,
+  RotateCcw,
+  Send,
+  Sparkles,
+  Square,
+  Terminal,
+  Trash2,
+  User as UserIcon,
+  Wrench,
+  X,
+  XCircle,
+} from "lucide-react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { useNavigate } from "react-router-dom"
+import { toast } from "sonner"
+import { Markdown } from "@/components/ai/Markdown"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
+import { useConfirm } from "@/components/ui/confirm-dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { EmptyState } from "@/components/ui/empty-state"
+import { ErrorState } from "@/components/ui/error-state"
+import { PageHeader } from "@/components/ui/page-header"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
+import { api, type ToolCallRecord, type UsableAIProvider } from "@/lib/api"
+import { useAuth } from "@/lib/auth"
+import { type Conversation, type DisplayMessage, type MessageUsage, type ReasoningEffort, type ToolCallEntry, useAIConversations } from "@/lib/useAIConversations"
+import { cn, formatRelativeTime } from "@/lib/utils"
+
+function newId() {
+  return Math.random().toString(36).slice(2)
+}
+
+interface ToolActivity {
+  name: string
+  status: "running" | "ok" | "error"
+  args?: unknown
+  result?: string
+}
+
+const TOOL_LABELS: Record<string, string> = {
+  list_connections: "Checking connections",
+  list_nodes: "Checking nodes",
+  get_node_status: "Checking node status",
+  list_guests: "Listing guests",
+  get_guest_status: "Checking guest status",
+  guest_power_action: "Running power action",
+  list_alerts: "Checking alerts",
+  cluster_status: "Checking cluster status",
+  list_storage: "Checking storage",
+  list_pools: "Checking pools",
+}
+
+function toolLabel(name: string) {
+  return TOOL_LABELS[name] ?? `Using ${name}`
+}
+
+/** Pretty-prints a raw JSON string for display, falling back to the raw
+ * text if it doesn't parse (defensive only — the server always sends valid
+ * JSON or omits the field entirely). */
+function formatJSON(raw: string): string {
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2)
+  } catch {
+    return raw
+  }
+}
+
+/** Parses one server-sent event line: either an OpenAI-shaped content delta,
+ * or one of Ferrum's own envelopes reporting tool-call progress / a mid-
+ * stream error (see internal/api/ai_chat.go). */
+function parseSSELine(line: string): {
+  delta?: string
+  reasoning?: string
+  toolCall?: { name: string; args?: unknown }
+  toolResult?: { name: string; ok: boolean; result?: string }
+  usage?: MessageUsage
+  error?: string
+  done?: boolean
+} {
+  if (!line.startsWith("data:")) return {}
+  const payload = line.slice(5).trim()
+  if (payload === "[DONE]") return { done: true }
+  try {
+    const parsed = JSON.parse(payload)
+    if (parsed.ferrum_error) return { error: parsed.ferrum_error }
+    if (typeof parsed.ferrum_reasoning === "string") return { reasoning: parsed.ferrum_reasoning }
+    if (parsed.ferrum_tool_call) return { toolCall: { name: parsed.ferrum_tool_call.name, args: parsed.ferrum_tool_call.args } }
+    if (parsed.ferrum_tool_result)
+      return { toolResult: { name: parsed.ferrum_tool_result.name, ok: !!parsed.ferrum_tool_result.ok, result: parsed.ferrum_tool_result.result } }
+    if (parsed.ferrum_usage) return { usage: parsed.ferrum_usage }
+    return { delta: parsed.choices?.[0]?.delta?.content ?? undefined }
+  } catch {
+    return {}
+  }
+}
+
+/** "128 tok · 42 tok/s" — the assistant-message metadata line's token half.
+ * "~" prefix when the numbers are Ferrum's own estimate, not the provider's. */
+function formatUsage(u: MessageUsage): string {
+  const prefix = u.estimated ? "~" : ""
+  const parts = [`${prefix}${u.completionTokens} tok`]
+  if (u.tokensPerSecond && u.tokensPerSecond > 0) parts.push(`${u.tokensPerSecond.toFixed(1)} tok/s`)
+  return parts.join(" · ")
+}
+
+function formatTimestamp(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ""
+  return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+}
+
+interface SlashCommand {
+  cmd: string
+  label: string
+  prompt?: string // omitted for purely-local commands like /help
+}
+
+const SLASH_COMMANDS: SlashCommand[] = [
+  { cmd: "/health", label: "Overall fleet health summary", prompt: "Give me an overall health summary of the fleet — anything that needs attention right now?" },
+  { cmd: "/nodes", label: "Status of every node", prompt: "Show me the current status of every node across all connections — CPU, memory, and uptime." },
+  { cmd: "/guests", label: "List all VMs and containers", prompt: "List all VMs and containers with their current status and which node they're on." },
+  { cmd: "/alerts", label: "Active alerts", prompt: "What alerts are currently active, and how severe are they?" },
+  { cmd: "/storage", label: "Storage usage", prompt: "Show storage usage across all storage pools." },
+  { cmd: "/pools", label: "Resource pools", prompt: "List all resource pools and their members." },
+  { cmd: "/help", label: "List available commands" },
+]
+
+const SUGGESTIONS = [
+  "What's the overall health of my fleet right now?",
+  "List every VM and container that's currently stopped.",
+  "Are there any active alerts I should know about?",
+]
+
+const HELP_TEXT = `I'm specialized for **Proxmox VE / Ferrum fleet management** — nodes, guests, storage, alerts, backups, HA, and cluster configuration. I can look up your real infrastructure data using tools, and (for admins) start/stop/reboot guests.
+
+**Available commands:**
+${SLASH_COMMANDS.filter((c) => c.prompt).map((c) => `- \`${c.cmd}\` — ${c.label}`).join("\n")}
+
+Type a command, or just ask a question about your fleet in plain language.`
+
+/** One flattened, selectable entry combining a provider and one of its
+ * models — the Select shows "Provider · Model label" and stores the model
+ * row's ID, which is all /ai/chat needs (it resolves the provider via FK). */
+interface FlatModel {
+  modelRowId: string
+  providerName: string
+  label: string
+  isDefault: boolean
+}
+
+function flattenModels(providers: UsableAIProvider[]): FlatModel[] {
+  return providers.flatMap((p) => p.models.map((m) => ({ modelRowId: m.id, providerName: p.providerName, label: m.label, isDefault: m.isDefault })))
+}
+
+export function AIAssistantPage() {
+  const { user } = useAuth()
+  const navigate = useNavigate()
+  const confirm = useConfirm()
+  const [activityOpen, setActivityOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
+
+  const providersQuery = useQuery({
+    queryKey: ["ai", "providers"],
+    queryFn: () => api.get<UsableAIProvider[]>("/ai/providers"),
+  })
+  const providers = providersQuery.data ?? []
+  const flatModels = useMemo(() => flattenModels(providers), [providers])
+  const defaultModelId = flatModels.find((m) => m.isDefault)?.modelRowId ?? flatModels[0]?.modelRowId ?? ""
+
+  const { conversations, active, activeId, setActiveId, createConversation, deleteConversation, deleteConversations, updateConversation, setMessages } =
+    useAIConversations(defaultModelId)
+  // The model picker needs somewhere to live before any conversation exists
+  // yet (fresh page load, no chat started) — otherwise onValueChange had
+  // nothing to update and picking a model silently did nothing until the
+  // first message created a conversation (which then reset to the default).
+  const [pendingModelId, setPendingModelId] = useState(defaultModelId)
+  // Same story as pendingModelId, for the reasoning-effort picker.
+  const [pendingReasoningEffort, setPendingReasoningEffort] = useState<ReasoningEffort>("")
+
+  const [input, setInput] = useState("")
+  const [streamingText, setStreamingText] = useState<string | null>(null)
+  const [streamingReasoning, setStreamingReasoning] = useState<string | null>(null)
+  const [toolActivity, setToolActivity] = useState<ToolActivity[]>([])
+  const [streaming, setStreaming] = useState(false)
+  const [slashIndex, setSlashIndex] = useState(0)
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+
+  function toggleSelected(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function exitSelectMode() {
+    setSelectMode(false)
+    setSelectedIds(new Set())
+  }
+
+  async function deleteSelected() {
+    const n = selectedIds.size
+    if (n === 0) return
+    if (
+      await confirm({
+        title: `Delete ${n} conversation${n === 1 ? "" : "s"}?`,
+        description: "These conversations are only stored in this browser and can't be recovered.",
+      })
+    ) {
+      deleteConversations([...selectedIds])
+      exitSelectMode()
+    }
+  }
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const abortRef = useRef<AbortController | null>(null)
+  // ChatGPT/Claude-style "stick to bottom": auto-follow new tokens only
+  // while the reader is already at (or near) the bottom. Scroll away to
+  // reread something mid-stream and it stays put instead of yanking back
+  // down on every token; send a new message and it resumes following.
+  //
+  // The ref is what the per-token follow effect reads (it has to be current
+  // synchronously, before the next render); the state mirrors it purely so
+  // the "Jump to latest" affordance can render.
+  const stickToBottomRef = useRef(true)
+  const [atBottom, setAtBottom] = useState(true)
+  const [newBelow, setNewBelow] = useState(false)
+  // A fast/local provider can emit dozens of SSE lines per second — pushing
+  // each straight into state meant a React re-render (and the auto-follow
+  // effect's forced scrollTop write) on every single token, which starved
+  // the browser of idle time to process the user's own scroll-wheel input
+  // and made "scroll up mid-response" feel frozen. Coalesced to at most one
+  // flush per animation frame instead.
+  const flushRafRef = useRef<number | null>(null)
+
+  const modelId = active?.modelId || pendingModelId || defaultModelId
+  const reasoningEffort: ReasoningEffort = active?.reasoningEffort ?? pendingReasoningEffort
+  const selectedModel = flatModels.find((m) => m.modelRowId === modelId)
+  const committedMessages = active?.messages ?? []
+  const displayMessages: (DisplayMessage & { streaming?: boolean })[] = streaming
+    ? [...committedMessages, { id: "__streaming__", role: "assistant", content: streamingText ?? "", reasoning: streamingReasoning ?? undefined, streaming: true }]
+    : committedMessages
+
+  const slashMatches = useMemo(() => {
+    if (!input.startsWith("/") || input.includes(" ") || input.includes("\n")) return []
+    return SLASH_COMMANDS.filter((c) => c.cmd.startsWith(input.toLowerCase()))
+  }, [input])
+
+  useEffect(() => setSlashIndex(0), [slashMatches.length])
+
+  // Anything within this many pixels of the bottom still counts as "at the
+  // bottom": sub-pixel rounding, an image or code block that just changed
+  // height, and a fast scroll's inertia all land a little short of an exact
+  // match, and none of them mean the reader has taken the viewport over.
+  const BOTTOM_THRESHOLD = 120
+
+  /** Return to the latest content and hand scrolling back to auto-follow. */
+  function follow(behavior: ScrollBehavior = "auto") {
+    const el = scrollRef.current
+    stickToBottomRef.current = true
+    setAtBottom(true)
+    setNewBelow(false)
+    el?.scrollTo({ top: el.scrollHeight, behavior })
+  }
+
+  // Switching conversations should land at that conversation's latest
+  // message immediately, not smooth-scroll from wherever the previous one
+  // happened to be — and resume auto-follow for it. The rAF re-run is
+  // because the incoming messages have not been laid out on this tick, so
+  // scrollHeight is still the outgoing conversation's.
+  useEffect(() => {
+    follow()
+    const raf = requestAnimationFrame(() => follow())
+    return () => cancelAnimationFrame(raf)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId])
+
+  // Auto-follow. Assigning scrollTop, rather than starting a smooth scrollTo
+  // per token, is what keeps this incremental: each render the content grew
+  // a little and the viewport moves by that same little amount, instead of
+  // restarting an animation towards a target that has already moved again.
+  // While the reader is detached this touches nothing — the growing content
+  // only raises the "there is more below" flag.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    if (stickToBottomRef.current) el.scrollTop = el.scrollHeight
+    else setNewBelow(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayMessages.length, streamingText, streamingReasoning, toolActivity.length])
+
+  function handleScroll() {
+    const el = scrollRef.current
+    if (!el) return
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_THRESHOLD
+    stickToBottomRef.current = near
+    setAtBottom(near)
+    if (near) setNewBelow(false)
+  }
+
+  async function runCompletion(convId: string, history: DisplayMessage[], useModelId: string, useReasoningEffort: ReasoningEffort) {
+    setStreaming(true)
+    setStreamingText("")
+    setStreamingReasoning(null)
+    setToolActivity([])
+    const controller = new AbortController()
+    abortRef.current = controller
+    let assistantText = ""
+    let reasoningText = ""
+    let usage: MessageUsage | undefined
+    let midStreamError: string | null = null
+    let aborted = false
+    // Mirrors the toolActivity state updates below, but as a plain array so
+    // the finished tool calls can be attached to the committed message —
+    // toolActivity itself is cleared once streaming ends (it's "what's
+    // happening right now"), so without this the evidence for an answer
+    // would vanish the moment the response finished.
+    const toolLog: ToolCallEntry[] = []
+
+    function scheduleFlush() {
+      if (flushRafRef.current != null) return
+      flushRafRef.current = requestAnimationFrame(() => {
+        flushRafRef.current = null
+        setStreamingText(assistantText)
+        if (reasoningText) setStreamingReasoning(reasoningText)
+      })
+    }
+
+    try {
+      const res = await fetch("/api/v1/ai/chat", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          modelId: useModelId || undefined,
+          reasoningEffort: useReasoningEffort || undefined,
+          messages: history.map(({ role, content }) => ({ role, content })),
+        }),
+      })
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => undefined)
+        throw new Error(data?.error ?? `Request failed (${res.status})`)
+      }
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split("\n")
+        buffer = lines.pop() ?? ""
+        for (const line of lines) {
+          const evt = parseSSELine(line)
+          if (evt.delta) {
+            assistantText += evt.delta
+            scheduleFlush()
+          } else if (evt.reasoning) {
+            reasoningText += evt.reasoning
+            scheduleFlush()
+          } else if (evt.toolCall) {
+            const { name, args } = evt.toolCall
+            setToolActivity((prev) => [...prev, { name, args, status: "running" }])
+            toolLog.push({ name, args, ok: true })
+          } else if (evt.toolResult) {
+            const { name, ok, result } = evt.toolResult
+            setToolActivity((prev) => {
+              const idx = [...prev].reverse().findIndex((t) => t.name === name && t.status === "running")
+              if (idx === -1) return prev
+              const realIdx = prev.length - 1 - idx
+              const next = [...prev]
+              next[realIdx] = { ...next[realIdx], status: ok ? "ok" : "error", result }
+              return next
+            })
+            const logIdx = [...toolLog].reverse().findIndex((t) => t.name === name && t.result === undefined)
+            if (logIdx !== -1) {
+              const realIdx = toolLog.length - 1 - logIdx
+              toolLog[realIdx] = { ...toolLog[realIdx], ok, result }
+            }
+          } else if (evt.usage) {
+            usage = evt.usage
+          } else if (evt.error) {
+            midStreamError = evt.error
+          }
+        }
+      }
+      if (midStreamError) throw new Error(midStreamError)
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        aborted = true
+      } else {
+        const message = err instanceof Error ? err.message : "The AI provider didn't respond"
+        midStreamError = midStreamError ?? message
+        // Still toast — a transient failure with a real answer already on
+        // screen elsewhere in the transcript is easy to miss as an inline
+        // bubble alone, so both together beats picking one.
+        toast.error(message)
+      }
+    } finally {
+      if (flushRafRef.current != null) {
+        cancelAnimationFrame(flushRafRef.current)
+        flushRafRef.current = null
+      }
+      setStreaming(false)
+      setStreamingText(null)
+      setStreamingReasoning(null)
+      setToolActivity([])
+      abortRef.current = null
+      // Commit whatever came back — including a partial answer if the user
+      // hit Stop midway, same as every mainstream chat product. Tool calls
+      // are attached even when there's no final text yet (e.g. aborted
+      // mid-loop) so the evidence of what was checked isn't lost. An error
+      // (not a plain user-initiated Stop) is kept on the message itself so
+      // it stays visible in the transcript, not just a toast that's gone in
+      // a few seconds.
+      if (assistantText || toolLog.length > 0 || (midStreamError && !aborted)) {
+        setMessages(convId, [
+          ...history,
+          {
+            id: newId(),
+            role: "assistant",
+            content: assistantText,
+            reasoning: reasoningText || undefined,
+            toolCalls: toolLog.length > 0 ? toolLog : undefined,
+            error: !aborted ? (midStreamError ?? undefined) : undefined,
+            createdAt: new Date().toISOString(),
+            usage,
+          },
+        ])
+      }
+    }
+  }
+
+  async function send(overrideText?: string) {
+    const text = (overrideText ?? input).trim()
+    if (!text || streaming) return
+    setInput("")
+    follow()
+
+    const convId = activeId ?? createConversation(modelId, reasoningEffort)
+    const userMsg: DisplayMessage = { id: newId(), role: "user", content: text, createdAt: new Date().toISOString() }
+    const history = [...committedMessages, userMsg]
+    setMessages(convId, history)
+    // Park the message just sent near the top of the viewport so the answer
+    // has room to render beneath it instead of both hugging the bottom edge.
+    // A thread too short to scroll that far simply stays bottom-anchored,
+    // which is the right result there anyway.
+    requestAnimationFrame(() =>
+      scrollRef.current?.querySelector(`[data-mid="${userMsg.id}"]`)?.scrollIntoView({ block: "start" }),
+    )
+    await runCompletion(convId, history, modelId, reasoningEffort)
+  }
+
+  function runSlashCommand(command: SlashCommand) {
+    setInput("")
+    follow()
+    if (!command.prompt) {
+      // Purely local — answer immediately without involving the provider.
+      const convId = activeId ?? createConversation(modelId, reasoningEffort)
+      const userMsg: DisplayMessage = { id: newId(), role: "user", content: command.cmd }
+      const helpMsg: DisplayMessage = { id: newId(), role: "assistant", content: HELP_TEXT }
+      setMessages(convId, [...committedMessages, userMsg, helpMsg])
+      return
+    }
+    send(command.prompt)
+  }
+
+  function stop() {
+    abortRef.current?.abort()
+  }
+
+  async function regenerate() {
+    if (!active || streaming) return
+    const lastUserIdx = [...committedMessages].reverse().findIndex((m) => m.role === "user")
+    if (lastUserIdx === -1) return
+    const cutoff = committedMessages.length - lastUserIdx
+    const history = committedMessages.slice(0, cutoff)
+    follow()
+    setMessages(active.id, history)
+    await runCompletion(active.id, history, modelId, reasoningEffort)
+  }
+
+  async function handleDelete(id: string, title: string) {
+    if (await confirm({ title: `Delete "${title}"?`, description: "This conversation is only stored in this browser and can't be recovered." })) {
+      deleteConversation(id)
+    }
+  }
+
+  function copyMessage(content: string) {
+    navigator.clipboard.writeText(content).then(() => toast.success("Copied to clipboard"))
+  }
+
+  const lastMessageIsAssistant = committedMessages.at(-1)?.role === "assistant"
+
+  if (providersQuery.isError) {
+    return (
+      <div className="space-y-4">
+        <PageHeader title="AI Assistant" description="Specialized for Proxmox VE fleet management through Ferrum." icon={Sparkles} />
+        <ErrorState title="Couldn't load AI providers" onRetry={providersQuery.refetch} />
+      </div>
+    )
+  }
+
+  if (providersQuery.isLoading) {
+    return (
+      <div className="space-y-4" aria-busy>
+        <PageHeader title="AI Assistant" description="Specialized for Proxmox VE fleet management through Ferrum." icon={Sparkles} />
+        <Skeleton className="h-96 w-full" />
+      </div>
+    )
+  }
+
+  if (flatModels.length === 0) {
+    return (
+      <div className="space-y-4">
+        <PageHeader title="AI Assistant" description="Specialized for Proxmox VE fleet management through Ferrum." icon={Sparkles} />
+        <EmptyState
+          icon={Bot}
+          title="No AI model configured"
+          description={
+            user?.isAdmin
+              ? "Add an OpenAI-compatible provider and at least one model (OpenAI, Ollama, LM Studio, LocalAI, ...) in Settings to enable the assistant."
+              : "Ask an admin to configure an AI provider and model in Settings to enable the assistant."
+          }
+          action={user?.isAdmin ? <Button onClick={() => navigate("/settings")}>Go to Settings</Button> : undefined}
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex h-full flex-col space-y-4">
+      <PageHeader
+        title="AI Assistant"
+        description="Specialized for Proxmox VE fleet management — not a general-purpose chatbot."
+        icon={Sparkles}
+        actions={
+          <Button size="sm" variant="secondary" onClick={() => setActivityOpen(true)}>
+            <Activity className="h-3.5 w-3.5" /> Activity
+          </Button>
+        }
+      />
+      <ActivityPanel open={activityOpen} onOpenChange={setActivityOpen} />
+
+      <div className="flex min-h-0 flex-1 gap-4 overflow-hidden">
+        {/* Conversation history sidebar — desktop only; mobile reaches the
+            same list through the History button in the chat panel's header. */}
+        <div className="hidden w-60 shrink-0 flex-col gap-2 md:flex">
+          <div className="flex items-center gap-1">
+            <Button size="sm" variant="secondary" className="flex-1 justify-start" onClick={() => createConversation(modelId, reasoningEffort)}>
+              <MessageSquarePlus className="h-3.5 w-3.5" /> New chat
+            </Button>
+            {conversations.length > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                title={selectMode ? "Cancel selection" : "Select conversations"}
+                onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+              >
+                {selectMode ? <X className="h-3.5 w-3.5" /> : <ListChecks className="h-3.5 w-3.5" />}
+              </Button>
+            )}
+          </div>
+          {selectMode && (
+            <SelectionBar
+              count={selectedIds.size}
+              total={conversations.length}
+              onSelectAll={() => setSelectedIds(new Set(conversations.map((c) => c.id)))}
+              onDelete={deleteSelected}
+            />
+          )}
+          <div className="flex-1 space-y-1 overflow-y-auto">
+            <ConversationList
+              conversations={conversations}
+              activeId={activeId}
+              onSelect={setActiveId}
+              onDelete={handleDelete}
+              selectMode={selectMode}
+              selectedIds={selectedIds}
+              onToggleSelect={toggleSelected}
+            />
+          </div>
+        </div>
+
+        {/* Mobile conversation history — the sidebar above is hidden below
+            md, so this is the only way to switch or delete a conversation
+            on a narrow viewport. */}
+        <Dialog open={historyOpen} onOpenChange={(open) => { setHistoryOpen(open); if (!open) exitSelectMode() }}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Conversations</DialogTitle>
+            </DialogHeader>
+            <div className="flex items-center gap-1">
+              <Button size="sm" variant="secondary" className="flex-1 justify-start" onClick={() => { createConversation(modelId, reasoningEffort); setHistoryOpen(false) }}>
+                <MessageSquarePlus className="h-3.5 w-3.5" /> New chat
+              </Button>
+              {conversations.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  title={selectMode ? "Cancel selection" : "Select conversations"}
+                  onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+                >
+                  {selectMode ? <X className="h-3.5 w-3.5" /> : <ListChecks className="h-3.5 w-3.5" />}
+                </Button>
+              )}
+            </div>
+            {selectMode && (
+              <SelectionBar
+                count={selectedIds.size}
+                total={conversations.length}
+                onSelectAll={() => setSelectedIds(new Set(conversations.map((c) => c.id)))}
+                onDelete={deleteSelected}
+              />
+            )}
+            <div className="max-h-[60vh] space-y-1 overflow-y-auto">
+              <ConversationList
+                conversations={conversations}
+                activeId={activeId}
+                onSelect={(id) => { setActiveId(id); setHistoryOpen(false) }}
+                onDelete={handleDelete}
+                selectMode={selectMode}
+                selectedIds={selectedIds}
+                onToggleSelect={toggleSelected}
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Chat panel */}
+        <Card className="flex flex-1 flex-col overflow-hidden">
+          <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] bg-[var(--bg-elevated)]/60 px-4 py-2.5 backdrop-blur-sm">
+            <Select
+              value={modelId}
+              onValueChange={(v) => (active ? updateConversation(active.id, { modelId: v }) : setPendingModelId(v))}
+            >
+              <SelectTrigger
+                className="w-auto max-w-[60%] min-w-0 gap-2 overflow-hidden sm:max-w-xs"
+                title={selectedModel ? `${selectedModel.providerName} · ${selectedModel.label}` : undefined}
+              >
+                <SelectValue className="min-w-0 flex-1 truncate text-left" />
+              </SelectTrigger>
+              <SelectContent>
+                {flatModels.map((m) => (
+                  <SelectItem key={m.modelRowId} value={m.modelRowId}>
+                    <span className="block max-w-[16rem] truncate">{m.providerName} · {m.label}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="flex shrink-0 items-center gap-2">
+              <Select
+                value={reasoningEffort || "off"}
+                onValueChange={(v) => {
+                  const val = (v === "off" ? "" : v) as ReasoningEffort
+                  if (active) updateConversation(active.id, { reasoningEffort: val })
+                  else setPendingReasoningEffort(val)
+                }}
+              >
+                <SelectTrigger
+                  className="hidden w-auto gap-1.5 sm:flex"
+                  title="Reasoning effort — passed through as the OpenAI-compatible `reasoning_effort` field; ignored by providers/models that don't support it. When on, the model's reasoning is always shown inline as it thinks."
+                >
+                  {/* SelectTrigger's own wrapper span isn't a flex container,
+                      and Tailwind's preflight makes <svg> block-level by
+                      default — without wrapping these two in their own flex
+                      row, the icon rendered on its own line above the text
+                      instead of beside it. */}
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <BrainCircuit className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                    <SelectValue />
+                  </span>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="off">Reasoning off</SelectItem>
+                  <SelectItem value="minimal">Minimal reasoning</SelectItem>
+                  <SelectItem value="low">Low reasoning</SelectItem>
+                  <SelectItem value="medium">Medium reasoning</SelectItem>
+                  <SelectItem value="high">High reasoning</SelectItem>
+                </SelectContent>
+              </Select>
+              <Badge variant="brand" className="hidden sm:inline-flex">Fleet-focused</Badge>
+              <Button size="sm" variant="ghost" className="md:hidden" onClick={() => setHistoryOpen(true)}>
+                <History className="h-3.5 w-3.5" /> History
+              </Button>
+              <Button size="sm" variant="ghost" className="md:hidden" onClick={() => createConversation(modelId, reasoningEffort)}>
+                <MessageSquarePlus className="h-3.5 w-3.5" /> New
+              </Button>
+            </div>
+          </div>
+
+          {/* Slim top-of-panel progress bar — a lighter-weight "something is
+              happening" cue than the per-message ThinkingDots/spinners alone,
+              visible even while scrolled away from the bottom of a long reply. */}
+          <div className="relative h-0.5 shrink-0 overflow-hidden bg-transparent">
+            {streaming && (
+              <div className="absolute inset-0 bg-[var(--bg-muted)]">
+                <div className="absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-brand-500 to-transparent" />
+              </div>
+            )}
+          </div>
+
+          <CardContent className="relative flex-1 overflow-hidden p-0">
+            <div ref={scrollRef} onScroll={handleScroll} className="h-full space-y-5 overflow-y-auto p-4">
+              {displayMessages.length === 0 ? (
+                <div className="flex h-full animate-in flex-col items-center justify-center gap-4 fade-in text-center duration-500">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-md bg-gradient-to-br from-brand-500/20 to-brand-600/5 text-brand-500 shadow-sm ring-1 ring-[var(--border)]">
+                    <Sparkles className="h-6 w-6" />
+                  </div>
+                  <p className="max-w-sm text-sm text-[var(--text-muted)]">
+                    Ask about your Proxmox fleet — nodes, guests, storage, alerts, backups. Type <code className="rounded-sm bg-[var(--bg-muted)] px-1 py-0.5 text-xs">/</code> for quick commands.
+                  </p>
+                  <div className="flex max-w-md flex-wrap justify-center gap-1.5">
+                    {SUGGESTIONS.map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => setInput(s)}
+                        className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-1.5 text-xs text-[var(--text-muted)] shadow-sm transition-all hover:-translate-y-0.5 hover:border-brand-500/50 hover:text-[var(--text)] hover:shadow-md"
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                displayMessages.map((m, i) => (
+                  <div
+                    key={m.id}
+                    data-mid={m.id}
+                    className={cn(
+                      "group flex scroll-mt-4 animate-in gap-3 fade-in slide-in-from-bottom-1 duration-300",
+                      m.role === "user" && "flex-row-reverse",
+                    )}
+                  >
+                    <div
+                      className={cn(
+                        "flex h-7 w-7 shrink-0 items-center justify-center rounded-md shadow-sm ring-1",
+                        m.role === "user"
+                          ? "bg-brand-600 text-white ring-brand-700/50"
+                          : "bg-gradient-to-br from-brand-500/20 to-brand-600/10 text-brand-500 ring-[var(--border)]",
+                      )}
+                    >
+                      {m.role === "user" ? <UserIcon className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
+                    </div>
+                    <div className={cn("min-w-0 max-w-[75%]", m.role === "user" && "flex flex-col items-end")}>
+                      {/* The model's reasoning, if any — shown ahead of tool calls and
+                          the answer itself, same ordering it actually happens in.
+                          Whenever a model actually sends reasoning content there's
+                          one to show here, so there's no separate on/off toggle for
+                          it — the "Reasoning" picker above controls whether the model
+                          reasons at all, not whether it's displayed. */}
+                      {(m.streaming ? streamingReasoning : m.reasoning) && (
+                        <ThinkingBlock text={(m.streaming ? streamingReasoning : m.reasoning) ?? ""} active={!!m.streaming && !m.content} />
+                      )}
+                      {/* Live tool-call activity while this message is streaming, or —
+                          once it's committed — the same evidence kept alongside it so
+                          "what did it check" is never lost after the answer lands. */}
+                      {m.streaming && toolActivity.length > 0 && (
+                        <div className="mb-1.5 space-y-1">
+                          {toolActivity.map((t, idx) => (
+                            <ToolCallPill key={`${t.name}-${idx}`} name={t.name} status={t.status} args={t.args} result={t.result} />
+                          ))}
+                        </div>
+                      )}
+                      {!m.streaming && m.toolCalls && m.toolCalls.length > 0 && (
+                        <div className="mb-1.5 space-y-1">
+                          {m.toolCalls.map((t, idx) => (
+                            <ToolCallPill key={`${t.name}-${idx}`} name={t.name} status={t.ok ? "ok" : "error"} args={t.args} result={t.result} />
+                          ))}
+                        </div>
+                      )}
+                      {/* An assistant message with no text and no error (e.g. Stop hit
+                          before the model produced anything) has nothing to show beyond
+                          its tool pills above — skip the bubble instead of rendering an
+                          empty box. */}
+                      {(m.role !== "assistant" || m.content || m.streaming || m.error) && (
+                        <div
+                          className={cn(
+                            "rounded-xl border px-3.5 py-2.5 text-sm",
+                            m.role === "user"
+                              ? "border-brand-700 bg-brand-600 text-white shadow-sm"
+                              : m.error && !m.content
+                                ? "border-[var(--status-error)]/40 bg-[var(--status-error)]/5 shadow-sm"
+                                : "border-[var(--border)] bg-[var(--bg-surface)] shadow-sm",
+                          )}
+                        >
+                          {m.role === "assistant" ? (
+                            m.content ? (
+                              <>
+                                <Markdown text={m.content} />
+                                {m.streaming && <span className="ml-0.5 inline-block h-3.5 w-[2px] translate-y-0.5 animate-pulse bg-brand-500" aria-hidden />}
+                              </>
+                            ) : m.error ? (
+                              <span className="flex items-start gap-1.5 text-[var(--status-error)]">
+                                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                {m.error}
+                              </span>
+                            ) : m.streaming && toolActivity.length === 0 && !streamingReasoning ? (
+                              <ThinkingDots />
+                            ) : null
+                          ) : (
+                            <span className="whitespace-pre-wrap">{m.content}</span>
+                          )}
+                        </div>
+                      )}
+                      {m.role === "user" && m.createdAt && (
+                        <span className="mt-1 text-[10px] text-[var(--text-muted)]">{formatTimestamp(m.createdAt)}</span>
+                      )}
+                      {m.role === "assistant" && !m.streaming && (m.content || m.error) && (
+                        <div className="mt-1 flex items-center gap-2">
+                          {(m.createdAt || m.usage) && (
+                            <span className="text-[10px] text-[var(--text-muted)]">
+                              {m.createdAt && formatTimestamp(m.createdAt)}
+                              {m.createdAt && m.usage && " · "}
+                              {m.usage && formatUsage(m.usage)}
+                            </span>
+                          )}
+                          <div className={cn("flex items-center gap-2 transition-opacity", !m.error && "opacity-0 group-hover:opacity-100")}>
+                            {m.content && <CopyMessageButton content={m.content} onCopy={copyMessage} />}
+                            {i === displayMessages.length - 1 && lastMessageIsAssistant && !streaming && (
+                              <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={regenerate}>
+                                <RotateCcw className="h-3 w-3" /> {m.error ? "Retry" : "Regenerate"}
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Only once the reader has taken the viewport over. It both says
+                "there is more below" and is the way back to auto-follow, so
+                taking control is never a dead end. */}
+            {!atBottom && displayMessages.length > 0 && (
+              <button
+                type="button"
+                onClick={() => follow("smooth")}
+                className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 border border-[var(--border)] bg-[var(--bg-elevated)] py-1.5 pr-3 pl-2.5 text-xs text-[var(--text-muted)] shadow-md transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:outline-none"
+              >
+                <ArrowDown className="h-3.5 w-3.5" aria-hidden />
+                {newBelow ? "New messages" : "Jump to latest"}
+                {newBelow && <span className="h-1.5 w-1.5 bg-brand-500" aria-hidden />}
+              </button>
+            )}
+          </CardContent>
+
+          <div className="relative border-t border-[var(--border)] p-3">
+            {slashMatches.length > 0 && (
+              <div className="absolute inset-x-3 bottom-full mb-1.5 overflow-hidden rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] shadow-lg">
+                {slashMatches.map((c, idx) => (
+                  <button
+                    key={c.cmd}
+                    type="button"
+                    onMouseEnter={() => setSlashIndex(idx)}
+                    onClick={() => runSlashCommand(c)}
+                    className={cn(
+                      "flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors",
+                      idx === slashIndex ? "bg-[var(--bg-muted)]" : "hover:bg-[var(--bg-surface-hover)]",
+                    )}
+                  >
+                    <Terminal className="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
+                    <span className="font-mono text-xs text-brand-500">{c.cmd}</span>
+                    <span className="truncate text-xs text-[var(--text-muted)]">{c.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="flex items-end gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1.5 pl-3.5 shadow-sm transition-colors focus-within:border-brand-500/60 focus-within:ring-2 focus-within:ring-[var(--ring)]">
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (slashMatches.length > 0) {
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault()
+                      setSlashIndex((i) => (i + 1) % slashMatches.length)
+                      return
+                    }
+                    if (e.key === "ArrowUp") {
+                      e.preventDefault()
+                      setSlashIndex((i) => (i - 1 + slashMatches.length) % slashMatches.length)
+                      return
+                    }
+                    if (e.key === "Tab" || e.key === "Enter") {
+                      e.preventDefault()
+                      runSlashCommand(slashMatches[slashIndex])
+                      return
+                    }
+                    if (e.key === "Escape") {
+                      setInput("")
+                      return
+                    }
+                  }
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault()
+                    send()
+                  }
+                }}
+                placeholder="Ask about your fleet, or type / for commands… (Shift+Enter for a new line)"
+                rows={1}
+                className="max-h-32 flex-1 resize-none bg-transparent py-1.5 text-sm outline-none"
+              />
+              {streaming ? (
+                <Button variant="destructive" className="shrink-0" size="icon" onClick={stop} title="Stop">
+                  <Square className="h-3.5 w-3.5" />
+                </Button>
+              ) : (
+                <Button className="shrink-0" size="icon" onClick={() => send()} disabled={!input.trim()} title="Send">
+                  <Send className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
+          </div>
+        </Card>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * "What has the AI done on my behalf" — every tool call this account has
+ * triggered, via the chat's own tool loop or an external MCP client,
+ * successful or not. Backed by GET /ai/activity (self-scoped; admins get a
+ * system-wide equivalent in the Audit Log page).
+ */
+function ActivityPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const query = useQuery({
+    queryKey: ["ai", "activity"],
+    queryFn: () => api.get<ToolCallRecord[]>("/ai/activity"),
+    enabled: open,
+    refetchInterval: open ? 5000 : false,
+  })
+  const records = query.data ?? []
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Activity className="h-4 w-4" /> Your AI &amp; MCP activity
+          </DialogTitle>
+        </DialogHeader>
+        <div className="max-h-[60vh] space-y-1.5 overflow-y-auto">
+          {query.isLoading ? (
+            <div className="space-y-1.5" aria-busy>
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
+          ) : records.length === 0 ? (
+            <p className="py-6 text-center text-sm text-[var(--text-muted)]">No tool calls yet — anything the assistant looks up or does on your behalf will show up here.</p>
+          ) : (
+            records.map((r) => (
+              <details key={r.id} className="group rounded-md border border-[var(--border)] px-3 py-2 text-sm">
+                <summary className="flex cursor-pointer list-none items-start gap-2.5 [&::-webkit-details-marker]:hidden">
+                  {r.ok ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--status-ok)]" /> : <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--status-error)]" />}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-mono text-xs">{toolLabel(r.tool)}</span>
+                      <Badge variant={r.source === "mcp" ? "brand" : "outline"}>{r.source === "mcp" ? "MCP" : "Chat"}</Badge>
+                      {r.username && <span className="text-xs text-[var(--text-muted)]">{r.username}</span>}
+                    </div>
+                    {r.error && <p className="mt-0.5 truncate text-xs text-[var(--status-error)]">{r.error}</p>}
+                    <p className="mt-0.5 text-xs text-[var(--text-muted)]">{formatRelativeTime(r.createdAt)}</p>
+                  </div>
+                  {r.args && <ChevronDown className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-50 transition-transform group-open:rotate-180" />}
+                </summary>
+                {r.args && (
+                  <pre className="mt-2 max-h-40 overflow-auto rounded-sm bg-[var(--bg-muted)] p-1.5 font-mono text-[11px] whitespace-pre-wrap break-all">
+                    {formatJSON(r.args)}
+                  </pre>
+                )}
+              </details>
+            ))
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** The conversation-switcher list — shared by the desktop sidebar and the
+ * mobile History dialog so they can never drift into two implementations. */
+/** Shown above the conversation list while multi-select is active — the
+ * running count plus the one bulk action, so clearing out old chats doesn't
+ * mean confirming and clicking the trash icon once per conversation. */
+function SelectionBar({ count, total, onSelectAll, onDelete }: { count: number; total: number; onSelectAll: () => void; onDelete: () => void }) {
+  return (
+    <div className="flex items-center justify-between gap-2 px-1 text-xs text-[var(--text-muted)]">
+      <span>{count} selected</span>
+      <div className="flex items-center gap-1">
+        <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" disabled={count === total} onClick={onSelectAll}>
+          Select all
+        </Button>
+        <Button size="sm" variant="destructive" className="h-6 px-2 text-xs" disabled={count === 0} onClick={onDelete}>
+          <Trash2 className="h-3 w-3" /> Delete
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function ConversationList({
+  conversations,
+  activeId,
+  onSelect,
+  onDelete,
+  selectMode = false,
+  selectedIds,
+  onToggleSelect,
+}: {
+  conversations: Conversation[]
+  activeId: string | null
+  onSelect: (id: string) => void
+  onDelete: (id: string, title: string) => void
+  selectMode?: boolean
+  selectedIds?: Set<string>
+  onToggleSelect?: (id: string) => void
+}) {
+  if (conversations.length === 0) {
+    return <p className="px-2 py-4 text-center text-xs text-[var(--text-muted)]">No conversations yet</p>
+  }
+  return (
+    <>
+      {conversations.map((c) => (
+        <button
+          key={c.id}
+          type="button"
+          onClick={() => (selectMode ? onToggleSelect?.(c.id) : onSelect(c.id))}
+          className={cn(
+            "group relative flex w-full items-center justify-between gap-1 rounded-lg py-2 pr-2.5 pl-3.5 text-left text-sm transition-colors",
+            c.id === activeId ? "bg-[var(--bg-muted)] text-[var(--text)]" : "text-[var(--text-muted)] hover:bg-[var(--bg-surface-hover)]",
+          )}
+        >
+          {c.id === activeId && <span className="absolute top-1.5 bottom-1.5 left-0 w-[3px] rounded-full bg-brand-500" aria-hidden />}
+          {selectMode && (
+            <Checkbox
+              checked={selectedIds?.has(c.id) ?? false}
+              onClick={(e) => e.stopPropagation()}
+              onCheckedChange={() => onToggleSelect?.(c.id)}
+            />
+          )}
+          <span className="min-w-0 flex-1">
+            <span className="block truncate">{c.title}</span>
+            <span className="block text-[10px] text-[var(--text-muted)]">{formatRelativeTime(c.updatedAt)}</span>
+          </span>
+          {!selectMode && (
+            <Trash2
+              className="h-3 w-3 shrink-0 opacity-0 transition-opacity hover:text-[var(--status-error)] group-hover:opacity-100"
+              onClick={(e) => {
+                e.stopPropagation()
+                onDelete(c.id, c.title)
+              }}
+            />
+          )}
+        </button>
+      ))}
+    </>
+  )
+}
+
+/** A single tool-call's status, expandable to its arguments and result —
+ * used both for the live in-progress list and for the ones persisted onto a
+ * finished message, so "what did it check and what came back" is never a
+ * dead end. Uses a native <details> element rather than a controlled-state
+ * accordion: no JS needed to track which pill is open. */
+function ToolCallPill({ name, status, args, result }: { name: string; status: "running" | "ok" | "error"; args?: unknown; result?: string }) {
+  const hasDetails = args !== undefined || !!result
+  const body = (
+    <summary className="flex cursor-pointer list-none items-center gap-1.5 px-2.5 py-1 marker:content-none [&::-webkit-details-marker]:hidden">
+      {status === "running" ? (
+        <Loader2 className="h-3 w-3 shrink-0 animate-spin text-brand-500" />
+      ) : status === "ok" ? (
+        <CheckCircle2 className="h-3 w-3 shrink-0 text-[var(--status-ok)]" />
+      ) : (
+        <AlertTriangle className="h-3 w-3 shrink-0 text-[var(--status-error)]" />
+      )}
+      <Wrench className="h-3 w-3 shrink-0 opacity-60" />
+      <span className="flex-1 truncate">{toolLabel(name)}</span>
+      {hasDetails && <ChevronDown className="h-3 w-3 shrink-0 opacity-50 transition-transform group-open:rotate-180" />}
+    </summary>
+  )
+  if (!hasDetails) {
+    return <div className="group w-fit animate-in rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] fade-in text-xs text-[var(--text-muted)]">{body}</div>
+  }
+  return (
+    <details className="group w-fit animate-in overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] fade-in text-xs text-[var(--text-muted)] open:w-full">
+      {body}
+      <div className="space-y-2 border-t border-[var(--border)] px-2.5 py-2">
+        {args !== undefined && (
+          <div>
+            <div className="mb-0.5 font-medium text-[var(--text-muted)]">Arguments</div>
+            <pre className="max-h-40 overflow-auto rounded-md bg-[var(--bg-muted)] p-1.5 font-mono text-[11px] whitespace-pre-wrap break-all">
+              {JSON.stringify(args, null, 2)}
+            </pre>
+          </div>
+        )}
+        {result && (
+          <div>
+            <div className="mb-0.5 font-medium text-[var(--text-muted)]">Result</div>
+            <pre className="max-h-40 overflow-auto rounded-md bg-[var(--bg-muted)] p-1.5 font-mono text-[11px] whitespace-pre-wrap break-all">{result}</pre>
+          </div>
+        )}
+      </div>
+    </details>
+  )
+}
+
+/** A reasoning model's chain-of-thought, collapsible like ToolCallPill — open
+ * by default while actively thinking (no answer text yet), auto-collapsing
+ * the moment the real answer starts, but never fighting a manual toggle the
+ * reader already made. Modeled on the "Thinking… / Show thinking" pattern
+ * modern chat UIs use for reasoning models. */
+function ThinkingBlock({ text, active }: { text: string; active: boolean }) {
+  const [open, setOpen] = useState(active)
+  const userToggled = useRef(false)
+  useEffect(() => {
+    if (!active && !userToggled.current) setOpen(false)
+  }, [active])
+
+  return (
+    <details
+      open={open}
+      onToggle={(e) => {
+        userToggled.current = true
+        setOpen((e.target as HTMLDetailsElement).open)
+      }}
+      className="group mb-1.5 w-fit max-w-full animate-in overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] fade-in text-xs text-[var(--text-muted)] open:w-full"
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 px-2.5 py-1 marker:content-none [&::-webkit-details-marker]:hidden">
+        {active ? (
+          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-brand-500" />
+        ) : (
+          <BrainCircuit className="h-3 w-3 shrink-0 opacity-60" />
+        )}
+        <span className="flex-1">{active ? "Thinking…" : "Thought process"}</span>
+        <ChevronDown className="h-3 w-3 shrink-0 opacity-50 transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="max-h-48 overflow-auto border-t border-[var(--border)] px-2.5 py-2 whitespace-pre-wrap italic">{text}</div>
+    </details>
+  )
+}
+
+function ThinkingDots() {
+  return (
+    <span className="flex items-center gap-1 py-0.5" aria-label="Thinking">
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--text-muted)] [animation-delay:-0.3s]" />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--text-muted)] [animation-delay:-0.15s]" />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--text-muted)]" />
+    </span>
+  )
+}
+
+function CopyMessageButton({ content, onCopy }: { content: string; onCopy: (content: string) => void }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      className="h-6 px-2 text-xs"
+      onClick={() => {
+        onCopy(content)
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1500)
+      }}
+    >
+      {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />} {copied ? "Copied" : "Copy"}
+    </Button>
+  )
+}

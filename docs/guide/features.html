@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Features &amp; workflows — Ferrum Docs</title>
+<meta name="description" content="How to use and configure every area of Ferrum: dashboard, inventory, consoles, storage, backups, HA, firewall, alerting, and access control.">
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<link rel="stylesheet" href="../assets/css/site.css">
+</head>
+<body>
+<header class="topnav">
+  <div class="container topnav-row">
+    <a href="../index.html" class="brand">
+      <span class="brand-mark" aria-label="Ferrum (Fe)"><span class="bm-num">26</span><span class="bm-sym">Fe</span></span>
+      Ferrum
+    </a>
+    <nav class="navlinks">
+      <a href="../index.html#features">Product</a>
+      <a href="../index.html#look">Screenshots</a>
+      <a href="./index.html" aria-current="page">Docs</a>
+      <a href="../demo/index.html">Demo</a>
+      <a href="https://github.com/anand34577/ferrum/releases" target="_blank" rel="noopener">Releases</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="icon-btn" data-theme-toggle aria-label="Toggle color theme">
+        <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z"/></svg>
+        <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      </button>
+      <a class="icon-btn" href="https://github.com/anand34577/ferrum" target="_blank" rel="noopener" aria-label="View source on GitHub">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.5 0-.24-.01-1.04-.01-1.88-2.78.62-3.37-1.22-3.37-1.22-.46-1.2-1.11-1.52-1.11-1.52-.9-.64.07-.63.07-.63 1 .07 1.53 1.06 1.53 1.06.89 1.57 2.34 1.11 2.91.85.09-.67.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.31.1-2.72 0 0 .84-.28 2.75 1.05a9.28 9.28 0 0 1 5 0c1.9-1.33 2.74-1.05 2.74-1.05.56 1.41.2 2.46.1 2.72.65.72 1.03 1.63 1.03 2.75 0 3.94-2.35 4.8-4.58 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.48-.01 2.81 0 .28.18.61.69.5A10.03 10.03 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg>
+      </a>
+      <a class="btn btn-primary btn-sm" href="../demo/index.html">Live demo</a>
+      <button class="nav-toggle" data-nav-toggle aria-label="Open menu" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="container doc-shell">
+  <nav class="doc-nav" aria-label="Documentation">
+    <div>
+      <h5>Getting started</h5>
+      <ul>
+        <li><a href="./index.html">Overview</a></li>
+        <li><a href="./installation.html">Installation</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Setup</h5>
+      <ul><li><a href="./configuration.html">Configuration</a></li></ul>
+    </div>
+    <div>
+      <h5>Using Ferrum</h5>
+      <ul><li><a href="./features.html" aria-current="page">Features &amp; workflows</a></li></ul>
+    </div>
+    <div>
+      <h5>Integrations</h5>
+      <ul><li><a href="./api.html">API, MCP &amp; audit log</a></li></ul>
+    </div>
+  </nav>
+
+  <article class="doc-content">
+    <div class="doc-kicker">Using Ferrum</div>
+    <h1>Features &amp; workflows</h1>
+    <p>This walks through each area of the app in the order you'd actually touch them: connect something, look at it, act on it, get warned when it needs attention. Everything below is a page in the left sidebar of the running app; try the <a href="../demo/index.html">live demo</a> alongside this if you want to click through as you read.</p>
+
+    <h2 id="connections">Connections</h2>
+    <p>A connection is a PVE cluster, a standalone PVE node, or a Proxmox Backup Server remote. Add one from <strong>Connections</strong> with a host, port, and either an API token (recommended: scope it to what Ferrum actually needs) or a username/password. Everything else in the app is built by polling these on an interval and rolling the results up into one inventory.</p>
+
+    <h2 id="dashboard">Overview &amp; Dashboard</h2>
+    <p><strong>Overview</strong> is the fleet at a glance: total nodes and guests, aggregate CPU/memory/storage, and active alerts across every connection. <strong>Dashboard</strong> is the same idea but yours to arrange: drag, resize, and add from 20+ widgets (per-connection health, top guests by resource use, storage headroom, recent tasks, alert feed, and more). Layout is saved per user, so a shared login doesn't force one layout on everyone.</p>
+
+    <h2 id="inventory">Inventory, Cluster &amp; Topology</h2>
+    <p><strong>Inventory</strong> lists every node, VM, and LXC across every connection in one sortable, filterable table, with bulk actions (start, stop, migrate) selectable across multiple guests at once, even across different connections. <strong>Cluster</strong> drills into one cluster's nodes and quorum state; <strong>Topology</strong> draws the whole fleet as a connected graph instead of a table, which is the faster read when you're trying to see how guests are distributed rather than look one up by name.</p>
+    <p>Open a node from <strong>Node detail</strong> for its own resource graphs, or a guest's console from <strong>Console</strong>: VMs get a noVNC framebuffer, LXCs get an xterm.js shell, both running entirely client-side against Proxmox's own console endpoints.</p>
+
+    <h2 id="bulk">Bulk operations</h2>
+    <p>The <strong>Bulk Operations</strong> page is for scripted-feeling changes across many guests at once (start/stop/restart, snapshot, or migrate a filtered selection), with a preview of exactly what will run before you confirm it, and the result logged like any other action.</p>
+
+    <h2 id="storage">Storage, Pools &amp; Backups</h2>
+    <p><strong>Storage</strong> and <strong>Pools</strong> show pool usage and Ceph health per connection and rolled up fleet-wide. <strong>Backups</strong> tracks job status and replication across native PVE storage and any PBS remotes you've connected, one view instead of switching between a PVE datacenter's backup tab and a separate PBS UI.</p>
+
+    <h2 id="ha-firewall">High availability, Firewall &amp; SDN</h2>
+    <p><strong>HA</strong> shows HA groups and resources with their current state and failover history. <strong>Firewall</strong> covers cluster-level and per-node rules: add, reorder, or disable a rule and it's applied through the Proxmox API immediately, same as editing it there directly. SDN zones, VNets, and subnets are managed the same way, scoped per connection.</p>
+
+    <h2 id="alerts">Alerts &amp; automation</h2>
+    <p>The <strong>Alerts</strong> page is where threshold rules live (CPU, memory, disk, or guest-state conditions, per connection or fleet-wide), plus config drift detection (something changed outside of Ferrum) and a fleet health score that rolls all of it into one number. Guest lifecycle policies (e.g. clean up VMs stopped past a certain age) and capacity forecasting run from the same page. Turn on scheduled health-digest emails from <strong>Settings</strong> if you want a daily summary instead of watching the page. Terraform and Ansible inventory export live here too, for teams that want the current fleet state as code without hand-maintaining it.</p>
+
+    <h2 id="webhooks">Webhooks</h2>
+    <p><strong>Webhooks</strong> lets you register outbound URLs that fire on real-time events (an alert firing, a backup failing, a guest changing state) with the payload shape and a delivery log so you can confirm the other end actually received it.</p>
+
+    <h2 id="ai">AI Assistant</h2>
+    <p>The <strong>AI Assistant</strong> is a chat interface that can call the same tool catalog Ferrum's MCP server exposes: look things up, and (if the admin has allowed it) take action, like restarting a guest or acknowledging an alert. It works with any OpenAI-compatible provider you configure, or the built-in local Needle 2 model with no setup at all; see <a href="./configuration.html#needle">Configuration</a>.</p>
+
+    <h2 id="access">Users, Profile &amp; Settings</h2>
+    <p><strong>Users</strong> (admin-only) manages accounts and roles. <strong>Profile</strong> is where any user manages their own password, theme/look preferences, and API keys. <strong>Settings</strong> (admin-only) is the control panel for everything not in <code>config.yaml</code>: notification channels, SSO, security policy, AI provider list, and the REST API/MCP enable switches covered in <a href="./api.html">API, MCP &amp; audit log</a>.</p>
+
+    <h2 id="looks">Look &amp; feel</h2>
+    <p>Twelve presets (Enterprise, Proxmox-native, Terminal, Glass Flight Deck, Midnight, Paper, Glassmorphism, Neumorphism, Brutalist, Solarized, High Contrast, and Aurora) live under <strong>Settings &gt; Appearance</strong> (or your own <strong>Profile</strong> if the admin allows per-user choice), each with a light and dark variant and eight accent colors. Density (comfortable vs. compact row spacing) is a separate, orthogonal setting for anyone managing a very long guest list.</p>
+
+    <h2 id="audit">Tasks &amp; Audit Log</h2>
+    <p><strong>Tasks</strong> shows in-flight and recent Proxmox operations (migrations, backups, snapshots) with their live progress. <strong>Audit Log</strong> (admin-only) records who did what and when for every mutating action, regardless of whether it came through the UI, the REST API, or MCP; see <a href="./api.html#audit">API, MCP &amp; audit log</a>.</p>
+
+    <div class="doc-footnav">
+      <a href="./configuration.html"><span class="lbl">Back</span><span class="ttl">← Configuration</span></a>
+      <a href="./api.html"><span class="lbl">Next</span><span class="ttl">API, MCP &amp; audit log →</span></a>
+    </div>
+  </article>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-bottom" style="margin-top:0; padding-top:0; border-top:none;">
+    <span>© 2026 Ferrum. Open source under the MIT license.</span>
+    <a href="https://github.com/anand34577/ferrum" target="_blank" rel="noopener">github.com/anand34577/ferrum</a>
+  </div>
+</footer>
+
+<script src="../assets/js/site.js"></script>
+</body>
+</html>

@@ -3,6 +3,7 @@
 Fleet control for Proxmox VE — a single dashboard for every cluster and standalone node you run, with live inventory, dashboards, backups, HA, firewall, alerting, and more.
 
 - **Repository:** https://github.com/anand34577/ferrum
+- **Website & docs:** https://anand34577.github.io/ferrum/ — includes a [live click-through demo](https://anand34577.github.io/ferrum/demo/)
 - **Backend:** Go (chi router), SQLite or PostgreSQL
 - **Frontend:** React + TypeScript, Vite, Tailwind CSS v4
 

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Ferrum</title></head>
+<body>
+<script>
+  // GitHub Pages serves plain files, so the only route inside the demo that
+  // can 404 is the console viewer — it opens as a real new-tab navigation to
+  // "/console?..." (see web/src/lib/console.ts's buildConsoleUrl), which
+  // needs to become a hash route ("#/console?...") for the demo's
+  // HashRouter to pick it up client-side. Reroute that one case back into
+  // the demo; anything else 404s for a real reason and just goes home.
+  var p = location.pathname;
+  var i = p.indexOf("/demo/");
+  if (i !== -1) {
+    var base = p.slice(0, i + 6); // "..../demo/"
+    location.replace(base + "index.html#" + p.slice(i + 5) + location.search);
+  } else {
+    location.replace(location.origin + "/");
+  }
+</script>
+</body>
+</html>

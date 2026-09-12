@@ -1,0 +1,331 @@
+import {
+  AlertTriangle,
+  ClipboardList,
+  Database,
+  GitBranch,
+  HardDrive,
+  LayoutDashboard,
+  Layers,
+  LogOut,
+  Menu,
+  Moon,
+  Network,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Search,
+  Server,
+  Settings,
+  Shield,
+  ShieldCheck,
+  Layers3,
+  Sparkles,
+  Sun,
+  Terminal,
+  UserRound,
+  Users,
+  Waypoints,
+  Webhook,
+} from "lucide-react"
+import { type ReactNode, useState } from "react"
+import { useLocation, useNavigate } from "react-router-dom"
+import { BrandMark } from "@/components/layout/BrandMark"
+import { api } from "@/lib/api"
+import { CommandPalette } from "@/components/layout/CommandPalette"
+import { MasterCautionBar } from "@/components/layout/MasterCautionBar"
+import { NotificationBell } from "@/components/layout/NotificationBell"
+import { ShortcutsDialog } from "@/components/layout/ShortcutsDialog"
+import { MobileDrawer, SidebarContent } from "@/components/layout/MobileDrawer"
+import { StatusDot } from "@/components/ui/status-dot"
+import { useAuth } from "@/lib/auth"
+import { useTheme } from "@/lib/theme"
+import { cn } from "@/lib/utils"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Hint } from "@/components/ui/tooltip"
+import { toast } from "sonner"
+
+interface NavItemSpec {
+  to: string
+  label: string
+  icon: typeof Server
+  end?: boolean
+  /** Hidden from non-admin users — the API enforces the same split. */
+  adminOnly?: boolean
+}
+
+const navGroups: { label: string; items: NavItemSpec[] }[] = [
+  {
+    label: "Overview",
+    items: [
+      { to: "/", label: "Fleet Overview", icon: Waypoints, end: true },
+      { to: "/dashboard", label: "Custom Dashboard", icon: LayoutDashboard },
+      { to: "/inventory", label: "Inventory", icon: Server },
+      { to: "/topology", label: "Topology", icon: Network },
+    ],
+  },
+  {
+    label: "Infrastructure",
+    items: [
+      { to: "/storage", label: "Storage", icon: Database },
+      { to: "/pools", label: "Resource Pools", icon: Layers },
+      { to: "/ha", label: "High Availability", icon: ShieldCheck },
+      { to: "/cluster", label: "Cluster & SDN", icon: GitBranch, adminOnly: true },
+    ],
+  },
+  {
+    label: "Operations",
+    items: [
+      { to: "/backups", label: "Backups", icon: HardDrive },
+      { to: "/firewall", label: "Firewall", icon: Shield },
+      { to: "/alerts", label: "Alerts", icon: AlertTriangle },
+      { to: "/tasks", label: "Task Center", icon: Terminal },
+      { to: "/ai-assistant", label: "AI Assistant", icon: Sparkles },
+      { to: "/bulk-operations", label: "Bulk Operations", icon: Layers3, adminOnly: true },
+    ],
+  },
+  {
+    label: "Administration",
+    items: [
+      { to: "/connections", label: "Connections", icon: Network, adminOnly: true },
+      { to: "/users", label: "Users", icon: Users, adminOnly: true },
+      { to: "/webhooks", label: "Webhooks", icon: Webhook, adminOnly: true },
+      { to: "/audit", label: "Audit Log", icon: ClipboardList, adminOnly: true },
+      { to: "/settings", label: "Settings", icon: Settings, adminOnly: true },
+    ],
+  },
+]
+
+function visibleGroups(isAdmin: boolean) {
+  if (isAdmin) return navGroups
+  return navGroups
+    .map((g) => ({ ...g, items: g.items.filter((i) => !i.adminOnly) }))
+    .filter((g) => g.items.length > 0)
+}
+
+const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform)
+const paletteShortcutLabel = isMac ? "⌘K" : "Ctrl K"
+
+export function AppShell({ children }: { children: ReactNode }) {
+  const { user, signOut } = useAuth()
+  const { effectiveTheme, toggle } = useTheme()
+  const navigate = useNavigate()
+  const location = useLocation()
+  // Persisted across reloads — an admin who collapses the rail for screen
+  // space shouldn't have to redo it every session.
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem("ferrum:sidebar-collapsed") === "1"
+    } catch {
+      return false
+    }
+  })
+  function toggleCollapsed() {
+    setCollapsed((c) => {
+      const next = !c
+      try {
+        localStorage.setItem("ferrum:sidebar-collapsed", next ? "1" : "0")
+      } catch {
+        // private browsing / storage blocked — collapse still works, just doesn't persist
+      }
+      return next
+    })
+  }
+  const [mobileOpen, setMobileOpen] = useState(false)
+  // The AI Assistant page fills main's h-full with a fixed-height chat panel
+  // instead of scrolling content, so main's usual bottom padding (sized for
+  // scrolled-content breathing room) just reads as wasted space below the
+  // panel. Give it a smaller, still-nonzero gap instead.
+  const isChatPage = location.pathname === "/ai-assistant"
+
+  const groups = visibleGroups(user?.isAdmin ?? false)
+
+  async function logout() {
+    // logoutUrl is set only for an SSO session whose provider supports
+    // RP-Initiated Logout (see authLogout/EndSessionURL server-side) — a
+    // plain sign-out would otherwise leave the user still logged in at the
+    // identity provider, so signing back in skips straight past its login
+    // page. A full navigation (not fetch) because ending the IdP's own
+    // session needs the browser to actually visit it.
+    let logoutUrl: string | undefined
+    try {
+      const res = await api.post<{ logoutUrl?: string }>("/auth/logout")
+      logoutUrl = res?.logoutUrl
+    } catch {
+      toast.error("Sign out failed — the server didn't respond. You're still signed in here.")
+    } finally {
+      // Clear local state regardless: if the server is unreachable the
+      // session may still be alive there, but the UI must not pretend
+      // the sign-out silently failed. signOut() pins the cached user to
+      // null directly rather than invalidating-and-hoping a refetch lands
+      // in time — see the comment on AuthProvider's signOut for why.
+      signOut()
+      if (logoutUrl) {
+        window.location.href = logoutUrl
+      } else {
+        navigate("/")
+      }
+    }
+  }
+
+  const initial = user?.username?.trim()?.charAt(0)?.toUpperCase() || "?"
+
+  return (
+    <div className="flex h-full">
+      <CommandPalette />
+      <ShortcutsDialog />
+
+      {/* Skip link — first tab stop for keyboard users; #main-content is a
+          focus target via tabIndex so focus actually moves with it. */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[600] focus:rounded-md focus:bg-[var(--sidebar-bg)] focus:px-3 focus:py-2 focus:text-sm focus:text-white"
+      >
+        Skip to content
+      </a>
+
+      {/* Desktop sidebar — fixed dark instrument rail */}
+      <aside
+        className="sidebar-shell hidden shrink-0 flex-col bg-[var(--sidebar-bg)] transition-[width] duration-200 md:flex"
+        style={{
+          width: collapsed ? "var(--sidebar-width-collapsed)" : "var(--sidebar-width)",
+          borderRight: "var(--sidebar-border-width) solid var(--sidebar-border)",
+        }}
+      >
+        <div
+          className={cn("flex shrink-0 items-center gap-2.5 border-b border-[var(--sidebar-border)]", collapsed ? "justify-center px-2" : "px-4")}
+          style={{ height: "var(--header-height)" }}
+        >
+          <BrandMark />
+          {!collapsed && (
+            <div className="min-w-0">
+              <p className="font-display text-base font-semibold leading-tight tracking-tight text-[var(--sidebar-text)]">Ferrum</p>
+              <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--sidebar-text-muted)]">Fleet control</p>
+            </div>
+          )}
+        </div>
+        <SidebarContent groups={groups} collapsed={collapsed} />
+        <button
+          onClick={toggleCollapsed}
+          className="hidden shrink-0 items-center gap-2 border-t border-[var(--sidebar-border)] px-4 py-2.5 text-xs font-medium text-[var(--sidebar-text-muted)] transition-colors hover:text-[var(--sidebar-text)] md:flex"
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          {collapsed ? <PanelLeftOpen className="mx-auto h-3.5 w-3.5" /> : <><PanelLeftClose className="h-3.5 w-3.5" /> Collapse</>}
+        </button>
+      </aside>
+
+      {/* Mobile drawer — Radix Dialog (focus trap, aria-modal, Escape) */}
+      <MobileDrawer open={mobileOpen} onOpenChange={setMobileOpen}>
+        {(close) => <SidebarContent groups={groups} collapsed={false} onNavigate={close} />}
+      </MobileDrawer>
+
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <MasterCautionBar />
+        <header
+          className="app-header sticky top-0 z-30 flex shrink-0 items-center justify-between gap-2 border-b border-[var(--border)] bg-[var(--bg-surface)]/80 px-4 [backdrop-filter:var(--header-blur)]"
+          style={{ height: "var(--header-height)" }}
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              onClick={() => setMobileOpen(true)}
+              className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text)] md:hidden"
+              aria-label="Open menu"
+            >
+              <Menu className="h-4.5 w-4.5" />
+            </button>
+            <button
+              onClick={() => document.dispatchEvent(new CustomEvent("ferrum:open-command-palette"))}
+              className="hidden h-9 cursor-pointer items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]/50 px-3 text-xs text-[var(--text-muted)] transition-all hover:border-brand-500/40 hover:bg-[var(--bg-surface)] hover:text-[var(--text)] sm:flex"
+              aria-label="Open command palette"
+            >
+              <Search className="h-3.5 w-3.5" />
+              <span>Search inventory & commands…</span>
+              <kbd className="ml-2 rounded-sm border border-[var(--border)] bg-[var(--bg-surface)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-faint)]">
+                {paletteShortcutLabel}
+              </kbd>
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="hidden items-center gap-2.5 rounded-sm border border-[var(--border)] bg-[var(--bg-surface)]/90 px-3 py-1 text-xs font-medium text-[var(--text-muted)] backdrop-blur-xs lg:flex">
+              <StatusDot status="ok" pulse />
+              <span className="panel-label text-[10px]">Fleet Telemetry Live</span>
+            </div>
+
+            <NotificationBell />
+            <Hint label={effectiveTheme === "dark" ? "Switch to light mode" : "Switch to dark mode"}>
+              <button
+                onClick={toggle}
+                className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md border border-transparent text-[var(--text-muted)] transition-all hover:border-[var(--border)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text)] active:scale-95"
+                aria-label={effectiveTheme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              >
+                {effectiveTheme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              </button>
+            </Hint>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1 transition-colors hover:bg-[var(--bg-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+                aria-label="Account menu"
+              >
+                <span className="flex h-7 w-7 items-center justify-center rounded-md border border-brand-700 bg-brand-600 font-mono text-xs font-bold text-white" aria-hidden>
+                  {initial}
+                </span>
+                <span className="hidden text-sm font-medium sm:block">{user?.username}</span>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuLabel>{user?.username}</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => navigate("/profile")}>
+                  <UserRound className="h-3.5 w-3.5 text-[var(--text-muted)]" /> Profile & security
+                </DropdownMenuItem>
+                {user?.isAdmin && (
+                  <DropdownMenuItem onSelect={() => navigate("/settings")}>
+                    <Settings className="h-3.5 w-3.5 text-[var(--text-muted)]" /> Settings
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => void logout()} className="text-[var(--status-error)] data-[highlighted]:bg-[color-mix(in_oklab,var(--status-error)_10%,transparent)]">
+                  <LogOut className="h-3.5 w-3.5" /> Sign out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </header>
+
+        {/* Extra bottom padding so fully-scrolled content never sits flush
+            against the window edge. No h-full on the wrapper: a full-height
+            wrapper makes taller pages overflow it, and that overflow paints
+            right over the padding — the exact "content glued to the screen
+            bottom" effect this padding exists to prevent. */}
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className={cn(
+            "flex-1 overflow-y-auto p-4 outline-none md:p-6",
+            isChatPage ? "pb-5 md:pb-6" : "pb-10 md:pb-12",
+          )}
+        >
+          {/* h-full only for the chat page, which needs a definite height to
+              size its bounded, non-scrolling layout against (it scrolls its
+              own message list instead of the page). Every other page must
+              NOT get h-full: it pins the wrapper's layout box to exactly
+              main's content-box height, and on any page taller than the
+              viewport the real content then overflows past that box —
+              since main's bottom padding is measured against the wrapper's
+              box edge, not its overflowing content, the overflow bleeds
+              straight through the space the padding should occupy and the
+              bottom gap disappears. Auto-height (the default) doesn't have
+              this problem: the wrapper grows to fit its content instead of
+              being pinned undersized. */}
+          <div className={cn("mx-auto w-full max-w-[1720px]", isChatPage && "h-full")}>{children}</div>
+        </main>
+      </div>
+    </div>
+  )
+}
