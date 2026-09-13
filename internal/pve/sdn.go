@@ -160,9 +160,11 @@ func (c *Client) SDNControllers(ctx context.Context) ([]SDNController, error) {
 // CreateSDNController creates a controller. opts must include "type";
 // everything else is controller-type-specific (e.g. "asn"/"peers" for bgp,
 // "asn"/"gateway-nodes" for evpn) so it's passed through as a raw form
-// rather than a fixed struct.
+// rather than a fixed struct. The id form key is "controller" — the name
+// PVE's own Controllers.pm create handler extracts (not "id", unlike the
+// zone/vnet/subnet siblings which use their resource's own key too).
 func (c *Client) CreateSDNController(ctx context.Context, controller string, opts map[string]string) error {
-	form := url.Values{"id": {controller}}
+	form := url.Values{"controller": {controller}}
 	for k, v := range opts {
 		form.Set(k, v)
 	}
@@ -205,9 +207,10 @@ func (c *Client) SDNIPAMs(ctx context.Context) ([]SDNIPAM, error) {
 
 // CreateSDNIPAM creates an IPAM. opts must include "type"; everything else
 // is ipam-type-specific (e.g. "url"/"token"/"section" for netbox/phpipam)
-// so it's passed through as a raw form rather than a fixed struct.
+// so it's passed through as a raw form rather than a fixed struct. The id
+// form key is "ipam" — the name PVE's own Ipams.pm create handler extracts.
 func (c *Client) CreateSDNIPAM(ctx context.Context, ipam string, opts map[string]string) error {
-	form := url.Values{"id": {ipam}}
+	form := url.Values{"ipam": {ipam}}
 	for k, v := range opts {
 		form.Set(k, v)
 	}

@@ -60,6 +60,9 @@ type createAlertRuleRequest struct {
 	Severity     string  `json:"severity"`
 }
 
+// Same shape as create — the edit form is the create form pre-filled.
+type updateAlertRuleRequest = createAlertRuleRequest
+
 var validMetrics = map[string]bool{
 	"node_cpu": true, "node_mem": true, "node_disk": true,
 	"guest_cpu": true, "guest_mem": true,
@@ -100,12 +103,53 @@ func (s *Server) deleteAlertRule(w http.ResponseWriter, r *http.Request) {
 		writeErrorMsg(w, http.StatusBadRequest, "built-in alert rules can't be deleted")
 		return
 	}
-	if _, err := s.db.ExecContext(r.Context(), `DELETE FROM alert_rules WHERE id = ?`, id); err != nil {
+	res, err := s.db.ExecContext(r.Context(), `DELETE FROM alert_rules WHERE id = ?`, id)
+	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeErrorMsg(w, http.StatusNotFound, "alert rule not found")
 		return
 	}
 	s.audit(r, "alerts.rule.delete", "alerts", id)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// updateAlertRule lets an admin edit a rule in place. Until this existed the
+// only way to change a threshold was delete + recreate, which also resets the
+// rule's history position and any alert instances pointing at it.
+func (s *Server) updateAlertRule(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if strings.HasPrefix(id, "system-") {
+		writeErrorMsg(w, http.StatusBadRequest, "built-in alert rules can't be edited")
+		return
+	}
+	var req updateAlertRuleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Name == "" || !validMetrics[req.Metric] || req.Threshold <= 0 || req.Threshold > 100 {
+		writeErrorMsg(w, http.StatusBadRequest, "name, a valid metric, and a threshold between 0 and 100 are required")
+		return
+	}
+	if req.Severity != "warning" && req.Severity != "critical" {
+		req.Severity = "warning"
+	}
+	res, err := s.db.ExecContext(r.Context(),
+		`UPDATE alert_rules SET name = ?, metric = ?, connection_id = ?, threshold = ?, severity = ? WHERE id = ?`,
+		req.Name, req.Metric, req.ConnectionID, req.Threshold, req.Severity, id)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeErrorMsg(w, http.StatusNotFound, "alert rule not found")
+		return
+	}
+	s.audit(r, "alerts.rule.update", "alerts", req.Name)
+	writeJSON(w, http.StatusOK, map[string]string{"id": id})
 }
 
 type alertInstanceDTO struct {
@@ -202,10 +246,41 @@ func (s *Server) connectionHealth(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) silenceAlert(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if _, err := s.db.ExecContext(r.Context(), `UPDATE alert_instances SET status = 'silenced', updated_at = ? WHERE id = ?`, time.Now().UTC().Format(time.RFC3339), id); err != nil {
+	// The status guard keeps the update from "succeeding" against an
+	// already-resolved (or nonexistent) alert, so zero rows reliably means
+	// the client named something that can't be silenced.
+	res, err := s.db.ExecContext(r.Context(),
+		`UPDATE alert_instances SET status = 'silenced', updated_at = ? WHERE id = ? AND status IN ('active', 'silenced')`,
+		time.Now().UTC().Format(time.RFC3339), id)
+	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeErrorMsg(w, http.StatusNotFound, "alert not found")
+		return
+	}
 	s.audit(r, "alerts.silence", "alerts", id)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// unSilenceAlert is the inverse of silenceAlert — the polling evaluator
+// preserves the silenced status on re-fire (see poller/alerts.go's upsert),
+// so flipping back to 'active' re-enables the alert even while its condition
+// is still firing, which is exactly what "un-silence" has to mean.
+func (s *Server) unSilenceAlert(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	res, err := s.db.ExecContext(r.Context(),
+		`UPDATE alert_instances SET status = 'active', updated_at = ? WHERE id = ? AND status = 'silenced'`,
+		time.Now().UTC().Format(time.RFC3339), id)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeErrorMsg(w, http.StatusNotFound, "silenced alert not found")
+		return
+	}
+	s.audit(r, "alerts.unsilence", "alerts", id)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

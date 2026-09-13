@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -83,10 +84,17 @@ func Load(path string) (Config, error) {
 
 	if path != "" {
 		if data, err := os.ReadFile(path); err == nil {
-			dec := yaml.NewDecoder(bytes.NewReader(data))
-			dec.KnownFields(true) // a typo'd key like "secreet" must fail loudly, not be ignored
-			if err := dec.Decode(&cfg); err != nil {
-				return cfg, fmt.Errorf("parsing config %s: %w", path, err)
+			if strings.TrimSpace(string(data)) == "" {
+				// A zero-byte or whitespace-only file (editors and atomic
+				// save-temp-then-rename writes can leave one behind) is
+				// treated as "no config": fall through to defaults + env
+				// instead of failing on yaml's EOF.
+			} else {
+				dec := yaml.NewDecoder(bytes.NewReader(data))
+				dec.KnownFields(true) // a typo'd key like "secreet" must fail loudly, not be ignored
+				if err := dec.Decode(&cfg); err != nil {
+					return cfg, fmt.Errorf("parsing config %s: %w", path, err)
+				}
 			}
 		} else if !os.IsNotExist(err) {
 			return cfg, fmt.Errorf("reading config %s: %w", path, err)

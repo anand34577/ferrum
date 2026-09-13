@@ -1,13 +1,24 @@
-import { Cpu, HardDrive, Loader2, MemoryStick, Server } from "lucide-react"
+import { Cpu, HardDrive, MemoryStick, Server } from "lucide-react"
 import { Meter } from "@/components/ui/meter"
 import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { useScopedInventory } from "@/lib/fleet"
 import { formatBytes } from "@/lib/utils"
 import { WidgetError } from "@/components/dashboard/WidgetChrome"
+import { Skeleton } from "@/components/ui/skeleton"
 
 export function FleetSummaryWidget({ settings }: { settings: WidgetSettings }) {
   const { resources, isLoading, isError } = useScopedInventory(settings)
-  if (isLoading) return <Loader2 className="h-4 w-4 animate-spin text-[var(--text-muted)]" />
+  // Skeleton mirroring the real 2x2/4-up card grid, not a bare spinner —
+  // every other widget loads this way and the layout shift on data arrival
+  // is smaller.
+  if (isLoading)
+    return (
+      <div className="grid h-full grid-cols-2 gap-3 sm:grid-cols-4" aria-busy>
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Skeleton key={i} className="min-h-16" />
+        ))}
+      </div>
+    )
   if (isError) return <WidgetError />
 
   const nodes = resources.filter((r) => r.type === "node")

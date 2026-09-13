@@ -75,8 +75,6 @@ function Chip({ kind }: { kind: string }) {
   return <span className={cn("shrink-0 rounded-sm px-1 py-px font-mono text-[9px] font-semibold uppercase tracking-wide", styles)}>{kind}</span>
 }
 
-/** The central hub everything hangs from — double-click the title to rename
- * it (persisted locally). */
 function RootNameEditor({
   initial,
   onSave,

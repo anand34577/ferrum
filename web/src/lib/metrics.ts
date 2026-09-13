@@ -185,6 +185,4 @@ export function hasAnySeries(rows: ChartRow[], keys: string[]): boolean {
   return keys.some((k) => rows.some((r) => typeof r[k] === "number"))
 }
 
-/** Shared react-query key fragment for an RRD fetch. */
-
 export { formatRRDTick }

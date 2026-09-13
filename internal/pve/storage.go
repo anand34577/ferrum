@@ -2,11 +2,14 @@ package pve
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // Storage is one storage backend as seen cluster-wide (/cluster/resources
@@ -203,11 +206,12 @@ type CephStatus struct {
 }
 
 // cephUnavailable reports whether err means "this node has no usable
-// Ceph". Besides the explicit cases (501 not-implemented, "binary not
-// installed"), PVE's ceph endpoints answer a bare 500 {"data":null} on
-// nodes without a Ceph cluster — no message to sniff, so any upstream 5xx
-// on these three endpoints is treated as not-configured rather than an
-// error worth surfacing.
+// Ceph". The transport itself flags the explicit cases (501
+// not-implemented, "binary not installed") as NotAvailableError; the one
+// remaining shape PVE emits on nodes without a Ceph cluster is a bare
+// 500 {"data":null} — no message to sniff, so the body is matched here.
+// Every other 5xx is a genuine failure that surfaces as an error instead
+// of being swallowed into "not configured".
 func cephUnavailable(err error) bool {
 	if err == nil {
 		return false
@@ -215,8 +219,21 @@ func cephUnavailable(err error) bool {
 	if IsNotAvailable(err) {
 		return true
 	}
-	code := StatusCodeOf(err)
-	return code == 500 || code == 501
+	var se *StatusError
+	if !errors.As(err, &se) || se.StatusCode != http.StatusInternalServerError {
+		return false
+	}
+	trimmed := strings.TrimSpace(se.Body)
+	if trimmed == "" {
+		return true
+	}
+	var parsed struct {
+		Data    any            `json:"data"`
+		Message string         `json:"message"`
+		Errors  map[string]any `json:"errors"`
+	}
+	return json.Unmarshal([]byte(trimmed), &parsed) == nil &&
+		parsed.Data == nil && parsed.Message == "" && len(parsed.Errors) == 0
 }
 
 // CephStatus fetches overall Ceph cluster health from any cluster member.

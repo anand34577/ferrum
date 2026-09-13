@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Loader2, Upload } from "lucide-react"
+import { Upload } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -136,8 +136,8 @@ export function UploadTemplateDialog({ connId, nodes, content }: UploadTemplateD
             </div>
             <FormError message={uploadMutation.error instanceof ApiError ? uploadMutation.error.message : uploadMutation.error ? "Upload failed" : undefined} />
             <DialogFooter>
-              <Button disabled={!node || !storage || !file || uploadMutation.isPending} onClick={() => uploadMutation.mutate()}>
-                {uploadMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+              <Button disabled={!node || !storage || !file} loading={uploadMutation.isPending} onClick={() => uploadMutation.mutate()}>
+                {!uploadMutation.isPending && <Upload className="h-3.5 w-3.5" />}
                 Upload
               </Button>
             </DialogFooter>
@@ -153,8 +153,8 @@ export function UploadTemplateDialog({ connId, nodes, content }: UploadTemplateD
             </div>
             <FormError message={downloadMutation.error instanceof ApiError ? downloadMutation.error.message : downloadMutation.error ? "Download failed" : undefined} />
             <DialogFooter>
-              <Button disabled={!node || !storage || !url || !filename || downloadMutation.isPending} onClick={() => downloadMutation.mutate()}>
-                {downloadMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+              <Button disabled={!node || !storage || !url || !filename} loading={downloadMutation.isPending} onClick={() => downloadMutation.mutate()}>
+                {!downloadMutation.isPending && <Upload className="h-3.5 w-3.5" />}
                 Fetch
               </Button>
             </DialogFooter>

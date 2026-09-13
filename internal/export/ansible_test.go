@@ -71,3 +71,31 @@ func TestGenerateAnsibleInventoryDuplicateNames(t *testing.T) {
 		t.Errorf("expected second guest disambiguated by vmid, got:\n%s", out)
 	}
 }
+
+func TestGenerateAnsibleInventoryRejectsMaliciousIP(t *testing.T) {
+	guests := []Guest{
+		{
+			Resource: pve.ClusterResource{Type: "qemu", Node: "pve1", VMID: 100, Name: "evil"},
+			IP:       "10.0.0.5\n  ansible_python_interpreter: /tmp/x",
+		},
+		{
+			// A CIDR suffix is agent-reported too (LXC) — strip, don't write it.
+			Resource: pve.ClusterResource{Type: "lxc", Node: "pve1", VMID: 101, Name: "cidr"},
+			IP:       "192.168.1.50/24",
+		},
+	}
+	out := GenerateAnsibleInventory("cluster", guests)
+
+	if strings.Contains(out, "ansible_python_interpreter") {
+		t.Errorf("injected YAML made it into the inventory:\n%s", out)
+	}
+	if !strings.Contains(out, "evil: {}") {
+		t.Errorf("host with an invalid IP should fall back to an empty mapping:\n%s", out)
+	}
+	if strings.Contains(out, "ansible_host: 10.0.0.5") {
+		t.Errorf("malformed IP should never be written as ansible_host:\n%s", out)
+	}
+	if !strings.Contains(out, "ansible_host: 192.168.1.50\n") {
+		t.Errorf("valid CIDR address should be stripped to its bare IP:\n%s", out)
+	}
+}

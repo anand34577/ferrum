@@ -2,11 +2,14 @@ package notify
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +18,7 @@ import (
 
 	"ferrum/internal/config"
 	"ferrum/internal/events"
+	"ferrum/internal/secrets"
 	"ferrum/internal/store"
 )
 
@@ -27,6 +31,15 @@ func openTestDB(t *testing.T) *store.DB {
 	}
 	t.Cleanup(func() { db.Close() })
 	return db
+}
+
+func testBox(t *testing.T) *secrets.Box {
+	t.Helper()
+	box, err := secrets.New("webhook-test-secret")
+	if err != nil {
+		t.Fatalf("secrets.New: %v", err)
+	}
+	return box
 }
 
 func insertSubscription(t *testing.T, db *store.DB, url, secret string, eventTypes []string, active bool) string {
@@ -106,7 +119,7 @@ func TestWebhookDispatcherDeliversMatchingEventAndSignsBody(t *testing.T) {
 	insertSubscription(t, db, server.URL, secret, nil, true)
 
 	bus := events.New()
-	d := NewWebhookDispatcher(db)
+	d := NewWebhookDispatcher(db, testBox(t))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go d.Run(ctx, bus)
@@ -161,7 +174,7 @@ func TestWebhookDispatcherSkipsInactiveAndNonMatchingSubscriptions(t *testing.T)
 	insertSubscription(t, db, server.URL, "s2", []string{"connection.down"}, true) // wrong type
 
 	bus := events.New()
-	d := NewWebhookDispatcher(db)
+	d := NewWebhookDispatcher(db, testBox(t))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go d.Run(ctx, bus)
@@ -175,6 +188,210 @@ func TestWebhookDispatcherSkipsInactiveAndNonMatchingSubscriptions(t *testing.T)
 	}
 }
 
+// --- outbox (durable, at-least-once delivery) ---
+
+// A delivered event (receiver 200) must have its outbox row deleted and a
+// success entry in the delivery log.
+func TestWebhookDeliveryClearsOutboxRowOnSuccess(t *testing.T) {
+	received := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		received <- struct{}{}
+	}))
+	defer server.Close()
+
+	db := openTestDB(t)
+	insertSubscription(t, db, server.URL, "s", nil, true)
+
+	bus := events.New()
+	d := NewWebhookDispatcher(db, testBox(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go d.Run(ctx, bus)
+
+	time.Sleep(50 * time.Millisecond)
+	bus.Publish(events.Event{Type: events.TypeAlertTriggered})
+
+	select {
+	case <-received:
+	case <-time.After(3 * time.Second):
+		t.Fatal("webhook was never delivered")
+	}
+
+	waitFor(t, 2*time.Second, "outbox row to be deleted", func() (bool, string) {
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM webhook_outbox`).Scan(&count); err != nil {
+			return false, err.Error()
+		}
+		return count == 0, fmt.Sprintf("outbox rows = %d, want 0", count)
+	})
+
+	var total, success int
+	if err := db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(success), 0) FROM webhook_deliveries`).Scan(&total, &success); err != nil {
+		t.Fatalf("querying deliveries: %v", err)
+	}
+	if total != 1 || success != 1 {
+		t.Fatalf("deliveries = %d (success=%d), want 1 (success=1)", total, success)
+	}
+}
+
+// A failing receiver leaves the row queued with its attempt counter and
+// next retry time recorded, so the sweep can pick it up after a restart.
+func TestWebhookFailureRetainsOutboxRowWithBackoff(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	db := openTestDB(t)
+	insertSubscription(t, db, server.URL, "s", nil, true)
+
+	bus := events.New()
+	d := NewWebhookDispatcher(db, testBox(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go d.Run(ctx, bus)
+
+	time.Sleep(50 * time.Millisecond)
+	bus.Publish(events.Event{Type: events.TypeAlertTriggered})
+
+	// The first failed attempt marks the row immediately (before the retry
+	// sleep), so this resolves without waiting out the full backoff chain.
+	waitFor(t, 3*time.Second, "outbox row to record the failed attempt", func() (bool, string) {
+		var attempts int
+		var next sql.NullString
+		err := db.QueryRow(`SELECT attempts, next_attempt_at FROM webhook_outbox`).Scan(&attempts, &next)
+		if err != nil {
+			return false, err.Error()
+		}
+		if attempts < 1 {
+			return false, fmt.Sprintf("attempts = %d, want >= 1", attempts)
+		}
+		if !next.Valid || next.String == "" {
+			return false, "next_attempt_at is NULL, want a scheduled retry time"
+		}
+		return true, ""
+	})
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM webhook_outbox`).Scan(&count); err != nil {
+		t.Fatalf("querying outbox: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("outbox rows = %d, want 1 (failed delivery must stay queued)", count)
+	}
+}
+
+// sweep() re-attempts a due row — one a previous run (or an exhausted
+// in-process retry budget) left queued — and deletes it once the recovered
+// receiver accepts the event.
+func TestSweepDispatchesDueRowAndDeletesItAfterReceiverRecovers(t *testing.T) {
+	var down atomic.Bool
+	down.Store(true)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if down.Load() {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	db := openTestDB(t)
+	subID := insertSubscription(t, db, server.URL, "s", nil, true)
+
+	// Seed the queue the way a failed live attempt (or a crash mid-retry)
+	// would have: attempts=1 and a next_attempt_at that has already passed.
+	evt := events.Event{ID: "evt-due", Type: events.TypeAlertTriggered, Timestamp: time.Now().UTC()}
+	body, err := json.Marshal(evt)
+	if err != nil {
+		t.Fatalf("marshaling event: %v", err)
+	}
+	now := time.Now().UTC()
+	past := now.Add(-time.Second).Format(time.RFC3339)
+	if _, err := db.Exec(`
+		INSERT INTO webhook_outbox (event_id, subscription_id, event_type, payload, attempts, next_attempt_at, created_at)
+		VALUES (?, ?, ?, ?, 1, ?, ?)`,
+		evt.ID, subID, string(evt.Type), string(body), past, now.Format(time.RFC3339)); err != nil {
+		t.Fatalf("seeding outbox row: %v", err)
+	}
+
+	d := NewWebhookDispatcher(db, testBox(t))
+	down.Store(false) // receiver recovered
+	d.sweep(context.Background())
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM webhook_outbox`).Scan(&count); err != nil {
+		t.Fatalf("querying outbox: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("outbox rows = %d after sweep, want 0 (due row must be delivered and deleted)", count)
+	}
+	var total, success, maxAttempt int
+	if err := db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(success), 0), COALESCE(MAX(attempt), 0) FROM webhook_deliveries`).Scan(&total, &success, &maxAttempt); err != nil {
+		t.Fatalf("querying deliveries: %v", err)
+	}
+	if total != 1 || success != 1 || maxAttempt != 2 {
+		t.Fatalf("deliveries = %d (success=%d, attempt=%d), want 1 (success=1, attempt=2)", total, success, maxAttempt)
+	}
+}
+
+// Re-publishing the same event must not duplicate or reset the queue row —
+// the composite (event_id, subscription_id) key with ON CONFLICT DO NOTHING
+// keeps the original row and its attempt state.
+func TestOutboxInsertIsIdempotentPerSubscription(t *testing.T) {
+	db := openTestDB(t)
+	subID := insertSubscription(t, db, "http://receiver.invalid/hook", "s", nil, true)
+	d := NewWebhookDispatcher(db, testBox(t))
+	ctx := context.Background()
+
+	evt := events.Event{ID: "evt-dup", Type: events.TypeAlertTriggered, Timestamp: time.Now().UTC()}
+	body, err := json.Marshal(evt)
+	if err != nil {
+		t.Fatalf("marshaling event: %v", err)
+	}
+	if err := d.enqueueOutbox(ctx, subID, evt, body); err != nil {
+		t.Fatalf("first enqueueOutbox: %v", err)
+	}
+	// Simulate a previously-failed attempt, then re-publish the same event:
+	// the row must keep its attempt state, not be reset to a fresh one.
+	if _, err := db.Exec(`UPDATE webhook_outbox SET attempts = 3`); err != nil {
+		t.Fatalf("seeding attempts: %v", err)
+	}
+	if err := d.enqueueOutbox(ctx, subID, evt, body); err != nil {
+		t.Fatalf("duplicate enqueueOutbox: %v", err)
+	}
+
+	var count, attempts int
+	if err := db.QueryRow(`SELECT COUNT(*), MAX(attempts) FROM webhook_outbox`).Scan(&count, &attempts); err != nil {
+		t.Fatalf("querying outbox: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("outbox rows = %d, want 1 (duplicate insert must be a no-op)", count)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts = %d after duplicate insert, want 3 (row state preserved)", attempts)
+	}
+}
+
+// waitFor polls cond until it reports true or the deadline passes, failing
+// with the condition's last explanation. Delivery log/outbox writes race the
+// receiver's HTTP response, so polling beats sleeping.
+func waitFor(t *testing.T, within time.Duration, what string, cond func() (bool, string)) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for {
+		ok, detail := cond()
+		if ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s: %s", what, detail)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestSendTestEventDeliversSynchronouslyAndReportsFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -182,10 +399,73 @@ func TestSendTestEventDeliversSynchronouslyAndReportsFailure(t *testing.T) {
 	defer server.Close()
 
 	db := openTestDB(t)
-	d := NewWebhookDispatcher(db)
+	d := NewWebhookDispatcher(db, testBox(t))
 	id := insertSubscription(t, db, server.URL, "s", nil, true)
 	sub := WebhookSubscription{ID: id, URL: server.URL, Secret: "s"}
 	if err := d.SendTestEvent(context.Background(), sub); err == nil {
 		t.Fatal("expected an error for a 500 response")
+	}
+}
+
+// TestWebhookSecretRoundTripAndLegacyPlaintextFallback covers the at-rest
+// secret migration: a subscription whose stored secret is encrypted must be
+// signed with the decrypted value, and one still holding a plaintext secret
+// from before encryption existed must keep working unchanged.
+func TestWebhookSecretRoundTripAndLegacyPlaintextFallback(t *testing.T) {
+	box := testBox(t)
+	secret := "legacy-plaintext-secret"
+	enc, err := box.Encrypt(secret)
+	if err != nil {
+		t.Fatalf("encrypting secret: %v", err)
+	}
+
+	var (
+		mu       sync.Mutex
+		bodies   []string
+		sigs     []string
+		received = make(chan struct{}, 2)
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(body))
+		sigs = append(sigs, r.Header.Get(SignatureHeader))
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+		received <- struct{}{}
+	}))
+	defer server.Close()
+
+	db := openTestDB(t)
+	insertSubscription(t, db, server.URL, enc, nil, true)    // encrypted at rest
+	insertSubscription(t, db, server.URL, secret, nil, true) // legacy plaintext row
+
+	bus := events.New()
+	d := NewWebhookDispatcher(db, box)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go d.Run(ctx, bus)
+
+	time.Sleep(50 * time.Millisecond)
+	bus.Publish(events.Event{Type: events.TypeAlertTriggered})
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-received:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("delivery %d of 2 never arrived", i+1)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	// One event fanned out to both subscriptions — identical bodies, so both
+	// signatures must match the PLAINTEXT secret (decrypted, or passed through).
+	if len(bodies) != 2 {
+		t.Fatalf("got %d deliveries, want 2", len(bodies))
+	}
+	for i, sig := range sigs {
+		if want := signBody(secret, []byte(bodies[i])); sig != want {
+			t.Fatalf("delivery %d signature = %q, want %q (signed with the plaintext secret)", i, sig, want)
+		}
 	}
 }

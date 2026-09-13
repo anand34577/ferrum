@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
+	"ferrum/internal/secrets"
 	"ferrum/internal/store"
 )
 
@@ -47,6 +48,10 @@ type User struct {
 
 type Service struct {
 	db *store.DB
+	// secrets encrypts TOTP secrets at rest; nil means legacy plaintext
+	// storage (readers fall back to the raw column value either way — see
+	// decryptStoredSecret in totp.go).
+	secrets *secrets.Box
 
 	sessionTTLMu sync.RWMutex
 	sessionTTL   time.Duration
@@ -57,8 +62,8 @@ type Service struct {
 	bootstrapMu sync.Mutex
 }
 
-func NewService(db *store.DB) *Service {
-	return &Service{db: db, sessionTTL: defaultSessionTTL}
+func NewService(db *store.DB, box *secrets.Box) *Service {
+	return &Service{db: db, secrets: box, sessionTTL: defaultSessionTTL}
 }
 
 // SetSessionTTL changes how long newly-created sessions live — applies to
@@ -340,7 +345,6 @@ func (s *Service) Authenticate(ctx context.Context, token string) (*User, error)
 	return &User{ID: id, Username: username, Email: email, IsAdmin: isAdmin == 1, TOTPEnabled: totpEnabled == 1}, nil
 }
 
-// Logout revokes the session associated with the given token.
 // Logout revokes the session and reports the OIDC ID token it was created
 // with, if any — the caller (the /auth/logout handler) uses that as
 // id_token_hint to also end the session at the identity provider.

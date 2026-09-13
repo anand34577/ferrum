@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { AlertTriangle, ChevronRight, ExternalLink, Settings as SettingsIcon } from "lucide-react"
 import { useEffect, useState } from "react"
+import { cn } from "@/lib/utils"
 import { Link } from "react-router-dom"
 import { toast } from "sonner"
 import { AgentSettingsCard } from "@/components/settings/AgentSettingsCard"
@@ -13,10 +14,12 @@ import { NotificationsSettingsCard } from "@/components/settings/NotificationsSe
 import { OIDCSettingsCard } from "@/components/settings/OIDCSettingsCard"
 import { SecuritySettingsCard } from "@/components/settings/SecuritySettingsCard"
 import { SystemSettingsCard } from "@/components/settings/SystemSettingsCard"
+import { useFormDirty } from "@/components/settings/use-form-dirty"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ErrorState } from "@/components/ui/error-state"
+import { FormError } from "@/components/ui/form-error"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { PageHeader } from "@/components/ui/page-header"
@@ -31,6 +34,21 @@ import { dangerousExtraKeys, parseExtraLines } from "@/lib/utils"
 // the typed fields, not the raw "extra" editor, so they don't show up twice.
 const NAMED_OPTION_KEYS = new Set(["keyboard", "console", "http_proxy", "email_from", "mac_prefix", "description"])
 
+const SECTIONS = [
+  { id: "appearance", label: "Appearance" },
+  { id: "defaults", label: "Account defaults" },
+  { id: "security", label: "Security" },
+  { id: "system", label: "System" },
+  { id: "notifications", label: "Notifications" },
+  { id: "digest", label: "Health digest" },
+  { id: "lifecycle", label: "Snapshot retention" },
+  { id: "sso", label: "Single sign-on" },
+  { id: "ai", label: "AI providers" },
+  { id: "api", label: "API & MCP" },
+  { id: "datacenter", label: "Datacenter" },
+  { id: "about", label: "About" },
+]
+
 export function SettingsPage() {
   const { data: inventory, isLoading, isError, refetch } = useQuery({
     queryKey: ["inventory"],
@@ -38,6 +56,7 @@ export function SettingsPage() {
   })
   const connections = inventory ?? []
   const [connId, setConnId] = useState("")
+  const activeSection = useActiveSection(SECTIONS.map((s) => s.id))
 
   useEffect(() => {
     if (!connId && connections.length > 0) setConnId(connections[0].connectionId)
@@ -48,66 +67,123 @@ export function SettingsPage() {
     <div className="space-y-4">
       <PageHeader
         title="Settings"
-        description="Appearance, datacenter-wide options and support status, per connection."
+        description="Appearance, security, notifications, AI providers, and datacenter-wide options — yours and this instance's."
         icon={SettingsIcon}
       />
 
-      <AppearanceCard />
-      <DefaultPreferencesCard />
-      <SecuritySettingsCard />
-      <SystemSettingsCard />
-      <NotificationsSettingsCard />
-      <DigestSettingsCard />
-      <LifecycleSettingsCard />
+      {/* Thirteen sections on one page need a table of contents: a sticky
+          rail beside the cards on wide screens, a scrollable chip row above
+          them everywhere else. Plain fragment links — the browser scrolls
+          <main> to the section; the highlighted entry follows the scroll. */}
+      <div className="xl:grid xl:grid-cols-[11rem_minmax(0,1fr)] xl:gap-6">
+        <nav aria-label="Settings sections" className="mb-4 xl:sticky xl:top-0 xl:mb-0 xl:self-start xl:pt-1">
+          <ul className="no-scrollbar -mx-4 flex gap-1.5 overflow-x-auto px-4 md:-mx-6 md:px-6 xl:mx-0 xl:flex-col xl:gap-0.5 xl:overflow-visible xl:px-0">
+            {SECTIONS.map((sec) => (
+              <li key={sec.id} className="shrink-0">
+                <a
+                  href={`#${sec.id}`}
+                  aria-current={activeSection === sec.id ? "location" : undefined}
+                  className={cn(
+                    "block rounded-md border px-2.5 py-1 text-xs font-medium transition-colors xl:border-transparent xl:bg-transparent xl:hover:bg-[var(--bg-surface-hover)]",
+                    activeSection === sec.id
+                      ? "border-brand-500/50 bg-[color-mix(in_oklab,var(--color-brand-500)_10%,var(--bg-surface))] text-[var(--text)] xl:border-transparent xl:bg-[var(--bg-surface-hover)]"
+                      : "border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-muted)] hover:border-[var(--border-strong)] hover:text-[var(--text)]",
+                  )}
+                >
+                  {sec.label}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </nav>
 
-      <Link
-        to="/alerts"
-        className="flex items-center justify-between gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-3 text-sm shadow-card transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-hover)]"
-      >
-        <span className="flex items-center gap-2">
-          <AlertTriangle className="h-4 w-4 text-[var(--text-muted)]" />
-          <span>
-            <span className="font-medium">Alert thresholds &amp; rules</span>
-            <span className="ml-2 text-[var(--text-muted)]">— create, edit, and delete threshold rules on the Alerts page</span>
-          </span>
-        </span>
-        <ChevronRight className="h-4 w-4 shrink-0 text-[var(--text-muted)]" />
-      </Link>
+        <div className="min-w-0 space-y-4">
+          <section id="appearance" className="scroll-mt-4"><AppearanceCard /></section>
+          <section id="defaults" className="scroll-mt-4"><DefaultPreferencesCard /></section>
+          <section id="security" className="scroll-mt-4"><SecuritySettingsCard /></section>
+          <section id="system" className="scroll-mt-4"><SystemSettingsCard /></section>
+          <section id="notifications" className="scroll-mt-4"><NotificationsSettingsCard /></section>
+          <section id="digest" className="scroll-mt-4"><DigestSettingsCard /></section>
+          <section id="lifecycle" className="scroll-mt-4"><LifecycleSettingsCard /></section>
 
-      <OIDCSettingsCard />
-      <AIProvidersCard />
-      <AgentSettingsCard />
+          <Link
+            to="/alerts"
+            className="flex items-center justify-between gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-3 text-sm shadow-card transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-hover)]"
+          >
+            <span className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-[var(--text-muted)]" />
+              <span>
+                <span className="font-medium">Alert thresholds &amp; rules</span>
+                <span className="ml-2 text-[var(--text-muted)]">— create, edit, and delete threshold rules on the Alerts page</span>
+              </span>
+            </span>
+            <ChevronRight className="h-4 w-4 shrink-0 text-[var(--text-muted)]" />
+          </Link>
 
-      {isError ? (
-        <ErrorState title="Couldn't load connections" onRetry={refetch} />
-      ) : isLoading ? (
-        <Skeleton className="h-28 max-w-xs" />
-      ) : (
-        <div className="max-w-xs space-y-1.5">
-          <Label>Connection</Label>
-          <Select value={connId} onValueChange={setConnId}>
-            <SelectTrigger>
-              <SelectValue placeholder="Select a connection..." />
-            </SelectTrigger>
-            <SelectContent>
-              {connections.map((c) => (
-                <SelectItem key={c.connectionId} value={c.connectionId}>{c.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <section id="sso" className="scroll-mt-4"><OIDCSettingsCard /></section>
+          <section id="ai" className="scroll-mt-4"><AIProvidersCard /></section>
+          <section id="api" className="scroll-mt-4"><AgentSettingsCard /></section>
+
+          <section id="datacenter" className="scroll-mt-4 space-y-4">
+            {isError ? (
+              <ErrorState title="Couldn't load connections" onRetry={refetch} />
+            ) : isLoading ? (
+              <Skeleton className="h-28 max-w-xs" />
+            ) : (
+              <div className="max-w-xs space-y-1.5">
+                <Label>Connection</Label>
+                <Select value={connId} onValueChange={setConnId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a connection..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {connections.map((c) => (
+                      <SelectItem key={c.connectionId} value={c.connectionId}>{c.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {connId && (
+              <>
+                <DatacenterOptionsSection connId={connId} />
+                <SubscriptionCard connId={connId} nodes={(connections.find((c) => c.connectionId === connId)?.resources ?? []).filter((r) => r.type === "node")} />
+              </>
+            )}
+          </section>
+
+          <section id="about" className="scroll-mt-4"><AboutCard /></section>
         </div>
-      )}
-
-      {connId && (
-        <>
-          <DatacenterOptionsSection connId={connId} />
-          <SubscriptionCard connId={connId} nodes={(connections.find((c) => c.connectionId === connId)?.resources ?? []).filter((r) => r.type === "node")} />
-        </>
-      )}
-
-      <AboutCard />
+      </div>
     </div>
   )
+}
+
+/** Which section currently sits at the top of the scrolled <main>, for the
+ * nav's highlighted entry: the last section whose top has crossed a line a
+ * third of the way down the scroll container, so the entry flips when a
+ * heading arrives — not when its (often very tall) card is mostly visible. */
+function useActiveSection(ids: string[]): string {
+  const [active, setActive] = useState(ids[0])
+  useEffect(() => {
+    const root = document.getElementById("main-content")
+    if (!root) return
+    const update = () => {
+      const line = root.getBoundingClientRect().top + root.clientHeight * 0.3
+      let current = ids[0]
+      for (const id of ids) {
+        const el = document.getElementById(id)
+        if (el && el.getBoundingClientRect().top <= line) current = id
+      }
+      setActive(current)
+    }
+    update()
+    root.addEventListener("scroll", update, { passive: true })
+    return () => root.removeEventListener("scroll", update)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ids.join(",")])
+  return active
 }
 
 function AboutCard() {
@@ -143,6 +219,11 @@ function DatacenterOptionsForm({
   const confirm = useConfirm()
   const [form, setForm] = useState<DatacenterOptions>(initial)
   const [extraText, setExtraText] = useState("")
+  // Remounted via key={connId + JSON.stringify(optionsQuery.data)} once the
+  // refetch after a save lands, so dirty resets for free. The advanced
+  // extra-options editor is part of the same save, so it counts toward
+  // dirty; `initial` is the form's own starting state (extraText blank).
+  const dirty = useFormDirty(form, initial) || extraText !== ""
 
   const save = useMutation({
     mutationFn: () => api.put(`/connections/${connId}/cluster/options`, { ...form, raw: undefined, extra: parseExtraLines(extraText) }),
@@ -151,7 +232,7 @@ function DatacenterOptionsForm({
       setExtraText("")
       queryClient.invalidateQueries({ queryKey: ["datacenter-options", connId] })
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to save datacenter options"),
+    // Failure surfaces inline via <FormError>, not a toast.
   })
 
   async function submitSave() {
@@ -233,7 +314,10 @@ function DatacenterOptionsForm({
           Sets any datacenter option PVE supports beyond the fields above. Send a key with an empty value (e.g. "bwlimit=") to clear it.
         </p>
       </div>
-      <Button size="sm" loading={save.isPending} onClick={() => void submitSave()}>
+      <FormError
+        message={save.error instanceof ApiError ? save.error.message : save.error ? "Couldn't save datacenter options — try again." : null}
+      />
+      <Button size="sm" loading={save.isPending} disabled={!dirty} onClick={() => void submitSave()}>
         Save options
       </Button>
     </>

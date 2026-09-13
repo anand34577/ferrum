@@ -25,6 +25,7 @@ const HAPage = lazy(() => import("@/pages/HAPage").then((m) => ({ default: m.HAP
 const InventoryPage = lazy(() => import("@/pages/InventoryPage").then((m) => ({ default: m.InventoryPage })))
 const NodeDetailPage = lazy(() => import("@/pages/NodeDetailPage").then((m) => ({ default: m.NodeDetailPage })))
 const PoolsPage = lazy(() => import("@/pages/PoolsPage").then((m) => ({ default: m.PoolsPage })))
+const PBSPage = lazy(() => import("@/pages/PBSPage").then((m) => ({ default: m.PBSPage })))
 const SettingsPage = lazy(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage })))
 const StoragePage = lazy(() => import("@/pages/StoragePage").then((m) => ({ default: m.StoragePage })))
 const TasksPage = lazy(() => import("@/pages/TasksPage").then((m) => ({ default: m.TasksPage })))
@@ -141,6 +142,7 @@ export default function App() {
             <Route path="/nodes/:connId/:node" element={route(<NodeDetailPage />)} />
             <Route path="/topology" element={route(<TopologyPage />)} />
             <Route path="/storage" element={route(<StoragePage />)} />
+            <Route path="/pbs" element={route(<PBSPage />)} />
             <Route path="/pools" element={route(<PoolsPage />)} />
             <Route path="/backups" element={route(<BackupsPage />)} />
             <Route path="/ha" element={route(<HAPage />)} />

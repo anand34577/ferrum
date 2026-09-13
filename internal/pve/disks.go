@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Disk is one physical drive as reported by PVE's disk manager
@@ -80,12 +81,61 @@ func (c *Client) DiskSMART(ctx context.Context, node, devpath string) (*SmartDat
 // a new pool/volume group; callers must gate these behind an admin check
 // and a scary confirmation, same as any other irreversible operation.
 
+// wipeTaskPollInterval/wipeTaskMaxWait bound how long WipeDisk waits for a
+// worker-style wipedisk UPID to finish before giving up.
+const (
+	wipeTaskPollInterval = 500 * time.Millisecond
+	wipeTaskMaxWait      = 2 * time.Minute
+)
+
 // WipeDisk destroys the partition table (and any filesystem signatures) on
 // devpath, returning it to "unused" so it can be handed to InitGPT or one of
-// the CreateXStorage calls below. Synchronous, no UPID.
+// the CreateXStorage calls below. On PVE versions where wipedisk runs as a
+// background worker the response is a UPID rather than null — in that case
+// the call waits for the task to finish, so the disk is genuinely "unused"
+// on return either way (matching the inline behavior of the versions that
+// answer synchronously).
 func (c *Client) WipeDisk(ctx context.Context, node, devpath string) error {
 	form := url.Values{"disk": {devpath}}
-	return c.post(ctx, fmt.Sprintf("/nodes/%s/disks/wipedisk", PathEscape(node)), form, nil)
+	var out struct {
+		Data any `json:"data"` // null (answered inline) or a UPID string
+	}
+	if err := c.post(ctx, fmt.Sprintf("/nodes/%s/disks/wipedisk", PathEscape(node)), form, &out); err != nil {
+		return err
+	}
+	upid, ok := out.Data.(string)
+	if !ok || !strings.HasPrefix(upid, "UPID:") {
+		return nil
+	}
+	return c.waitTask(ctx, node, upid)
+}
+
+// waitTask polls /nodes/{node}/tasks/{upid}/status until the task stops
+// running, translating a failed exit status into an error.
+func (c *Client) waitTask(ctx context.Context, node, upid string) error {
+	deadline := time.Now().Add(wipeTaskMaxWait)
+	for {
+		task, err := c.TaskStatus(ctx, node, upid)
+		if err != nil {
+			return err
+		}
+		switch task.Status {
+		case "OK":
+			return nil
+		case "running", "":
+			// still working ("" = state not recorded yet)
+		default:
+			return fmt.Errorf("wipedisk task failed: %s", task.Status)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("wipedisk task did not finish within %s", wipeTaskMaxWait)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wipeTaskPollInterval):
+		}
+	}
 }
 
 // InitGPT writes a fresh GPT partition table to devpath. uuid is optional

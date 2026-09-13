@@ -156,10 +156,15 @@ func (s *Server) createWebhook(w http.ResponseWriter, r *http.Request) {
 
 	id := uuid.NewString()
 	now := time.Now().UTC().Format(time.RFC3339)
+	secretEnc, err := s.secrets.Encrypt(secret)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	if _, err := s.db.ExecContext(r.Context(), `
 		INSERT INTO webhook_subscriptions (id, name, url, secret, event_types, active, created_by, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, req.Name, req.URL, secret, string(eventTypesJSON), boolToInt(active), createdBy, now, now,
+		id, req.Name, req.URL, secretEnc, string(eventTypesJSON), boolToInt(active), createdBy, now, now,
 	); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -250,6 +255,12 @@ func (s *Server) testWebhook(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
+	}
+	// The stored secret is encrypted at rest; SendTestEvent signs with the
+	// plaintext. A value that fails to decrypt is used as-is — a row written
+	// before encryption existed holds the plaintext.
+	if plain, err := s.secrets.Decrypt(sub.Secret); err == nil {
+		sub.Secret = plain
 	}
 
 	s.audit(r, "webhook.test", "settings", sub.Name)

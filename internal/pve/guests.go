@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"sort"
 	"strconv"
@@ -187,7 +188,8 @@ func (c *Client) GuestConfig(ctx context.Context, guestType, node string, vmid i
 }
 
 // UpdateGuestConfig applies a partial config change (cores/memory/name/tags/
-// notes/boot order etc). Only non-empty fields in `set` are sent.
+// notes/boot order etc). `set` is sent as-is — include only the fields you
+// want changed.
 func (c *Client) UpdateGuestConfig(ctx context.Context, guestType, node string, vmid int, set url.Values) (string, error) {
 	path := fmt.Sprintf("/nodes/%s/%s/%d/config", PathEscape(node), PathEscape(guestType), vmid)
 	var out struct {
@@ -366,9 +368,9 @@ type MigratePreconditionResult struct {
 	// LocalDisks lists this guest's disks that live on non-shared storage —
 	// migration needs WithLocalDisks (and often TargetStorage) set when
 	// this is non-empty.
-	LocalDisks map[string]any `json:"local_disks,omitempty"`
-	LocalResources []string `json:"local_resources,omitempty"` // e.g. passed-through USB/PCI devices — these block migration entirely
-	AllowLiveMigration bool `json:"allow_live_migration,omitempty"`
+	LocalDisks         map[string]any `json:"local_disks,omitempty"`
+	LocalResources     []string       `json:"local_resources,omitempty"` // e.g. passed-through USB/PCI devices — these block migration entirely
+	AllowLiveMigration bool           `json:"allow_live_migration,omitempty"`
 }
 
 // MigratePrecondition is the GET /nodes/{node}/{qemu|lxc}/{vmid}/migrate
@@ -469,10 +471,10 @@ func (c *Client) UpdateGuestConfigRaw(ctx context.Context, guestType, node strin
 }
 
 // ResizeDisk grows a guest's disk. size is a PVE size delta/absolute string,
-// e.g. "+10G" to grow by 10GB or "32G" to set an absolute size.
-// ResizeDisk grows a guest disk in place. Returns a UPID when the target
-// storage backend performs the grow asynchronously (some network storage
-// types); most local backends resize synchronously and return "".
+// e.g. "+10G" to grow by 10GB or "32G" to set an absolute size. Returns a
+// UPID when the target storage backend performs the grow asynchronously
+// (some network storage types); most local backends resize synchronously
+// and return "".
 func (c *Client) ResizeDisk(ctx context.Context, guestType, node string, vmid int, disk, size string) (string, error) {
 	form := url.Values{"disk": {disk}, "size": {size}}
 	var out struct {
@@ -597,6 +599,14 @@ func (c *Client) CreateVM(ctx context.Context, opts CreateVMOptions) (string, er
 		form.Set("ide2", opts.ISO+",media=cdrom")
 	}
 	if opts.CIUser != "" {
+		// The cloudinit drive needs a volume to live on: with no Storage
+		// there is nothing to derive one from, and sending the bare
+		// "ide3=:cloudinit" PVE would 400 on. The create flow's only
+		// storage source is opts.Storage (the same one scsi0 uses), so
+		// reject the combination instead of shipping a malformed form.
+		if opts.Storage == "" {
+			return "", fmt.Errorf("cloud-init requires a storage: set Storage so the ide3 cloud-init drive can be created on it")
+		}
 		form.Set("ciuser", opts.CIUser)
 		form.Set("ide3", opts.Storage+":cloudinit")
 	}
@@ -848,9 +858,15 @@ func (c *Client) GuestTermProxy(ctx context.Context, guestType, node string, vmi
 	return &out.Data, nil
 }
 
-// VNCWebSocketPath builds the path (relative to the host, port 8006) for the
-// authenticated VNC websocket upgrade used once a VNCProxy ticket is minted.
-func VNCWebSocketPath(guestType, node string, vmid int, port, ticket string) string {
-	v := url.Values{"port": {port}, "vncticket": {ticket}}
-	return fmt.Sprintf("/api2/json/nodes/%s/%s/%d/vncwebsocket?%s", PathEscape(node), PathEscape(guestType), vmid, v.Encode())
+// SanitizeAgentIP validates an address reported by the guest agent before it
+// is embedded anywhere in generated output (Ansible inventories, ...): an
+// optional CIDR "/prefix" suffix is stripped and the remainder must parse as
+// an IP literal, otherwise "" is returned. Agent output originates inside
+// the guest, so it is untrusted data, not just display text.
+func SanitizeAgentIP(addr string) string {
+	ip, _, _ := strings.Cut(addr, "/")
+	if net.ParseIP(ip) == nil {
+		return ""
+	}
+	return ip
 }

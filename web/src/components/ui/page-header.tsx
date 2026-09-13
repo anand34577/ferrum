@@ -1,6 +1,9 @@
 import type { LucideIcon } from "lucide-react"
+import { RefreshCw } from "lucide-react"
 import type { ReactNode } from "react"
 import { Link } from "react-router-dom"
+import { Button } from "@/components/ui/button"
+import { Hint } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 
 interface PageHeaderProps {
@@ -12,13 +15,20 @@ interface PageHeaderProps {
   icon?: LucideIcon
   /** Optional breadcrumb-style back link rendered above the title. */
   back?: { to: string; label: string }
+  /** Shows a manual refresh button before the actions cluster. The handler
+   * should re-fetch the page's queries; `refreshing` spins the icon while
+   * the refetch is in flight. Polling cadences differ per page and several
+   * pages don't poll at all, so every page offers this one honest "get the
+   * latest data now" control. */
+  onRefresh?: () => void
+  refreshing?: boolean
   className?: string
 }
 
 /** The one page header for the whole app: title, subtitle, actions. Every
  * authenticated page starts with this so hierarchy, spacing and responsive
  * wrapping are decided once, not sixteen times. */
-export function PageHeader({ title, description, actions, icon: Icon, back, className }: PageHeaderProps) {
+export function PageHeader({ title, description, actions, icon: Icon, back, onRefresh, refreshing, className }: PageHeaderProps) {
   return (
     <header className={cn("flex flex-wrap items-end justify-between gap-3 pb-2", className)}>
       <div className="min-w-0">
@@ -40,7 +50,23 @@ export function PageHeader({ title, description, actions, icon: Icon, back, clas
         </h1>
         {description && <p className="mt-2 max-w-2xl text-xs leading-relaxed text-[var(--text-muted)]">{description}</p>}
       </div>
-      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+      <div className="flex flex-wrap items-center gap-2">
+        {onRefresh && (
+          <Hint label="Refresh now">
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={onRefresh}
+              disabled={refreshing}
+              aria-busy={refreshing || undefined}
+              aria-label="Refresh now"
+            >
+              <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
+            </Button>
+          </Hint>
+        )}
+        {actions}
+      </div>
     </header>
   )
 }

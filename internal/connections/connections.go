@@ -6,6 +6,7 @@ package connections
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -26,6 +27,7 @@ const loginTimeout = 30 * time.Second
 type Info struct {
 	ID   string
 	Name string
+	Type string // "pve" | "pbs" — which API surface this connection speaks
 }
 
 // ticketTTL bounds how long a cached password-auth client is reused before
@@ -41,6 +43,11 @@ type Resolver struct {
 	mu        sync.Mutex
 	cached    map[string]*cachedClient
 	cachedPBS map[string]*cachedPBSClient
+	// generations counts invalidations per connection id (bumped by
+	// invalidate) so a login that read its credentials before an edit/delete
+	// can't store a client built from the OLD credentials over the
+	// invalidation — see login.
+	generations map[string]uint64
 
 	// logins coalesces concurrent cache-miss callers for the same connection
 	// id into one login attempt — see ClientFor.
@@ -73,11 +80,16 @@ type cachedPBSClient struct {
 func (e *cachedPBSClient) live() bool { return e.expires.IsZero() || time.Now().Before(e.expires) }
 
 func New(db *store.DB, secretBox *secrets.Box) *Resolver {
-	return &Resolver{db: db, secrets: secretBox, cached: map[string]*cachedClient{}, cachedPBS: map[string]*cachedPBSClient{}}
+	return &Resolver{
+		db: db, secrets: secretBox,
+		cached:      map[string]*cachedClient{},
+		cachedPBS:   map[string]*cachedPBSClient{},
+		generations: map[string]uint64{},
+	}
 }
 
 func (r *Resolver) List(ctx context.Context) ([]Info, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id, name FROM connections ORDER BY name`)
+	rows, err := r.db.QueryContext(ctx, `SELECT id, name, type FROM connections ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +98,7 @@ func (r *Resolver) List(ctx context.Context) ([]Info, error) {
 	var out []Info
 	for rows.Next() {
 		var c Info
-		if err := rows.Scan(&c.ID, &c.Name); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Type); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -100,32 +112,36 @@ func (r *Resolver) List(ctx context.Context) ([]Info, error) {
 type connectionCreds struct {
 	host           string
 	port           int
+	connType       string // "pve" | "pbs" — a row is routed to exactly one client type
 	authType       string
 	tokenID        string
 	tokenSecretEnc string
 	username       string
 	passwordEnc    string
 	verifyTLS      bool
+	tlsFingerprint string // "" = unset (no pinning)
 }
 
 func (r *Resolver) credsFor(ctx context.Context, id string) (*connectionCreds, error) {
 	var (
-		c          connectionCreds
-		verify     int
-		tokenID    string
-		tokenEnc   string
-		username   string
-		passwordEn string
+		c           connectionCreds
+		verify      int
+		tokenID     string
+		tokenEnc    string
+		username    string
+		passwordEn  string
+		fingerprint string
 	)
 	err := r.db.QueryRowContext(ctx, `
-		SELECT host, port, auth_type, COALESCE(token_id,''), COALESCE(token_secret_enc,''), COALESCE(username,''), COALESCE(password_enc,''), verify_tls
+		SELECT host, port, type, auth_type, COALESCE(token_id,''), COALESCE(token_secret_enc,''), COALESCE(username,''), COALESCE(password_enc,''), verify_tls, COALESCE(tls_fingerprint,'')
 		FROM connections WHERE id = ?`, id,
-	).Scan(&c.host, &c.port, &c.authType, &tokenID, &tokenEnc, &username, &passwordEn, &verify)
+	).Scan(&c.host, &c.port, &c.connType, &c.authType, &tokenID, &tokenEnc, &username, &passwordEn, &verify, &fingerprint)
 	if err != nil {
 		return nil, err
 	}
 	c.tokenID, c.tokenSecretEnc, c.username, c.passwordEnc = tokenID, tokenEnc, username, passwordEn
 	c.verifyTLS = verify == 1
+	c.tlsFingerprint = fingerprint
 	return &c, nil
 }
 
@@ -165,6 +181,13 @@ func (r *Resolver) ClientFor(ctx context.Context, id string) (*pve.Client, error
 	return v.(*pve.Client), nil
 }
 
+// generation returns the connection's current invalidation generation.
+func (r *Resolver) generation(id string) uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.generations[id]
+}
+
 // login does the actual credential lookup + authentication for id. Callers
 // go through ClientFor's singleflight, not this directly.
 func (r *Resolver) login(ctx context.Context, id string) (*pve.Client, error) {
@@ -181,7 +204,23 @@ func (r *Resolver) login(ctx context.Context, id string) (*pve.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	client := pve.New(creds.host, creds.port, pve.WithInsecureSkipVerify(!creds.verifyTLS))
+	// Enforce the row's type so a pbs-typed connection id can't be driven
+	// through the PVE client path (the PBS mirror of this check is in
+	// pbsLogin) — the API layer guards its routes, but the poller, digest,
+	// and health scorers call the resolver directly with whatever is stored.
+	if creds.connType != "pve" {
+		return nil, fmt.Errorf("connection %s is not a PVE connection", id)
+	}
+	// Captured after the credential read: any invalidation from here until
+	// the store below means the credentials may already be stale, and the
+	// freshly-built client must not be cached over that invalidation.
+	gen := r.generation(id)
+	client := pve.New(creds.host, creds.port,
+		pve.WithInsecureSkipVerify(!creds.verifyTLS),
+		// A configured pin replaces CA validation entirely (see
+		// pve.applyTransport); empty is a no-op.
+		pve.WithFingerprint(creds.tlsFingerprint),
+	)
 
 	var expires time.Time
 	switch creds.authType {
@@ -210,7 +249,9 @@ func (r *Resolver) login(ctx context.Context, id string) (*pve.Client, error) {
 	}
 
 	r.mu.Lock()
-	r.cached[id] = &cachedClient{client: client, expires: expires}
+	if r.generations[id] == gen { // skip storing if invalidated mid-login
+		r.cached[id] = &cachedClient{client: client, expires: expires}
+	}
 	r.mu.Unlock()
 	return client, nil
 }
@@ -248,7 +289,15 @@ func (r *Resolver) pbsLogin(ctx context.Context, id string) (*pbs.Client, error)
 	if err != nil {
 		return nil, err
 	}
-	client := pbs.New(creds.host, creds.port, pbs.WithInsecureSkipVerify(!creds.verifyTLS))
+	// Mirror of login's type check: only pbs-typed rows may build a PBS
+	// client, so a pve-typed id can't be pointed at a PBS endpoint.
+	if creds.connType != "pbs" {
+		return nil, fmt.Errorf("connection %s is not a PBS connection", id)
+	}
+	gen := r.generation(id)
+	// Both paths pin identically: an empty fingerprint is a no-op, a set one
+	// replaces skip-verify with a SHA-256 pin of the server certificate.
+	client := pbs.New(creds.host, creds.port, pbs.WithInsecureSkipVerify(!creds.verifyTLS), pbs.WithFingerprint(creds.tlsFingerprint))
 
 	var expires time.Time
 	switch creds.authType {
@@ -273,7 +322,9 @@ func (r *Resolver) pbsLogin(ctx context.Context, id string) (*pbs.Client, error)
 	}
 
 	r.mu.Lock()
-	r.cachedPBS[id] = &cachedPBSClient{client: client, expires: expires}
+	if r.generations[id] == gen { // skip storing if invalidated mid-login
+		r.cachedPBS[id] = &cachedPBSClient{client: client, expires: expires}
+	}
 	r.mu.Unlock()
 	return client, nil
 }
@@ -306,6 +357,22 @@ func (r *Resolver) OnUpstreamUnauthorized(id string) {
 	r.invalidate(id)
 }
 
+// RetryOnUnauthorized runs op, and when it fails because the upstream
+// rejected the cached session (pve.ErrUnauthorized / pbs.ErrUnauthorized —
+// the 401 case OnUpstreamUnauthorized exists for), drops the cached client
+// and runs op exactly once more so it re-resolves a freshly logged-in one.
+// Any other error is returned as-is with no retry: only an auth rejection
+// is ever worth a second attempt, and op must re-resolve its client
+// through the resolver so the retry actually picks up the fresh login.
+func (r *Resolver) RetryOnUnauthorized(connID string, op func() error) error {
+	err := op()
+	if !errors.Is(err, pve.ErrUnauthorized) && !errors.Is(err, pbs.ErrUnauthorized) {
+		return err
+	}
+	r.OnUpstreamUnauthorized(connID)
+	return op()
+}
+
 // Invalidate drops the cached ticket for one connection — used when its
 // stored credentials are edited or the connection is deleted, so a
 // previously-authenticated client is never reused after that point.
@@ -318,6 +385,7 @@ func (r *Resolver) invalidate(id string) {
 	defer r.mu.Unlock()
 	delete(r.cached, id)
 	delete(r.cachedPBS, id)
+	r.generations[id]++
 }
 
 type unknownAuthTypeError struct{ authType string }
@@ -336,8 +404,7 @@ func (r *Resolver) Host(ctx context.Context, id string) (host string, port int, 
 	return
 }
 
-// InvalidateAll drops every cached ticket — used when a connection row is
-// updated or deleted so stale credentials are never reused.
+// InvalidateAll drops every cached PVE ticket and PBS client in one go.
 func (r *Resolver) InvalidateAll() {
 	r.mu.Lock()
 	defer r.mu.Unlock()

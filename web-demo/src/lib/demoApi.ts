@@ -183,7 +183,7 @@ on("PUT", "/auth/me/preferences", ({ body }) => {
   return preferences
 })
 
-const apiKeys = [{ id: "key-1", name: "grafana-export", keyPrefix: "frm_7f2a", scope: "api" as const, createdAt: new Date(Date.now() - 40 * 86400000).toISOString(), lastUsedAt: new Date(Date.now() - 3600000).toISOString() }]
+const apiKeys: { id: string; name: string; keyPrefix: string; scope: "api" | "mcp"; createdAt: string; lastUsedAt?: string }[] = [{ id: "key-1", name: "grafana-export", keyPrefix: "frm_7f2a", scope: "api", createdAt: new Date(Date.now() - 40 * 86400000).toISOString(), lastUsedAt: new Date(Date.now() - 3600000).toISOString() }]
 on("GET", "/auth/apikeys/", () => apiKeys)
 on("POST", "/auth/apikeys/", ({ body }) => {
   const b = body as { name: string; scope: "api" | "mcp" }

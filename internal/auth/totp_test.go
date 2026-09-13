@@ -2,10 +2,15 @@ package auth
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/pquerna/otp/totp"
+
+	"ferrum/internal/config"
+	"ferrum/internal/secrets"
+	"ferrum/internal/store"
 )
 
 func bootstrapTestUser(t *testing.T, svc *Service) (userID string) {
@@ -15,6 +20,19 @@ func bootstrapTestUser(t *testing.T, svc *Service) (userID string) {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 	return user.ID
+}
+
+// newTestServiceWithBox is newTestService with a real secrets box, plus the
+// opened DB so tests can inspect what was actually persisted.
+func newTestServiceWithBox(t *testing.T, box *secrets.Box) (*Service, *store.DB) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "ferrum.db")
+	db, err := store.Open(config.DBConfig{Driver: "sqlite", Path: dbPath})
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return NewService(db, box), db
 }
 
 func TestTOTPEnrollConfirmAndVerify(t *testing.T) {
@@ -127,5 +145,59 @@ func TestVerifyTOTPStepRejectsGarbage(t *testing.T) {
 
 	if err := svc.VerifyTOTPStep(ctx, userID, "not-a-code"); err != ErrInvalidTOTPCode {
 		t.Fatalf("VerifyTOTPStep(garbage): got %v, want ErrInvalidTOTPCode", err)
+	}
+}
+
+// TestTOTPSecretRoundTripAndLegacyPlaintextFallback covers both directions of
+// the at-rest migration: a secret enrolled with a secrets box must not sit in
+// the column in plaintext (yet still verify on read), and a row written by an
+// older plaintext build must keep working once a box exists.
+func TestTOTPSecretRoundTripAndLegacyPlaintextFallback(t *testing.T) {
+	box, err := secrets.New("totp-roundtrip-test-secret")
+	if err != nil {
+		t.Fatalf("secrets.New: %v", err)
+	}
+	svc, db := newTestServiceWithBox(t, box)
+	ctx := context.Background()
+	userID := bootstrapTestUser(t, svc)
+
+	enrollment, err := svc.EnrollTOTP(ctx, userID, "admin")
+	if err != nil {
+		t.Fatalf("EnrollTOTP: %v", err)
+	}
+	code, err := totp.GenerateCode(enrollment.Secret, time.Now())
+	if err != nil {
+		t.Fatalf("generating code: %v", err)
+	}
+	if _, err := svc.ConfirmTOTP(ctx, userID, code); err != nil {
+		t.Fatalf("ConfirmTOTP: %v", err)
+	}
+
+	var stored string
+	if err := db.QueryRow(`SELECT totp_secret FROM users WHERE id = ?`, userID).Scan(&stored); err != nil {
+		t.Fatalf("reading stored secret: %v", err)
+	}
+	if stored == enrollment.Secret {
+		t.Fatal("TOTP secret must not be stored in plaintext when a secrets box is configured")
+	}
+	loginCode, err := totp.GenerateCode(enrollment.Secret, time.Now())
+	if err != nil {
+		t.Fatalf("generating login code: %v", err)
+	}
+	if err := svc.VerifyTOTPStep(ctx, userID, loginCode); err != nil {
+		t.Fatalf("VerifyTOTPStep with an encrypted-at-rest secret: %v", err)
+	}
+
+	// A row written before encryption stored the plaintext secret.
+	legacySecret := "JBSWY3DPEHPK3PXP"
+	if _, err := db.Exec(`UPDATE users SET totp_secret = ? WHERE id = ?`, legacySecret, userID); err != nil {
+		t.Fatalf("seeding legacy plaintext secret: %v", err)
+	}
+	legacyCode, err := totp.GenerateCode(legacySecret, time.Now())
+	if err != nil {
+		t.Fatalf("generating legacy code: %v", err)
+	}
+	if err := svc.VerifyTOTPStep(ctx, userID, legacyCode); err != nil {
+		t.Fatalf("VerifyTOTPStep with a legacy plaintext secret: %v", err)
 	}
 }

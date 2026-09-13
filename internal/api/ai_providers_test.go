@@ -42,7 +42,7 @@ func TestSeedBuiltinNeedleProviderIsDefaultOnlyUntilAdminChoosesOtherwise(t *tes
 		VALUES ('other-model', 'other-provider', 'Other model', 'other', 0, 'now')`); err != nil {
 		t.Fatalf("inserting competing model: %v", err)
 	}
-	if err := env.server.clearOtherDefaultModels(ctx, "other-model"); err != nil {
+	if err := env.server.clearOtherDefaultModels(ctx, env.db, "other-model"); err != nil {
 		t.Fatalf("clearing other default models: %v", err)
 	}
 	if _, err := env.db.ExecContext(ctx, `UPDATE ai_provider_models SET is_default = 1 WHERE id = 'other-model'`); err != nil {

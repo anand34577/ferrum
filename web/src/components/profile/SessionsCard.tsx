@@ -102,15 +102,21 @@ export function SessionsCard() {
                     Signed in {formatRelativeTime(session.createdAt)} · Last active {session.lastSeenAt ? formatRelativeTime(session.lastSeenAt) : "unknown"}
                   </p>
                 </div>
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  disabled={session.current || revoke.isPending}
-                  onClick={() => handleRevoke(session)}
-                  aria-label={session.current ? "Current device" : "Revoke session"}
-                >
-                  <Trash2 className="h-3.5 w-3.5 text-[var(--status-error)]" />
-                </Button>
+                {/* No revoke control on the current session — the badge says
+                    why there's nothing to click, instead of a disabled trash
+                    icon that reads as breakage. */}
+                {!session.current && (
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    disabled={revoke.isPending}
+                    className="hover:bg-[color-mix(in_oklab,var(--status-error)_12%,transparent)] hover:text-[var(--status-error)]"
+                    onClick={() => handleRevoke(session)}
+                    aria-label="Revoke session"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                )}
               </div>
             ))}
           </div>

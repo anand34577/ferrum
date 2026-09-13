@@ -158,9 +158,15 @@ export function DataTable<T>({
                         hideBelowMd && "hidden md:table-cell",
                       )}
                     >
-                      {header.isPlaceholder ? null : sortable ? (
+                      {header.isPlaceholder ? null : header.column.columnDef.header === "" ? (
+                        <span className="sr-only">Actions</span>
+                      ) : sortable ? (
                         <button
-                          className="flex items-center gap-1.5 transition-colors hover:text-[var(--text)]"
+                          // `uppercase` repeated here: the browser/preflight reset
+                          // sets text-transform: none on <button>, so the header
+                          // cell's own uppercase never reached sortable labels and
+                          // "Name" sat next to "SCOPE" in the same row.
+                          className="flex items-center gap-1.5 uppercase transition-colors hover:text-[var(--text)]"
                           onClick={header.column.getToggleSortingHandler()}
                           aria-label={`${String(header.column.columnDef.header)}: activate to sort${
                             sorted === "asc" ? ", currently ascending" : sorted === "desc" ? ", currently descending" : ""

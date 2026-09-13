@@ -30,6 +30,11 @@ type Scheduler struct {
 	db    *store.DB
 	conns *connections.Resolver
 
+	// sendMu serializes send(): a scheduled send and SendNow can both fire
+	// close together, and overlapping sends would deliver the digest twice
+	// before either stamped last_sent_at.
+	sendMu sync.Mutex
+
 	notifierMu sync.RWMutex
 	notifier   *notify.Notifier // nil until SetNotifier is called — every send is nil-checked
 }
@@ -101,6 +106,9 @@ func (s *Scheduler) SendNow(ctx context.Context) error {
 }
 
 func (s *Scheduler) send(ctx context.Context, settings Settings) error {
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
+
 	notifier := s.getNotifier()
 	if notifier == nil {
 		return errors.New("notifications are not configured")

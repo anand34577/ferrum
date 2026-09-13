@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"ferrum/internal/connections"
+	"ferrum/internal/pbs"
 	"ferrum/internal/pve"
 	"ferrum/internal/store"
 )
@@ -36,19 +37,27 @@ const backupLookback = 7 * 24 * time.Hour
 
 // maxTasksScanned bounds how many recent cluster tasks are inspected per
 // connection when tallying backups — /cluster/tasks has no server-side time
-// filter, so this is applied client-side after the fetch.
-const maxTasksScanned = 500
+// filter (and takes no query parameters at all: pve-manager registers the
+// endpoint with an empty property list, and pmxcfs only broadcasts the
+// newest ~32 KiB of tasks per node anyway), so this is applied client-side
+// after the fetch. It's set high enough to keep everything the endpoint can
+// return, leaving the backupLookback window below as the real filter.
+const maxTasksScanned = 5000
 
 // ConnectionSummary is one connection's rollup within a FleetSummary.
 type ConnectionSummary struct {
-	Name    string
-	Error   string // non-empty when Reachable is false
+	Name      string
+	Type      string // "pve" | "pbs" — a pbs row reports Datastores, not nodes/guests
+	Error     string // non-empty when Reachable is false
 	Reachable bool
 
-	Nodes, OnlineNodes           int
-	Guests, RunningGuests        int
-	CPUPct, MemPct, StoragePct   float64
-	BackupTotal, BackupOK        int // vzdump tasks observed in backupLookback
+	// PBS only: how many backup datastores the server answered with.
+	Datastores int
+
+	Nodes, OnlineNodes         int
+	Guests, RunningGuests      int
+	CPUPct, MemPct, StoragePct float64
+	BackupTotal, BackupOK      int // vzdump tasks observed in backupLookback
 }
 
 // FleetSummary is the pure data model behind the digest email/webhook —
@@ -56,9 +65,9 @@ type ConnectionSummary struct {
 type FleetSummary struct {
 	GeneratedAt time.Time
 
-	Connections           []ConnectionSummary
-	TotalConnections      int
-	ReachableConnections  int
+	Connections          []ConnectionSummary
+	TotalConnections     int
+	ReachableConnections int
 
 	TotalNodes, OnlineNodes             int
 	TotalGuests, RunningGuests          int
@@ -144,15 +153,44 @@ func Build(ctx context.Context, db *store.DB, conns *connections.Resolver) (Flee
 }
 
 func buildConnectionSummary(ctx context.Context, conns *connections.Resolver, info connections.Info) ConnectionSummary {
-	cs := ConnectionSummary{Name: info.Name}
+	cs := ConnectionSummary{Name: info.Name, Type: info.Type}
 
-	client, err := conns.ClientFor(ctx, info.ID)
-	if err != nil {
-		cs.Error = err.Error()
+	if info.Type == "pbs" {
+		// PBS remotes don't serve /cluster/resources or the vzdump task list
+		// — driven through the PVE path below they'd all be reported
+		// UNREACHABLE. Probe with the cheapest authenticated call the PBS
+		// client offers instead so a healthy server shows as reachable (its
+		// usage numbers come from the PBS-specific pages, not this digest).
+		var stores []pbs.Datastore
+		err := conns.RetryOnUnauthorized(info.ID, func() error {
+			client, cerr := conns.PBSClientFor(ctx, info.ID)
+			if cerr != nil {
+				return cerr
+			}
+			stores, cerr = client.ListDatastores(ctx)
+			return cerr
+		})
+		if err != nil {
+			cs.Error = err.Error()
+			return cs
+		}
+		cs.Reachable = true
+		cs.Datastores = len(stores)
 		return cs
 	}
 
-	resources, err := client.ClusterResources(ctx)
+	// Retry once on a 401: ticket-auth clients are cached for ticketTTL, and
+	// a ticket that expired between two digest sends would otherwise label
+	// the whole connection UNREACHABLE even though a fresh login works.
+	var resources []pve.ClusterResource
+	err := conns.RetryOnUnauthorized(info.ID, func() error {
+		client, cerr := conns.ClientFor(ctx, info.ID)
+		if cerr != nil {
+			return cerr
+		}
+		resources, cerr = client.ClusterResources(ctx)
+		return cerr
+	})
 	if err != nil {
 		cs.Error = err.Error()
 		return cs
@@ -191,7 +229,15 @@ func buildConnectionSummary(ctx context.Context, conns *connections.Resolver, in
 	}
 	cs.StoragePct = storagePct(resources)
 
-	tasks, err := client.ClusterTasks(ctx, maxTasksScanned)
+	var tasks []pve.Task
+	err = conns.RetryOnUnauthorized(info.ID, func() error {
+		client, cerr := conns.ClientFor(ctx, info.ID)
+		if cerr != nil {
+			return cerr
+		}
+		tasks, cerr = client.ClusterTasks(ctx, maxTasksScanned)
+		return cerr
+	})
 	if err != nil {
 		// Backup stats are a bonus, not required for the rest of the
 		// summary to be useful.
@@ -283,6 +329,10 @@ func (s FleetSummary) Render() (subject, plainBody string) {
 	for _, c := range s.Connections {
 		if !c.Reachable {
 			fmt.Fprintf(&b, "  - %s: UNREACHABLE (%s)\n", c.Name, c.Error)
+			continue
+		}
+		if c.Type == "pbs" {
+			fmt.Fprintf(&b, "  - %s: PBS backup server reachable (%d datastores)\n", c.Name, c.Datastores)
 			continue
 		}
 		fmt.Fprintf(&b, "  - %s: %d/%d nodes online, %d/%d guests running, CPU %.0f%%, Mem %.0f%%, Storage %.0f%%",

@@ -7,6 +7,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -15,13 +16,41 @@ import (
 	"ferrum/internal/pbs"
 )
 
-func (s *Server) pbsListDatastores(w http.ResponseWriter, r *http.Request) {
-	client, err := s.pbsClientFor(r.Context(), chi.URLParam(r, "id"))
+// pbsCall resolves the PBS client for connID and runs fn against it. When
+// upstream answers 401 (pbs.ErrUnauthorized — the cached ticket PBS just
+// rejected), RetryOnUnauthorized drops the cached login and runs fn exactly
+// once more with a freshly-resolved client; every other error — including a
+// second 401 — is returned as-is. fn must use the client it's handed, not
+// one cached across calls, so the retry actually picks up the fresh login.
+func pbsCall[T any](s *Server, ctx context.Context, connID string, fn func(*pbs.Client) (T, error)) (T, error) {
+	var out T
+	err := s.connections.RetryOnUnauthorized(connID, func() error {
+		client, err := s.pbsClientFor(ctx, connID)
+		if err != nil {
+			return err
+		}
+		out, err = fn(client)
+		return err
+	})
 	if err != nil {
-		s.writeError(w, http.StatusBadGateway, err)
-		return
+		var zero T
+		return zero, err
 	}
-	stores, err := client.ListDatastores(r.Context())
+	return out, nil
+}
+
+// pbsCallErr is pbsCall for calls that return nothing but an error.
+func pbsCallErr(s *Server, ctx context.Context, connID string, fn func(*pbs.Client) error) error {
+	_, err := pbsCall(s, ctx, connID, func(c *pbs.Client) (struct{}, error) {
+		return struct{}{}, fn(c)
+	})
+	return err
+}
+
+func (s *Server) pbsListDatastores(w http.ResponseWriter, r *http.Request) {
+	stores, err := pbsCall(s, r.Context(), chi.URLParam(r, "id"), func(c *pbs.Client) ([]pbs.Datastore, error) {
+		return c.ListDatastoresWithUsage(r.Context())
+	})
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
@@ -30,12 +59,9 @@ func (s *Server) pbsListDatastores(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) pbsListNamespaces(w http.ResponseWriter, r *http.Request) {
-	client, err := s.pbsClientFor(r.Context(), chi.URLParam(r, "id"))
-	if err != nil {
-		s.writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	ns, err := client.ListNamespaces(r.Context(), chi.URLParam(r, "store"), r.URL.Query().Get("parent"))
+	ns, err := pbsCall(s, r.Context(), chi.URLParam(r, "id"), func(c *pbs.Client) ([]pbs.Namespace, error) {
+		return c.ListNamespaces(r.Context(), chi.URLParam(r, "store"), r.URL.Query().Get("parent"))
+	})
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
@@ -44,12 +70,9 @@ func (s *Server) pbsListNamespaces(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) pbsListGroups(w http.ResponseWriter, r *http.Request) {
-	client, err := s.pbsClientFor(r.Context(), chi.URLParam(r, "id"))
-	if err != nil {
-		s.writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	groups, err := client.ListGroups(r.Context(), chi.URLParam(r, "store"), r.URL.Query().Get("ns"))
+	groups, err := pbsCall(s, r.Context(), chi.URLParam(r, "id"), func(c *pbs.Client) ([]pbs.BackupGroup, error) {
+		return c.ListGroups(r.Context(), chi.URLParam(r, "store"), r.URL.Query().Get("ns"))
+	})
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
@@ -58,16 +81,13 @@ func (s *Server) pbsListGroups(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) pbsListSnapshots(w http.ResponseWriter, r *http.Request) {
-	client, err := s.pbsClientFor(r.Context(), chi.URLParam(r, "id"))
-	if err != nil {
-		s.writeError(w, http.StatusBadGateway, err)
-		return
-	}
 	q := r.URL.Query()
-	snaps, err := client.ListSnapshots(r.Context(), chi.URLParam(r, "store"), pbs.ListSnapshotsOptions{
-		Namespace:  q.Get("ns"),
-		BackupType: q.Get("backupType"),
-		BackupID:   q.Get("backupId"),
+	snaps, err := pbsCall(s, r.Context(), chi.URLParam(r, "id"), func(c *pbs.Client) ([]pbs.Snapshot, error) {
+		return c.ListSnapshots(r.Context(), chi.URLParam(r, "store"), pbs.ListSnapshotsOptions{
+			Namespace:  q.Get("ns"),
+			BackupType: q.Get("backupType"),
+			BackupID:   q.Get("backupId"),
+		})
 	})
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
@@ -93,13 +113,12 @@ func (s *Server) pbsSetSnapshotProtected(w http.ResponseWriter, r *http.Request)
 		writeErrorMsg(w, http.StatusBadRequest, "backupType, backupId, and backupTime are required")
 		return
 	}
-	client, err := s.pbsClientFor(r.Context(), connID)
+	err := pbsCallErr(s, r.Context(), connID, func(c *pbs.Client) error {
+		return c.SetSnapshotProtected(r.Context(), store, pbs.ListSnapshotsOptions{
+			Namespace: req.Namespace, BackupType: req.BackupType, BackupID: req.BackupID,
+		}, req.BackupTime, req.Protected)
+	})
 	if err != nil {
-		s.writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	opts := pbs.ListSnapshotsOptions{Namespace: req.Namespace, BackupType: req.BackupType, BackupID: req.BackupID}
-	if err := client.SetSnapshotProtected(r.Context(), store, opts, req.BackupTime, req.Protected); err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
 	}
@@ -131,16 +150,13 @@ func (s *Server) pbsPrune(w http.ResponseWriter, r *http.Request) {
 		writeErrorMsg(w, http.StatusBadRequest, "backupType and backupId are required")
 		return
 	}
-	client, err := s.pbsClientFor(r.Context(), connID)
-	if err != nil {
-		s.writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	results, err := client.Prune(r.Context(), store, pbs.PruneOptions{
-		Namespace: req.Namespace, BackupType: req.BackupType, BackupID: req.BackupID,
-		KeepLast: req.KeepLast, KeepHourly: req.KeepHourly, KeepDaily: req.KeepDaily,
-		KeepWeekly: req.KeepWeekly, KeepMonthly: req.KeepMonthly, KeepYearly: req.KeepYearly,
-		DryRun: req.DryRun,
+	results, err := pbsCall(s, r.Context(), connID, func(c *pbs.Client) ([]pbs.PruneResult, error) {
+		return c.Prune(r.Context(), store, pbs.PruneOptions{
+			Namespace: req.Namespace, BackupType: req.BackupType, BackupID: req.BackupID,
+			KeepLast: req.KeepLast, KeepHourly: req.KeepHourly, KeepDaily: req.KeepDaily,
+			KeepWeekly: req.KeepWeekly, KeepMonthly: req.KeepMonthly, KeepYearly: req.KeepYearly,
+			DryRun: req.DryRun,
+		})
 	})
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
@@ -154,12 +170,9 @@ func (s *Server) pbsPrune(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) pbsStartGC(w http.ResponseWriter, r *http.Request) {
 	connID, store := chi.URLParam(r, "id"), chi.URLParam(r, "store")
-	client, err := s.pbsClientFor(r.Context(), connID)
-	if err != nil {
-		s.writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	upid, err := client.StartGC(r.Context(), store)
+	upid, err := pbsCall(s, r.Context(), connID, func(c *pbs.Client) (string, error) {
+		return c.StartGC(r.Context(), store)
+	})
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
@@ -169,12 +182,9 @@ func (s *Server) pbsStartGC(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) pbsGCStatus(w http.ResponseWriter, r *http.Request) {
-	client, err := s.pbsClientFor(r.Context(), chi.URLParam(r, "id"))
-	if err != nil {
-		s.writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	status, err := client.GCStatusFor(r.Context(), chi.URLParam(r, "store"))
+	status, err := pbsCall(s, r.Context(), chi.URLParam(r, "id"), func(c *pbs.Client) (*pbs.GCStatus, error) {
+		return c.GCStatusFor(r.Context(), chi.URLParam(r, "store"))
+	})
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
@@ -183,12 +193,9 @@ func (s *Server) pbsGCStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) pbsListSyncJobs(w http.ResponseWriter, r *http.Request) {
-	client, err := s.pbsClientFor(r.Context(), chi.URLParam(r, "id"))
-	if err != nil {
-		s.writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	jobs, err := client.ListSyncJobs(r.Context())
+	jobs, err := pbsCall(s, r.Context(), chi.URLParam(r, "id"), func(c *pbs.Client) ([]pbs.SyncJob, error) {
+		return c.ListSyncJobs(r.Context())
+	})
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
@@ -197,12 +204,9 @@ func (s *Server) pbsListSyncJobs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) pbsGetSyncJob(w http.ResponseWriter, r *http.Request) {
-	client, err := s.pbsClientFor(r.Context(), chi.URLParam(r, "id"))
-	if err != nil {
-		s.writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	job, err := client.GetSyncJob(r.Context(), chi.URLParam(r, "jobId"))
+	job, err := pbsCall(s, r.Context(), chi.URLParam(r, "id"), func(c *pbs.Client) (*pbs.SyncJob, error) {
+		return c.GetSyncJob(r.Context(), chi.URLParam(r, "jobId"))
+	})
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
@@ -212,12 +216,9 @@ func (s *Server) pbsGetSyncJob(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) pbsRunSyncJob(w http.ResponseWriter, r *http.Request) {
 	connID, jobID := chi.URLParam(r, "id"), chi.URLParam(r, "jobId")
-	client, err := s.pbsClientFor(r.Context(), connID)
-	if err != nil {
-		s.writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	upid, err := client.RunSyncJob(r.Context(), jobID)
+	upid, err := pbsCall(s, r.Context(), connID, func(c *pbs.Client) (string, error) {
+		return c.RunSyncJob(r.Context(), jobID)
+	})
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
@@ -227,12 +228,9 @@ func (s *Server) pbsRunSyncJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) pbsListVerifyJobs(w http.ResponseWriter, r *http.Request) {
-	client, err := s.pbsClientFor(r.Context(), chi.URLParam(r, "id"))
-	if err != nil {
-		s.writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	jobs, err := client.ListVerifyJobs(r.Context())
+	jobs, err := pbsCall(s, r.Context(), chi.URLParam(r, "id"), func(c *pbs.Client) ([]pbs.VerifyJob, error) {
+		return c.ListVerifyJobs(r.Context())
+	})
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
@@ -241,12 +239,9 @@ func (s *Server) pbsListVerifyJobs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) pbsGetVerifyJob(w http.ResponseWriter, r *http.Request) {
-	client, err := s.pbsClientFor(r.Context(), chi.URLParam(r, "id"))
-	if err != nil {
-		s.writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	job, err := client.GetVerifyJob(r.Context(), chi.URLParam(r, "jobId"))
+	job, err := pbsCall(s, r.Context(), chi.URLParam(r, "id"), func(c *pbs.Client) (*pbs.VerifyJob, error) {
+		return c.GetVerifyJob(r.Context(), chi.URLParam(r, "jobId"))
+	})
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
@@ -256,12 +251,9 @@ func (s *Server) pbsGetVerifyJob(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) pbsRunVerifyJob(w http.ResponseWriter, r *http.Request) {
 	connID, jobID := chi.URLParam(r, "id"), chi.URLParam(r, "jobId")
-	client, err := s.pbsClientFor(r.Context(), connID)
-	if err != nil {
-		s.writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	upid, err := client.RunVerifyJob(r.Context(), jobID)
+	upid, err := pbsCall(s, r.Context(), connID, func(c *pbs.Client) (string, error) {
+		return c.RunVerifyJob(r.Context(), jobID)
+	})
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
@@ -271,12 +263,9 @@ func (s *Server) pbsRunVerifyJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) pbsTaskStatus(w http.ResponseWriter, r *http.Request) {
-	client, err := s.pbsClientFor(r.Context(), chi.URLParam(r, "id"))
-	if err != nil {
-		s.writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	task, err := client.TaskStatus(r.Context(), chi.URLParam(r, "upid"))
+	task, err := pbsCall(s, r.Context(), chi.URLParam(r, "id"), func(c *pbs.Client) (*pbs.Task, error) {
+		return c.TaskStatus(r.Context(), chi.URLParam(r, "upid"))
+	})
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
@@ -285,12 +274,9 @@ func (s *Server) pbsTaskStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) pbsTaskLog(w http.ResponseWriter, r *http.Request) {
-	client, err := s.pbsClientFor(r.Context(), chi.URLParam(r, "id"))
-	if err != nil {
-		s.writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	lines, err := client.TaskLog(r.Context(), chi.URLParam(r, "upid"))
+	lines, err := pbsCall(s, r.Context(), chi.URLParam(r, "id"), func(c *pbs.Client) ([]string, error) {
+		return c.TaskLog(r.Context(), chi.URLParam(r, "upid"))
+	})
 	if err != nil {
 		s.writeError(w, http.StatusBadGateway, err)
 		return

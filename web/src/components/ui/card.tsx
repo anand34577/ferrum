@@ -37,7 +37,7 @@ export function CardHeader({ className, ...props }: HTMLAttributes<HTMLDivElemen
 
 export function CardTitle({
   className,
-  as: Heading = "h3",
+  as: Heading = "h2",
   ...props
 }: HTMLAttributes<HTMLHeadingElement> & { as?: "h1" | "h2" | "h3" | "h4" }) {
   return (

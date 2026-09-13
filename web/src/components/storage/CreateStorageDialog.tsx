@@ -105,11 +105,16 @@ export function CreateStorageDialog({ groups }: CreateStorageDialogProps) {
           return exports.map((e) => e.path)
         }
         case "cifs": {
-          const q = new URLSearchParams({ server })
-          if (username) q.set("username", username)
-          if (password) q.set("password", password)
-          if (domain) q.set("domain", domain)
-          const shares = await api.get<CIFSShare[]>(`${base}/cifs?${q.toString()}`)
+          // CIFS is the one scan that posts: the backend deliberately takes
+          // credentials in a JSON body (GET query strings end up in access
+          // logs and browser history). Sending them as GET params made the
+          // scan 404 into the SPA catch-all — see server.go's scanCIFS.
+          const shares = await api.post<CIFSShare[]>(`${base}/cifs`, {
+            server,
+            ...(username ? { username } : {}),
+            ...(password ? { password } : {}),
+            ...(domain ? { domain } : {}),
+          })
           return shares.map((s) => s.share)
         }
         case "iscsi": {

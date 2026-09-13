@@ -3,8 +3,14 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { api } from "@/lib/api"
+import { CONSOLE_READY_MESSAGE, parseConsoleParams, type ConsoleHandoff } from "@/lib/console"
 
 type ConnectionState = "connecting" | "connected" | "disconnected" | "error"
+
+// How long to wait for the opener's postMessage handoff before concluding
+// it is gone (popup refresh keeps window.opener alive without a listener —
+// see the handoff effect below).
+const HANDOFF_TIMEOUT_MS = 5000
 
 type RFBConstructor = new (target: HTMLElement, url: string) => import("@novnc/novnc/lib/rfb.js").default
 
@@ -41,8 +47,6 @@ async function openSession(kind: string, connId: string, guestType: string | nul
 export function ConsolePage() {
   const [params] = useSearchParams()
   const kind = params.get("kind") ?? "vnc"
-  const initialWsPath = params.get("ws")
-  const initialPassword = params.get("pw")
   const name = params.get("name") ?? "Console"
   // connId/type/node/vmid let us mint a fresh session on reconnect, since
   // each session token from the backend is single-use.
@@ -52,33 +56,97 @@ export function ConsolePage() {
   const vmid = params.get("vmid")
   const canReconnect = kind === "shell" ? Boolean(connId && node) : Boolean(connId && guestType && node && vmid)
 
-  // `ws` and `pw` carry a single-use session ticket — strip them from the
-  // address bar immediately after reading so they don't linger in browser
-  // history, crash/session-restore dumps, or extension-visible URL state.
-  // The values are already captured above; reconnects mint a fresh session
-  // instead of reusing these.
-  useEffect(() => {
-    if (!initialWsPath && !initialPassword) return
-    const cleaned = new URLSearchParams(params)
-    cleaned.delete("ws")
-    cleaned.delete("pw")
-    window.history.replaceState(null, "", `${window.location.pathname}?${cleaned.toString()}`)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
   const containerRef = useRef<HTMLDivElement>(null)
   const rfbRef = useRef<import("@novnc/novnc/lib/rfb.js").default | null>(null)
   // PVE doubles the VNC ticket as the RFB-level password; kept in a ref so
   // the credentialsrequired listener always answers with the current ticket.
-  const passwordRef = useRef<string | null>(initialPassword)
-  const [state, setState] = useState<ConnectionState>("connecting")
-  const [errorMsg, setErrorMsg] = useState("")
+  const passwordRef = useRef<string | null>(null)
+  // The opener hands the ticketed ws path (and the VNC password) over via
+  // postMessage once this popup announces itself — see openConsolePopup in
+  // lib/console.ts — so they never travel in this popup's URL.
+  const [hadOpener] = useState(() => Boolean(window.opener))
+  const [handoff, setHandoff] = useState<ConsoleHandoff | null>(null)
+  // An opener that never answers (its listener is gone — the classic case is
+  // a popup refresh, which keeps window.opener across the reload in
+  // Chromium/Firefox) must not strand this page on "connecting": after the
+  // deadline we fall through to the same disconnected/error states a direct
+  // load gets. Tickets are single-use, so the escape is Reconnect.
+  const [handoffTimedOut, setHandoffTimedOut] = useState(false)
+  const [state, setState] = useState<ConnectionState>(() => {
+    if (hadOpener) return "connecting"
+    return canReconnect ? "disconnected" : "error"
+  })
+  const [errorMsg, setErrorMsg] = useState(() =>
+    !hadOpener && !canReconnect
+      ? kind === "shell"
+        ? "Missing shell session — open this from a Shell button."
+        : "Missing console session — open this from a guest's console button."
+      : "",
+  )
   const [attempt, setAttempt] = useState(0)
+  const handoffWsPath = handoff?.wsPath ?? null
+  // The first attempt's ticket situation: "handoff-waiting" while the
+  // opener's postMessage handoff is still pending, "dead" when there is no
+  // opener — or the opener stopped answering and the handoff timed out —
+  // and "ready" once a ticket is in hand or a later attempt will mint its
+  // own fresh session.
+  const firstAttempt: "handoff-waiting" | "dead" | "ready" =
+    attempt !== 0 || handoffWsPath ? "ready" : hadOpener && !handoffTimedOut ? "handoff-waiting" : "dead"
 
   const reconnect = useCallback(() => setAttempt((a) => a + 1), [])
 
+  // Popup side of the ticket handoff: announce readiness, then receive the
+  // ticketed ws path/password from the opener. The opener only posts the
+  // params after this ready signal, so the listener is guaranteed to be
+  // attached before they arrive (and StrictMode's dev double-mount is fine —
+  // the remount re-announces before the opener's async reply lands). If no
+  // params arrive within the deadline the opener is gone (popup refresh) —
+  // drop to the disconnected/error states instead of spinning forever.
+  useEffect(() => {
+    const opener = window.opener as Window | null
+    if (!opener) return
+    opener.postMessage({ type: CONSOLE_READY_MESSAGE }, window.location.origin)
+    let settled = false
+    const onMessage = (evt: MessageEvent) => {
+      if (evt.origin !== window.location.origin) return
+      const ticket = parseConsoleParams(evt.data)
+      if (!ticket) return
+      settled = true
+      window.removeEventListener("message", onMessage)
+      passwordRef.current = ticket.password ?? null
+      setHandoff(ticket)
+    }
+    window.addEventListener("message", onMessage)
+    const timeout = window.setTimeout(() => {
+      if (settled) return
+      settled = true
+      window.removeEventListener("message", onMessage)
+      setHandoffTimedOut(true)
+      if (canReconnect) {
+        setState("disconnected")
+      } else {
+        setState("error")
+        setErrorMsg(
+          kind === "shell"
+            ? "Missing shell session — open this from a Shell button."
+            : "Missing console session — open this from a guest's console button.",
+        )
+      }
+    }, HANDOFF_TIMEOUT_MS)
+    return () => {
+      window.clearTimeout(timeout)
+      window.removeEventListener("message", onMessage)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   useEffect(() => {
     if (!containerRef.current || kind !== "vnc") return
+    // First attempt: with the handoff still pending there is nothing to
+    // connect with yet, and the "dead" case (no opener) already landed on
+    // its terminal state above — connecting here would either race the
+    // handed-off ticket or mint a session the user never asked for.
+    if (firstAttempt !== "ready") return
 
     let cancelled = false
     let rfb: import("@novnc/novnc/lib/rfb.js").default | null = null
@@ -86,7 +154,7 @@ export function ConsolePage() {
     setErrorMsg("")
 
     async function connect() {
-      let wsPath = attempt === 0 ? initialWsPath : null
+      let wsPath = attempt === 0 ? handoffWsPath : null
       if (!wsPath) {
         if (!connId || !guestType || !node || !vmid) {
           if (!cancelled) {
@@ -145,7 +213,7 @@ export function ConsolePage() {
       rfb?.disconnect()
       rfbRef.current = null
     }
-  }, [kind, attempt, initialWsPath, connId, guestType, node, vmid])
+  }, [kind, firstAttempt, attempt, handoffWsPath, connId, guestType, node, vmid])
 
   function ctrlAltDel() {
     rfbRef.current?.sendCtrlAltDel()
@@ -190,7 +258,7 @@ export function ConsolePage() {
       <div className="relative min-h-0 flex-1">
         {kind === "shell" ? (
           <ShellTerminal
-            initialWsPath={attempt === 0 ? initialWsPath : null}
+            initialWsPath={attempt === 0 ? handoffWsPath : null}
             reconnectKey={attempt}
             mintSession={canReconnect ? () => openSession(kind, connId!, guestType, node!, vmid) : null}
             onState={setState}
@@ -248,6 +316,13 @@ function ShellTerminal({
 
   useEffect(() => {
     if (!containerRef.current) return
+    // First attempt with no ticket in hand: while the opener's postMessage
+    // handoff is pending there is nothing to connect with yet, and once the
+    // handoff times out (or with no opener at all — tickets are single-use,
+    // so a refresh intentionally requires a new console session) the parent
+    // lands on its disconnected/"Reconnect" state. Connecting here would
+    // mint a session the user never asked for.
+    if (reconnectKey === 0 && !initialWsPath) return
     let cancelled = false
     let socket: WebSocket | null = null
     let disposeTerm: (() => void) | null = null
@@ -318,7 +393,7 @@ function ShellTerminal({
       disposeTerm?.()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reconnectKey])
+  }, [reconnectKey, initialWsPath])
 
   return <div ref={containerRef} className="h-full w-full p-1" />
 }

@@ -56,13 +56,13 @@ var validLooks = map[string]bool{
 	"aurora":          true,
 }
 
-// validLandingPages whitelists the routes a user (or the org-wide default)
-// may land on after login — every top-level nav destination the sidebar
-// itself links to (see web/src/components/layout/AppShell.tsx's navGroups).
 // validDensities whitelists the row/list padding modes — see index.css's
 // [data-density] rules for what each one actually repaints.
 var validDensities = map[string]bool{"comfortable": true, "compact": true}
 
+// validLandingPages whitelists the routes a user (or the org-wide default)
+// may land on after login — every top-level nav destination the sidebar
+// itself links to (see web/src/components/layout/AppShell.tsx's navGroups).
 var validLandingPages = map[string]bool{
 	"/": true, "/dashboard": true, "/inventory": true, "/topology": true,
 	"/storage": true, "/pools": true, "/ha": true,

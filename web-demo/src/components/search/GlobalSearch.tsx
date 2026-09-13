@@ -21,9 +21,8 @@ interface SearchResult {
 
 /**
  * Cross-remote global search: a floating trigger plus its own "/" shortcut,
- * self-contained so it can be dropped into any page with one import — it is
- * NOT wired into CommandPalette (that file is being actively edited
- * elsewhere; a follow-up pass merges the two).
+ * self-contained so it can be dropped into any page with one import —
+ * separate from the CommandPalette.
  *
  * Results come from GET /api/v1/search, which matches guest name/vmid/tags/
  * node across every configured connection.

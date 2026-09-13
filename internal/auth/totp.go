@@ -29,6 +29,28 @@ type TOTPEnrollment struct {
 	QRCodePNG  []byte // PNG image bytes; caller base64-encodes for the API response
 }
 
+// encryptStoredSecret/decryptStoredSecret wrap the secrets box around the
+// users.totp_secret column. A nil box means legacy plaintext storage, and
+// readers also fall back to the raw value when decryption fails, so rows
+// written before encryption was introduced keep working until the next
+// enrollment re-encrypts them.
+func (s *Service) encryptStoredSecret(v string) (string, error) {
+	if s.secrets == nil {
+		return v, nil
+	}
+	return s.secrets.Encrypt(v)
+}
+
+func (s *Service) decryptStoredSecret(v string) string {
+	if s.secrets == nil || v == "" {
+		return v
+	}
+	if plain, err := s.secrets.Decrypt(v); err == nil {
+		return plain
+	}
+	return v
+}
+
 // EnrollTOTP generates a new secret for the user and stores it (disabled)
 // pending confirmation via ConfirmTOTP. Re-enrolling overwrites any prior
 // unconfirmed secret.
@@ -49,7 +71,11 @@ func (s *Service) EnrollTOTP(ctx context.Context, userID, username string) (*TOT
 		return nil, err
 	}
 
-	if _, err := s.db.ExecContext(ctx, `UPDATE users SET totp_secret = ? WHERE id = ?`, key.Secret(), userID); err != nil {
+	secretEnc, err := s.encryptStoredSecret(key.Secret())
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE users SET totp_secret = ? WHERE id = ?`, secretEnc, userID); err != nil {
 		return nil, err
 	}
 
@@ -69,12 +95,28 @@ func (s *Service) EnrollTOTP(ctx context.Context, userID, username string) (*TOT
 // secret, enables TOTP, and generates one-time recovery codes (returned in
 // cleartext exactly once — only their bcrypt hash is persisted).
 func (s *Service) ConfirmTOTP(ctx context.Context, userID, code string) ([]string, error) {
-	var secret string
-	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(totp_secret, '') FROM users WHERE id = ?`, userID).Scan(&secret); err != nil {
+	var stored string
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(totp_secret, '') FROM users WHERE id = ?`, userID).Scan(&stored); err != nil {
 		return nil, err
 	}
+	secret := s.decryptStoredSecret(stored)
 	if secret == "" || !totp.Validate(code, secret) {
 		return nil, ErrInvalidTOTPCode
+	}
+
+	// bcrypt deliberately runs before the transaction begins: hashing ten
+	// recovery codes holds the CPU long enough to starve SQLite's single
+	// connection if done while the tx holds it.
+	codes := make([]string, recoveryCodeCount)
+	hashes := make([]string, recoveryCodeCount)
+	for i := range codes {
+		raw := randomToken()[:10]
+		codes[i] = fmt.Sprintf("%s-%s", raw[:5], raw[5:])
+		hash, err := bcrypt.GenerateFromPassword([]byte(codes[i]), bcrypt.DefaultCost)
+		if err != nil {
+			return nil, err
+		}
+		hashes[i] = string(hash)
 	}
 
 	tx, err := s.db.Begin()
@@ -89,18 +131,10 @@ func (s *Service) ConfirmTOTP(ctx context.Context, userID, code string) ([]strin
 	if _, err := tx.Exec(`DELETE FROM user_totp_recovery_codes WHERE user_id = ?`, userID); err != nil {
 		return nil, err
 	}
-
-	codes := make([]string, recoveryCodeCount)
 	for i := range codes {
-		raw := randomToken()[:10]
-		codes[i] = fmt.Sprintf("%s-%s", raw[:5], raw[5:])
-		hash, err := bcrypt.GenerateFromPassword([]byte(codes[i]), bcrypt.DefaultCost)
-		if err != nil {
-			return nil, err
-		}
 		if _, err := tx.Exec(
 			`INSERT INTO user_totp_recovery_codes (id, user_id, code_hash) VALUES (?, ?, ?)`,
-			uuid.NewString(), userID, string(hash),
+			uuid.NewString(), userID, hashes[i],
 		); err != nil {
 			return nil, err
 		}
@@ -125,11 +159,11 @@ func (s *Service) DisableTOTP(ctx context.Context, userID string) error {
 // VerifyTOTPStep checks a 6-digit TOTP code or an unused recovery code for
 // the given (already password-verified) user during login.
 func (s *Service) VerifyTOTPStep(ctx context.Context, userID, code string) error {
-	var secret string
-	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(totp_secret, '') FROM users WHERE id = ?`, userID).Scan(&secret); err != nil {
+	var stored string
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(totp_secret, '') FROM users WHERE id = ?`, userID).Scan(&stored); err != nil {
 		return err
 	}
-	if secret != "" && totp.Validate(code, secret) {
+	if secret := s.decryptStoredSecret(stored); secret != "" && totp.Validate(code, secret) {
 		return nil
 	}
 	return s.consumeRecoveryCode(ctx, userID, code)
@@ -154,8 +188,17 @@ func (s *Service) consumeRecoveryCode(ctx context.Context, userID, code string) 
 
 	for _, c := range candidates {
 		if bcrypt.CompareHashAndPassword([]byte(c.hash), []byte(code)) == nil {
-			_, err := s.db.ExecContext(ctx, `UPDATE user_totp_recovery_codes SET used_at = ? WHERE id = ?`, time.Now().UTC().Format(time.RFC3339), c.id)
-			return err
+			// The used_at IS NULL guard makes consumption safe against a
+			// double submit: two requests can both read the unused code, but
+			// the loser's UPDATE matches zero rows and must not report success.
+			res, err := s.db.ExecContext(ctx, `UPDATE user_totp_recovery_codes SET used_at = ? WHERE id = ? AND used_at IS NULL`, time.Now().UTC().Format(time.RFC3339), c.id)
+			if err != nil {
+				return err
+			}
+			if n, _ := res.RowsAffected(); n == 0 {
+				return ErrInvalidTOTPCode
+			}
+			return nil
 		}
 	}
 	return ErrInvalidTOTPCode

@@ -23,6 +23,7 @@ import {
 } from "lucide-react"
 import { useMemo, useState } from "react"
 import { Link } from "react-router-dom"
+import { useQueryClient } from "@tanstack/react-query"
 import { Heatmap, type HeatmapRow } from "@/components/charts/Heatmap"
 import { KpiCard } from "@/components/charts/KpiCard"
 import { Button } from "@/components/ui/button"
@@ -35,7 +36,7 @@ import { StatusDot } from "@/components/ui/status-dot"
 import { Hint } from "@/components/ui/tooltip"
 import { api, type AlertInstance, type FleetOverviewConn } from "@/lib/api"
 import { summarizeFleet, useScopedInventory, utilizationTone } from "@/lib/fleet"
-import { cn, formatAlertValue, formatBytes, formatPercentFine, formatRelativeTime } from "@/lib/utils"
+import { cn, formatAlertValue, formatBytes, formatPercentFine, formatRelativeTime, guestUrl } from "@/lib/utils"
 
 /**
  * Fleet Overview — the landing page of the centralized manager. Aggregated
@@ -80,7 +81,8 @@ const ALERT_METRIC_LABELS: Record<string, string> = {
 }
 
 export function OverviewPage() {
-  const { data: overview, isLoading, isError, refetch } = useQuery({
+  const queryClient = useQueryClient()
+  const { data: overview, isLoading, isError, refetch, isRefetching } = useQuery({
     queryKey: ["overview"],
     queryFn: () => api.get<FleetOverviewConn[]>("/overview"),
     refetchInterval: 15_000,
@@ -132,7 +134,7 @@ export function OverviewPage() {
         onClick={() => (active ? setSortDesc((d) => !d) : (setSortKey(key), setSortDesc(true)))}
         aria-label={`${label}: activate to sort${active ? (sortDesc ? ", currently descending" : ", currently ascending") : ""}`}
         className={cn(
-          "flex w-full items-center gap-1.5 transition-colors",
+          "flex w-full items-center gap-1.5 uppercase transition-colors",
           align === "right" ? "justify-end" : "justify-start",
           active ? "text-[var(--text)]" : "text-[var(--text-muted)] hover:text-[var(--text)]",
         )}
@@ -184,6 +186,8 @@ export function OverviewPage() {
               id: r.id,
               name: r.name ?? `#${r.vmid}`,
               conn: c.name,
+              connId: c.connectionId,
+              vmid: r.vmid,
               isVm: r.type === "qemu",
               cpuPct: Math.min(100, (r.cpu ?? 0) * 100),
               memPct: r.maxmem ? Math.min(100, ((r.mem ?? 0) / r.maxmem) * 100) : 0,
@@ -217,6 +221,12 @@ export function OverviewPage() {
         title="Fleet Overview"
         description={`${totals.serversOnline}/${totals.serversTotal} Proxmox ${totals.serversTotal === 1 ? "server" : "servers"} online · ${totals.clusters} cluster${totals.clusters === 1 ? "" : "s"} · auto-refreshes every 15s`}
         icon={Waypoints}
+        onRefresh={() => {
+          void queryClient.invalidateQueries({ queryKey: ["overview"] })
+          void queryClient.invalidateQueries({ queryKey: ["inventory"] })
+          void queryClient.invalidateQueries({ queryKey: ["alerts", "active"] })
+        }}
+        refreshing={isRefetching}
         actions={
           <Hint label="Build your own layout from these widgets">
             <Link to="/dashboard">
@@ -343,7 +353,11 @@ export function OverviewPage() {
                             </p>
                           </div>
                           {c.online && (
-                            <Link to="/inventory" aria-label={`Inventory for ${c.name}`} className="ml-auto shrink-0 text-[var(--text-muted)] hover:text-[var(--text)]">
+                            <Link
+                              to={`/inventory?conn=${encodeURIComponent(c.connectionId)}`}
+                              aria-label={`Inventory for ${c.name}`}
+                              className="ml-auto shrink-0 text-[var(--text-muted)] hover:text-[var(--text)]"
+                            >
                               <ChevronRight className="h-4 w-4" />
                             </Link>
                           )}
@@ -385,7 +399,7 @@ export function OverviewPage() {
           {/* --- Hottest guests: the whole estate's busiest workloads, so the
                   column under the comparison table stays as tall as the
                   right rail instead of dead space. --- */}
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4.5 shadow-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),0_1px_3px_rgba(0,0,0,0.4)]">
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4.5 shadow-card">
             <div className="flex items-center justify-between gap-2">
               <p className="flex items-center gap-1.5 font-display text-xs font-semibold">
                 <Flame className="h-3.5 w-3.5 text-brand-500" /> Hottest guests
@@ -403,10 +417,21 @@ export function OverviewPage() {
                     <span className="shrink-0 text-[var(--text-muted)]" title={g.isVm ? "Virtual machine" : "Container"}>
                       {g.isVm ? <Box className="h-3.5 w-3.5" /> : <Container className="h-3.5 w-3.5" />}
                     </span>
-                    <span className="w-40 min-w-0 shrink-0 truncate font-medium" title={`${g.name} — ${g.conn}`}>{g.name}</span>
-                    <span className="hidden w-28 shrink-0 truncate text-[10px] text-[var(--text-muted)] sm:block">{g.conn}</span>
-                    <Meter value={g.cpuPct} size="md" showLabel label="CPU" className="min-w-24 flex-1" />
-                    <span className="w-24 shrink-0 text-right text-[10px] text-[var(--text-faint)] tabular" title="Memory usage">
+                    {/* Name is the only flexible column: every other cell is a
+                        fixed width, so the row shrinks by eliding the name
+                        instead of pushing the page into horizontal scroll.
+                        Clicking drills into the guest (deep link into
+                        Inventory, detail dialog auto-opened). */}
+                    <Link
+                      to={guestUrl(g.connId, g.vmid, g.name)}
+                      className="min-w-0 flex-1 truncate font-medium underline-offset-2 hover:text-[var(--text)] hover:underline"
+                      title={`${g.name} — ${g.conn}`}
+                    >
+                      {g.name}
+                    </Link>
+                    <span className="hidden w-28 shrink-0 truncate text-[10px] text-[var(--text-muted)] lg:block">{g.conn}</span>
+                    <Meter value={g.cpuPct} size="md" showLabel label="CPU" className="w-32 shrink-0 sm:w-44" />
+                    <span className="hidden w-16 shrink-0 text-right text-[10px] text-[var(--text-faint)] tabular sm:block" title="Memory usage">
                       mem {g.memPct.toFixed(0)}%
                     </span>
                   </li>
@@ -416,7 +441,7 @@ export function OverviewPage() {
           </div>
 
           {/* --- Active alerts: what the alert rules are firing right now --- */}
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4.5 shadow-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),0_1px_3px_rgba(0,0,0,0.4)]">
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4.5 shadow-card">
             <div className="flex items-center justify-between gap-2">
               <p className="flex items-center gap-1.5 font-display text-xs font-semibold">
                 <ShieldAlert className={cn("h-3.5 w-3.5", alerts.length > 0 ? "text-[var(--status-warn)]" : "text-brand-500")} /> Active alerts
@@ -456,7 +481,7 @@ export function OverviewPage() {
 
         {/* --- Right rail: health matrix + fleet signals --- */}
         <div className="space-y-4">
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4.5 shadow-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),0_1px_3px_rgba(0,0,0,0.4)]">
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4.5 shadow-card">
             <p className="flex items-center gap-1.5 font-display text-xs font-semibold">
               <Activity className="h-3.5 w-3.5 text-brand-500" /> Fleet health matrix
             </p>
@@ -470,7 +495,7 @@ export function OverviewPage() {
             )}
           </div>
 
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4.5 shadow-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),0_1px_3px_rgba(0,0,0,0.4)]">
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4.5 shadow-card">
             <p className="flex items-center gap-1.5 font-display text-xs font-semibold">
               <Boxes className="h-3.5 w-3.5 text-brand-500" /> Fleet signals
             </p>
@@ -548,7 +573,7 @@ function ResourceCard({
 }) {
   const tone = utilizationTone(pct)
   return (
-    <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4.5 transition-colors duration-200 hover:border-[var(--border-strong)] dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),0_1px_3px_rgba(0,0,0,0.4)]">
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4.5 shadow-card transition-colors duration-200 hover:border-[var(--border-strong)]">
       <div className="flex items-center justify-between gap-2">
         <p className="flex items-center gap-1.5 font-display text-xs font-semibold">
           <span className="flex h-5 w-5 items-center justify-center rounded-sm bg-[color-mix(in_oklab,var(--color-brand-500)_12%,transparent)] text-brand-500">
@@ -569,10 +594,14 @@ function ResourceCard({
             <div key={r.name} className="flex items-center gap-2 text-xs">
               <span className="w-24 shrink-0 truncate text-[var(--text-muted)]" title={r.name}>{r.name}</span>
               <Meter value={r.pct} size="md" showLabel label="Utilization" className="flex-1" />
-              <span className="hidden w-28 shrink-0 text-right text-[10px] text-[var(--text-faint)] tabular sm:block">{r.detail}</span>
+              <span className="hidden w-28 shrink-0 text-right text-[10px] text-[var(--text-faint)] tabular sm:block lg:hidden xl:block">{r.detail}</span>
             </div>
           ))}
-        {rows.length > 5 && <p className="text-[10px] text-[var(--text-faint)]">+{rows.length - 5} more connections</p>}
+        {rows.length > 5 && (
+          <Link to="/inventory" className="block text-[10px] text-[var(--text-faint)] underline-offset-2 hover:text-[var(--text)] hover:underline">
+            +{rows.length - 5} more connections — see all in Inventory
+          </Link>
+        )}
       </div>
     </div>
   )

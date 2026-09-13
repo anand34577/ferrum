@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { CheckCircle2, CircleSlash, Loader2, ScrollText, Square, Terminal, XCircle } from "lucide-react"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { Link, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -15,7 +16,7 @@ import { PageHeader } from "@/components/ui/page-header"
 import { Hint } from "@/components/ui/tooltip"
 import { api, ApiError } from "@/lib/api"
 import { useClusterTasks, type FleetTask } from "@/lib/useClusterTasks"
-import { cn } from "@/lib/utils"
+import { cn, guestUrl } from "@/lib/utils"
 
 function duration(task: FleetTask): string {
   const end = task.endtime || Math.floor(Date.now() / 1000)
@@ -47,15 +48,41 @@ function taskLabel(t: FleetTask): string {
   return t.id ? `${base} · ${t.id}` : base
 }
 
+/** Task types whose `id` field is a guest VMID — those rows deep-link to the
+ * guest (Inventory with the detail dialog opened). */
+const GUEST_TASK_TYPES = new Set(["qmstart", "qmstop", "qmshutdown", "qmigrate", "vzsuspend", "vzstart", "vxmove"])
+
+function guestVmid(t: FleetTask): number | null {
+  if (!GUEST_TASK_TYPES.has(t.type)) return null
+  const n = Number(t.id)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
 export function TasksPage() {
   const { tasks, isLoading, isError, refetch } = useClusterTasks()
   const queryClient = useQueryClient()
   const confirm = useConfirm()
   const [logTask, setLogTask] = useState<FleetTask | null>(null)
+  // Filters live in the URL (same convention as Inventory) so a filtered
+  // task view survives navigation and can be pasted to a teammate during an
+  // incident — they used to evaporate on every route change.
+  const [searchParams, setSearchParams] = useSearchParams()
   // Empty array = "all" (the MultiSelect convention).
-  const [statusFilter, setStatusFilter] = useState<string[]>([])
-  const [connFilter, setConnFilter] = useState<string[]>([])
-  const [nodeFilter, setNodeFilter] = useState<string[]>([])
+  const [statusFilter, setStatusFilter] = useState<string[]>(() => searchParams.get("status")?.split(",").filter(Boolean) ?? [])
+  const [connFilter, setConnFilter] = useState<string[]>(() => searchParams.get("conn")?.split(",").filter(Boolean) ?? [])
+  const [nodeFilter, setNodeFilter] = useState<string[]>(() => searchParams.get("node")?.split(",").filter(Boolean) ?? [])
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams)
+    if (connFilter.length) next.set("conn", connFilter.join(","))
+    else next.delete("conn")
+    if (nodeFilter.length) next.set("node", nodeFilter.join(","))
+    else next.delete("node")
+    if (statusFilter.length) next.set("status", statusFilter.join(","))
+    else next.delete("status")
+    setSearchParams(next, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connFilter, nodeFilter, statusFilter])
 
   const logQuery = useQuery({
     queryKey: ["task-log", logTask?.connId, logTask?.node, logTask?.upid],
@@ -129,7 +156,19 @@ export function TasksPage() {
       {
         accessorKey: "type",
         header: "Task",
-        cell: (c) => <span className="block max-w-40 truncate text-xs" title={c.getValue<string>()}>{taskLabel(c.row.original)}</span>,
+        cell: (c) => {
+          const vmid = guestVmid(c.row.original)
+          const label = <span className="block max-w-40 truncate text-xs" title={c.getValue<string>()}>{taskLabel(c.row.original)}</span>
+          // Guest-scoped tasks link straight to the guest — "which VM was
+          // this backup/migration for" shouldn't require a manual search.
+          return vmid !== null ? (
+            <Link to={guestUrl(c.row.original.connId, vmid)} className="underline-offset-2 hover:underline">
+              {label}
+            </Link>
+          ) : (
+            label
+          )
+        },
       },
       { accessorKey: "user", header: "User", meta: { hideBelowMd: true }, cell: (c) => <span className="block max-w-32 truncate font-mono text-xs text-[var(--text-muted)]" title={c.getValue<string>()}>{c.getValue<string>()}</span> },
       {
@@ -174,9 +213,8 @@ export function TasksPage() {
               <Hint label="Cancel task">
                 <Button
                   size="icon"
-                  variant="ghost"
+                  variant="ghost-danger"
                   aria-label="Cancel task"
-                  className="hover:bg-[color-mix(in_oklab,var(--status-error)_12%,transparent)] hover:text-[var(--status-error)]"
                   disabled={cancelMutation.isPending}
                   onClick={() => cancelTask(c.row.original)}
                 >
@@ -198,6 +236,8 @@ export function TasksPage() {
         title="Task Center"
         description="Recent and running Proxmox tasks across every connected cluster and node."
         icon={Terminal}
+        onRefresh={() => void refetch()}
+        refreshing={isLoading}
       />
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">

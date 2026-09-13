@@ -5,6 +5,7 @@ import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { CollapsibleCard } from "@/components/ui/collapsible-card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Combobox } from "@/components/ui/combobox"
 import { useConfirm } from "@/components/ui/confirm-dialog"
@@ -39,9 +40,10 @@ function haStatusVariant(status?: string): "ok" | "warn" | "error" | "default" {
 export function HAPage() {
   const queryClient = useQueryClient()
   const confirm = useConfirm()
-  const { data: inventory, isLoading, isError, refetch } = useQuery({
+  const { data: inventory, isLoading, isError, refetch, isRefetching } = useQuery({
     queryKey: ["inventory"],
     queryFn: () => api.get<ConnectionInventory[]>("/inventory/"),
+    refetchInterval: 30_000,
   })
   const connections = inventory ?? []
 
@@ -205,6 +207,14 @@ export function HAPage() {
         title="High Availability"
         description="Proxmox's built-in HA resources and groups."
         icon={ShieldCheck}
+        onRefresh={() => {
+          void queryClient.invalidateQueries({ queryKey: ["inventory"] })
+          void queryClient.invalidateQueries({ queryKey: ["ha-resources"] })
+          void queryClient.invalidateQueries({ queryKey: ["ha-groups"] })
+          void queryClient.invalidateQueries({ queryKey: ["ha-rules"] })
+          void queryClient.invalidateQueries({ queryKey: ["ha-status"] })
+        }}
+        refreshing={isRefetching}
       />
 
       {isError ? (
@@ -222,11 +232,7 @@ export function HAPage() {
         />
       ) : (
         <>
-          <Card>
-            <CardHeader>
-              <CardTitle>Add HA resource</CardTitle>
-            </CardHeader>
-            <CardContent>
+          <CollapsibleCard title="Add HA resource">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div className="space-y-1.5">
                   <Label>Connection</Label>
@@ -283,14 +289,9 @@ export function HAPage() {
               <Button className="mt-3" size="sm" loading={addResource.isPending} disabled={!form.connId || !sid} onClick={() => addResource.mutate()}>
                 {!addResource.isPending && <Plus className="h-3.5 w-3.5" />} Add resource
               </Button>
-            </CardContent>
-          </Card>
+          </CollapsibleCard>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Create HA group</CardTitle>
-            </CardHeader>
-            <CardContent>
+          <CollapsibleCard title="Create HA group">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
                 <div className="space-y-1.5">
                   <Label>Connection</Label>
@@ -333,14 +334,9 @@ export function HAPage() {
               >
                 {!addGroup.isPending && <Plus className="h-3.5 w-3.5" />} Create group
               </Button>
-            </CardContent>
-          </Card>
+          </CollapsibleCard>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Add node-affinity rule</CardTitle>
-            </CardHeader>
-            <CardContent>
+          <CollapsibleCard title="Add node-affinity rule">
               <p className="mb-3 text-xs text-[var(--text-muted)]">
                 Proxmox 9's HA rules — pins one or more resources to a set of nodes. Only meaningful on Proxmox 9; older clusters use groups instead.
               </p>
@@ -384,8 +380,7 @@ export function HAPage() {
               >
                 {!addRule.isPending && <Plus className="h-3.5 w-3.5" />} Add rule
               </Button>
-            </CardContent>
-          </Card>
+          </CollapsibleCard>
 
           {connections.map((c, i) => (
             <Card key={c.connectionId}>
@@ -424,7 +419,7 @@ export function HAPage() {
                     />
                   )}
                   <div className={(resourceQueries[i].data?.length ?? 0) > 10 ? "max-h-72 space-y-1.5 overflow-y-auto pr-1" : "space-y-1.5"}>
-                    {resourceQueries[i].isError && <p className="text-xs text-[var(--text-muted)]">Couldn't load HA resources for this connection.</p>}
+                    {resourceQueries[i].isError && <ErrorState className="py-6" title={`Couldn't load HA resources for ${c.name}`} onRetry={resourceQueries[i].refetch} />}
                     {resourceQueries[i].data?.length === 0 && <p className="text-sm text-[var(--text-muted)]">No HA-managed guests.</p>}
                     {(resourceQueries[i].data ?? [])
                       .filter((res) => {
@@ -446,8 +441,7 @@ export function HAPage() {
                           <Hint label="Remove from HA">
                             <Button
                               size="icon"
-                              variant="ghost"
-                              className="hover:bg-[color-mix(in_oklab,var(--status-error)_12%,transparent)] hover:text-[var(--status-error)]"
+                              variant="ghost-danger"
                               aria-label={`Remove ${res.sid} from HA`}
                               onClick={() => removeHA(c.connectionId, res.sid)}
                             >
@@ -476,8 +470,7 @@ export function HAPage() {
                           <Hint label="Delete group">
                             <Button
                               size="icon"
-                              variant="ghost"
-                              className="hover:bg-[color-mix(in_oklab,var(--status-error)_12%,transparent)] hover:text-[var(--status-error)]"
+                              variant="ghost-danger"
                               aria-label={`Delete group ${g.group}`}
                               onClick={() => removeGroup(c.connectionId, g.group)}
                             >
@@ -500,7 +493,7 @@ export function HAPage() {
                 <div>
                   <p className="mb-2 text-xs font-medium text-[var(--text-muted)]">HA rules (Proxmox 9)</p>
                   <div className="space-y-1.5">
-                    {ruleQueries[i].isError && <p className="text-xs text-[var(--text-muted)]">Couldn't load HA rules for this connection.</p>}
+                    {ruleQueries[i].isError && <ErrorState className="py-6" title={`Couldn't load HA rules for ${c.name}`} onRetry={ruleQueries[i].refetch} />}
                     {ruleQueries[i].data?.length === 0 && (
                       <p className="text-sm text-[var(--text-muted)]">No HA rules configured.</p>
                     )}
@@ -518,8 +511,7 @@ export function HAPage() {
                           <Hint label="Delete rule">
                             <Button
                               size="icon"
-                              variant="ghost"
-                              className="hover:bg-[color-mix(in_oklab,var(--status-error)_12%,transparent)] hover:text-[var(--status-error)]"
+                              variant="ghost-danger"
                               aria-label={`Delete rule ${rule.rule as string}`}
                               onClick={() => removeRule(c.connectionId, rule.rule as string)}
                             >

@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { Bot, CheckCircle2, ClipboardList, XCircle } from "lucide-react"
 import { useMemo, useState } from "react"
@@ -9,6 +9,7 @@ import { ErrorState } from "@/components/ui/error-state"
 import { MultiSelect } from "@/components/ui/multi-select"
 import { PageHeader } from "@/components/ui/page-header"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Timestamp } from "@/components/ui/timestamp"
 import { api, type ToolCallRecord } from "@/lib/api"
 
 interface AuditEntry {
@@ -28,9 +29,18 @@ const categoryVariant: Record<string, "ok" | "warn" | "error" | "default"> = {
 }
 
 export function AuditPage() {
+  const queryClient = useQueryClient()
   return (
     <div className="space-y-4">
-      <PageHeader title="Audit Log" description="Every action taken through this Ferrum instance." icon={ClipboardList} />
+      <PageHeader
+        title="Audit Log"
+        description="Every action taken through this Ferrum instance."
+        icon={ClipboardList}
+        onRefresh={() => {
+          void queryClient.invalidateQueries({ queryKey: ["audit"] })
+          void queryClient.invalidateQueries({ queryKey: ["admin", "ai", "activity"] })
+        }}
+      />
       <Tabs defaultValue="audit">
         <TabsList>
           <TabsTrigger value="audit">General audit log</TabsTrigger>
@@ -58,7 +68,8 @@ function GeneralAuditLog() {
       {
         accessorKey: "createdAt",
         header: "Time",
-        cell: (c) => <span className="text-xs text-[var(--text-muted)] tabular">{new Date(c.getValue<string>()).toLocaleString()}</span>,
+        // Forensic surface: absolute first, relative age on hover.
+        cell: (c) => <Timestamp iso={c.getValue<string>()} mode="absolute" className="text-xs text-[var(--text-muted)]" />,
       },
       { accessorKey: "username", header: "User" },
       {
@@ -116,7 +127,7 @@ function AIActivityLog() {
       {
         accessorKey: "createdAt",
         header: "Time",
-        cell: (c) => <span className="text-xs text-[var(--text-muted)] tabular">{new Date(c.getValue<string>()).toLocaleString()}</span>,
+        cell: (c) => <Timestamp iso={c.getValue<string>()} mode="absolute" className="text-xs text-[var(--text-muted)]" />,
       },
       { accessorKey: "username", header: "User" },
       {
@@ -132,7 +143,16 @@ function AIActivityLog() {
           c.getValue<boolean>() ? (
             <span className="inline-flex items-center gap-1 text-xs text-[var(--status-ok)]"><CheckCircle2 className="h-3.5 w-3.5" /> OK</span>
           ) : (
-            <span className="inline-flex items-center gap-1 text-xs text-[var(--status-error)]" title={c.row.original.error}><XCircle className="h-3.5 w-3.5" /> Failed</span>
+            // The provider's error text renders right in the cell — a
+            // title-only tooltip is unreachable by keyboard and easy to miss.
+            <span className="inline-flex max-w-56 flex-col items-start text-xs text-[var(--status-error)]">
+              <span className="inline-flex items-center gap-1"><XCircle className="h-3.5 w-3.5" /> Failed</span>
+              {c.row.original.error && (
+                <span className="w-full truncate text-[10px] text-[var(--text-muted)]" title={c.row.original.error}>
+                  {c.row.original.error}
+                </span>
+              )}
+            </span>
           ),
       },
     ],

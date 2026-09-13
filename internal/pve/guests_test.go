@@ -87,3 +87,27 @@ func TestErrLXCRemoteMigrateUnsupported(t *testing.T) {
 		t.Fatal("ErrLXCRemoteMigrateUnsupported must be a non-empty sentinel error")
 	}
 }
+
+// TestCreateVMCloudInitRequiresStorage pins the cloud-init edge case: with
+// CIUser set but no Storage there is no volume for the ide3 cloud-init
+// drive, and sending "ide3=:cloudinit" would 400 on PVE. The client must
+// reject the combination up front (before any request) instead.
+func TestCreateVMCloudInitRequiresStorage(t *testing.T) {
+	var called bool
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := clientFor(srv, WithInsecureSkipVerify(true))
+	_, err := c.CreateVM(context.Background(), CreateVMOptions{
+		VMID: 100, Node: "pve1", Name: "ci-vm", CIUser: "root",
+	})
+	if err == nil || !strings.Contains(err.Error(), "cloud-init requires a storage") {
+		t.Fatalf("expected cloud-init-without-storage rejection, got: %v", err)
+	}
+	if called {
+		t.Error("request reached the server despite the up-front rejection")
+	}
+}

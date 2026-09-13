@@ -15,7 +15,7 @@ Fleet control for Proxmox VE — a single dashboard for every cluster and standa
 - **High availability, firewall & SDN** — HA groups/resources, cluster and per-node firewall rules, and SDN zones/VNets/subnets, all per connection.
 - **Alerting & automation** — threshold-based alerts (CPU/memory/disk/guest), config drift detection, guest lifecycle policies, capacity forecasting, a fleet health score, scheduled health-digest emails, and Terraform/Ansible inventory export.
 - **Integrations** — outbound webhooks for real-time events, a REST API and MCP server (scoped API keys, so any MCP-capable agent or script can drive Ferrum), and a built-in AI Assistant that can use any OpenAI-compatible provider — including a zero-config local model (Needle 2) with no API key or network required.
-- **Access & auditing** — per-user roles, optional OIDC single sign-on, session/certificate monitoring, and a full audit log of every mutating action across the UI, REST API, and MCP.
+- **Access & auditing** — user management with role labels (effective access control is admin vs non-admin), optional OIDC single sign-on, session/certificate monitoring, and a full audit log of every mutating action across the UI, REST API, and MCP.
 - **A dozen look-and-feel presets** — Enterprise, Proxmox-native, Terminal, Glass Flight Deck, Midnight, Paper, Glassmorphism, Neumorphism, Brutalist, Solarized, High Contrast, and Aurora — each with light/dark and a choice of accent colors.
 
 ## Screenshots
@@ -77,12 +77,18 @@ A populated fleet — 3 connections, 6 nodes, 26 VMs/LXCs across two clusters an
 
 ## Getting started
 
+The web UI is embedded in the binary (see `web/embed.go`), and `web/dist` is gitignored — so on a fresh clone the frontend must be built before the Go build, or `go:embed` will fail:
+
 ```bash
+cd web
+npm install
+npm run build
+cd ..
 go build ./cmd/ferrum
 ./ferrum -config config.example.yaml
 ```
 
-The web UI is served from the same binary (see `web/embed.go`). For frontend development:
+For frontend development:
 
 ```bash
 cd web

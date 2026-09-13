@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { ErrorState } from "@/components/ui/error-state"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Meter } from "@/components/ui/meter"
@@ -19,6 +20,7 @@ import { StatusDot } from "@/components/ui/status-dot"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import { Timestamp } from "@/components/ui/timestamp"
 import { TypeChip } from "@/components/ui/type-chip"
 import { guestDotStatus } from "@/lib/utils"
 import {
@@ -37,7 +39,7 @@ import {
   type Snapshot,
   type StorageContentItem,
 } from "@/lib/api"
-import { buildConsoleUrl, buildShellUrl } from "@/lib/console"
+import { buildConsoleUrl, buildShellUrl, openConsolePopup } from "@/lib/console"
 import { FORMATTERS, GUEST_SERIES, buildRRDRows, type ChartRow, type SeriesSpec } from "@/lib/metrics"
 import { useLiveRates } from "@/lib/useLiveRates"
 import { formatBytes, formatRate, formatUptime } from "@/lib/utils"
@@ -153,7 +155,7 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
   const execStatusQuery = useQuery({
     queryKey: ["guest-agent-exec-status", connId, guest?.id, execPid],
     queryFn: () => api.get<GuestAgentExecStatus>(`${base}/agent/exec-status?pid=${execPid}`),
-    enabled: execPid !== null,
+    enabled: open && execPid !== null,
     refetchInterval: (query) => (query.state.data?.exited ? false : 1000),
   })
   const execMutation = useMutation({
@@ -211,9 +213,11 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
 
   const backupsQuery = useQuery({
     queryKey: ["guest-backups", connId, guest?.id],
-    queryFn: () => api.get<StorageContentItem[]>(`${base}/backups`),
+    queryFn: () => api.get<{ backups: StorageContentItem[]; warnings: string[] }>(`${base}/backups`),
     enabled: open,
   })
+  const backups = backupsQuery.data?.backups ?? []
+  const backupWarnings = backupsQuery.data?.warnings ?? []
   const [browsingBackup, setBrowsingBackup] = useState<string | null>(null)
   const setBackupProtected = useMutation({
     mutationFn: ({ volid, protect }: { volid: string; protect: boolean }) =>
@@ -312,7 +316,8 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
       return res
     },
     onSuccess: ({ wsPath, password }) => {
-      if (guest) window.open(buildConsoleUrl(connId, guest, wsPath, password), "_blank", "width=1024,height=768")
+      // The single-use ticket travels over postMessage, not the popup URL.
+      if (guest) openConsolePopup(buildConsoleUrl(connId, guest), "width=1024,height=768", { wsPath, password })
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to open console"),
   })
@@ -320,7 +325,7 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
   const openShell = useMutation({
     mutationFn: async () => api.post<{ wsPath: string }>(`${base}/shell`),
     onSuccess: ({ wsPath }) => {
-      if (guest) window.open(buildShellUrl(connId, guest.name ?? `guest #${guest.vmid}`, wsPath, guest.node, guest), "_blank", "width=900,height=600")
+      if (guest) openConsolePopup(buildShellUrl(connId, guest.name ?? `guest #${guest.vmid}`, guest.node, guest), "width=900,height=600", { wsPath })
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to open shell"),
   })
@@ -382,7 +387,7 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
     mutationFn: () => api.post(`${base}/clone`, { newId: Number(cloneNewId), full: true }),
     onSuccess: () => {
       toast.success("Clone started")
-      onOpenChange(false)
+      handleOpenChange(false)
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Clone failed"),
   })
@@ -392,7 +397,7 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
     mutationFn: () => api.post(`${base}/migrate`, { targetNode: migrateTarget, online: guest?.status === "running" }),
     onSuccess: () => {
       toast.success("Migration started")
-      onOpenChange(false)
+      handleOpenChange(false)
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Migration failed"),
   })
@@ -416,32 +421,60 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
   }
 
   const deleteGuest = useMutation({
-    mutationFn: () => api.delete(base),
+    mutationFn: async ({ stopFirst }: { stopFirst: boolean }) => {
+      if (stopFirst) {
+        // Running guests can't be deleted — shut down gracefully first, then
+        // poll until the guest is actually stopped (up to two minutes)
+        // before destroying it. The confirm copy tells the user this is
+        // what will happen; the old flow just told them to go do it
+        // themselves.
+        await api.post(`${base}/power/shutdown`)
+        const deadline = Date.now() + 120_000
+        for (;;) {
+          await new Promise((r) => setTimeout(r, 3000))
+          const s = await api.get<{ status?: string }>(`${base}/status`)
+          if (s.status !== "running") break
+          if (Date.now() > deadline) {
+            throw new Error("The guest didn't stop within two minutes, so nothing was deleted. Stop it manually and delete again.")
+          }
+        }
+      }
+      return api.delete(base)
+    },
     onSuccess: () => {
       toast.success("Guest deletion started")
       queryClient.invalidateQueries({ queryKey: ["inventory"] })
-      onOpenChange(false)
+      handleOpenChange(false)
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Delete failed"),
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "Delete failed"),
   })
 
   async function removeGuest() {
     if (!guest) return
+    const running = guest.status === "running"
     const ok = await confirm({
       title: `Delete ${guest.name} (#${guest.vmid})?`,
-      description:
-        guest.status === "running"
-          ? "Stop the guest first — running guests cannot be deleted. Deletion removes the guest and all of its disks from the cluster. This cannot be undone."
-          : "The guest and all of its disks are removed from the cluster. This cannot be undone.",
-      confirmLabel: "Delete guest",
+      description: running
+        ? "The guest is running — it will be shut down gracefully first, and deletion starts automatically once it's stopped (up to two minutes). All of its disks are removed. This cannot be undone."
+        : "The guest and all of its disks are removed from the cluster. This cannot be undone.",
+      confirmLabel: running ? "Stop & delete guest" : "Delete guest",
     })
-    if (ok) deleteGuest.mutate()
+    if (ok) deleteGuest.mutate({ stopFirst: running })
+  }
+
+  // Every close path funnels through here so an in-flight exec-status poll
+  // never outlives the dialog: the pid belongs to the guest it was started
+  // against, and carrying it over would poll the next guest's agent endpoint
+  // (or surface a stale run) once another guest is opened.
+  function handleOpenChange(next: boolean) {
+    if (!next) setExecPid(null)
+    onOpenChange(next)
   }
 
   if (!guest) return null
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle className="flex flex-wrap items-center gap-2">
@@ -509,9 +542,9 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
 
           <TabsContent value="config" className="space-y-3">
             {configQuery.isLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Skeleton className="h-24" />
             ) : configQuery.isError ? (
-              <p className="text-sm text-[var(--status-error)]">Couldn't load this guest's configuration.</p>
+              <ErrorState title="Couldn't load this guest's configuration" onRetry={configQuery.refetch} />
             ) : editingConfig ? (
               <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-3">
@@ -543,8 +576,8 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
                   <Textarea className="font-sans" rows={3} value={configForm.notes} onChange={(e) => setConfigForm((f) => ({ ...f, notes: e.target.value }))} />
                 </div>
                 <div className="flex gap-2">
-                  <Button size="sm" disabled={updateConfig.isPending} onClick={() => updateConfig.mutate()}>
-                    {updateConfig.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Save
+                  <Button size="sm" loading={updateConfig.isPending} onClick={() => updateConfig.mutate()}>
+                    Save
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => setEditingConfig(false)}>
                     <X className="h-3.5 w-3.5" /> Cancel
@@ -742,7 +775,7 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
             {metricAvgQuery.isLoading ? (
               <Skeleton className="h-40" />
             ) : metricAvgQuery.isError ? (
-              <p className="text-sm text-[var(--status-error)]">Couldn't load metrics for this guest.</p>
+              <ErrorState title="Couldn't load metrics for this guest" onRetry={metricAvgQuery.refetch} />
             ) : metricRows.length === 0 ? (
               <p className="text-sm text-[var(--text-muted)]">No historical data available yet.</p>
             ) : (
@@ -760,13 +793,11 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
           <TabsContent value="snapshots" className="space-y-3">
             <div className="flex gap-2">
               <Input placeholder="snapshot name" value={snapName} onChange={(e) => setSnapName(e.target.value)} />
-              <Button size="sm" disabled={!snapName || createSnap.isPending} onClick={() => createSnap.mutate()}>
-                <Camera className="h-3.5 w-3.5" /> Create
+              <Button size="sm" loading={createSnap.isPending} disabled={!snapName} onClick={() => createSnap.mutate()}>
+                {!createSnap.isPending && <Camera className="h-3.5 w-3.5" />} Create
               </Button>
             </div>
-            {snapshotsQuery.isError && (
-              <p className="text-sm text-[var(--status-error)]">Couldn't load snapshots for this guest.</p>
-            )}
+            {snapshotsQuery.isError && <ErrorState title="Couldn't load snapshots for this guest" onRetry={snapshotsQuery.refetch} />}
             {/* Scoped scroll instead of growing the whole dialog past the tab
                 bar — a guest with a long snapshot history stays inside this tab. */}
             <div className={(snapshotsQuery.data?.length ?? 0) > 8 ? "max-h-96 space-y-1.5 overflow-y-auto pr-1" : "space-y-1.5"}>
@@ -782,9 +813,8 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
                     </Button>
                     <Button
                       size="icon"
-                      variant="ghost"
+                      variant="ghost-danger"
                       aria-label={`Delete snapshot ${snap.name}`}
-                      className="hover:bg-[color-mix(in_oklab,var(--status-error)_12%,transparent)] hover:text-[var(--status-error)]"
                       onClick={() => removeSnapshot(snap.name)}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -800,21 +830,26 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
 
           <TabsContent value="backups" className="space-y-1.5">
             {backupsQuery.isLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Skeleton className="h-24" />
             ) : backupsQuery.isError ? (
-              <p className="text-sm text-[var(--status-error)]">Couldn't load backup archives for this guest.</p>
-            ) : (backupsQuery.data ?? []).length === 0 ? (
+              <ErrorState title="Couldn't load backup archives for this guest" onRetry={backupsQuery.refetch} />
+            ) : backups.length === 0 ? (
               <p className="text-sm text-[var(--text-muted)]">No backup archives found for this guest on its node's storage.</p>
             ) : (
-              <div className={(backupsQuery.data?.length ?? 0) > 8 ? "max-h-96 space-y-1.5 overflow-y-auto pr-1" : "space-y-1.5"}>
-              {(backupsQuery.data ?? [])
+              <div className={backups.length > 8 ? "max-h-96 space-y-1.5 overflow-y-auto pr-1" : "space-y-1.5"}>
+              {backups
                 .sort((a, b) => (b.ctime ?? 0) - (a.ctime ?? 0))
                 .map((b) => (
                   <div key={b.volid} className="flex items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
                     <div className="min-w-0">
                       <p className="truncate font-mono text-xs">{b.volid}</p>
                       <p className="text-xs text-[var(--text-muted)]">
-                        {b.ctime ? new Date(b.ctime * 1000).toLocaleString() : "unknown date"}
+                        {/* ctime is unix seconds — Timestamp wants an ISO string. */}
+                        {b.ctime ? (
+                          <Timestamp iso={new Date(b.ctime * 1000).toISOString()} mode="absolute" className="text-xs text-[var(--text-muted)]" />
+                        ) : (
+                          "unknown date"
+                        )}
                         {b.size ? ` · ${formatBytes(b.size)}` : ""}
                         {b.format ? ` · ${b.format}` : ""}
                       </p>
@@ -847,6 +882,11 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
                 ))}
               </div>
             )}
+            {backupWarnings.length > 0 && (
+              <p className="text-xs text-[var(--text-muted)]">
+                Some storages couldn't be scanned, so the list may be incomplete: {backupWarnings.join("; ")}
+              </p>
+            )}
             {browsingBackup && (
               <FileRestoreBrowser
                 connId={connId}
@@ -866,8 +906,8 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
               ) : (
                 <>
                   <div className="flex flex-wrap gap-2">
-                    <Button size="sm" variant="secondary" disabled={agentPing.isPending} onClick={() => agentPing.mutate()}>
-                      {agentPing.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Ping agent
+                    <Button size="sm" variant="secondary" loading={agentPing.isPending} onClick={() => agentPing.mutate()}>
+                      Ping agent
                     </Button>
                     <Button size="sm" variant="secondary" disabled={fsfreeze.isPending} onClick={() => void confirmFreeze()}>
                       <Snowflake className="h-3.5 w-3.5" /> Freeze filesystems
@@ -942,12 +982,12 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
 
           <TabsContent value="actions" className="space-y-4">
             <div className="flex gap-2">
-              <Button size="sm" variant="secondary" disabled={openConsole.isPending} onClick={() => openConsole.mutate()}>
-                {openConsole.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <SquareTerminal className="h-3.5 w-3.5" />}
+              <Button size="sm" variant="secondary" loading={openConsole.isPending} onClick={() => openConsole.mutate()}>
+                {!openConsole.isPending && <SquareTerminal className="h-3.5 w-3.5" />}
                 Open console
               </Button>
-              <Button size="sm" variant="secondary" disabled={openShell.isPending} onClick={() => openShell.mutate()}>
-                {openShell.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <SquareTerminal className="h-3.5 w-3.5" />}
+              <Button size="sm" variant="secondary" loading={openShell.isPending} onClick={() => openShell.mutate()}>
+                {!openShell.isPending && <SquareTerminal className="h-3.5 w-3.5" />}
                 Open shell
               </Button>
             </div>
@@ -1003,10 +1043,11 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
                 </Select>
                 <Button
                   size="sm"
-                  disabled={!moveDisk || !moveTargetStorage || moveDiskMutation.isPending}
+                  disabled={!moveDisk || !moveTargetStorage}
+                  loading={moveDiskMutation.isPending}
                   onClick={() => moveDiskMutation.mutate()}
                 >
-                  {moveDiskMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <HardDrive className="h-3.5 w-3.5" />} Move
+                  {!moveDiskMutation.isPending && <HardDrive className="h-3.5 w-3.5" />} Move
                 </Button>
               </div>
               <label className="flex items-center gap-2 text-xs text-[var(--text-muted)]">

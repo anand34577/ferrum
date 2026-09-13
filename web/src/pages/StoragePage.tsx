@@ -1,4 +1,4 @@
-import { useQueries, useQuery } from "@tanstack/react-query"
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { Database, HardDrive } from "lucide-react"
 import { useMemo } from "react"
@@ -8,6 +8,7 @@ import { CephDaemonsCard } from "@/components/storage/CephDaemonsCard"
 import { CephOsdsCard } from "@/components/storage/CephOsdsCard"
 import { CreateStorageDialog } from "@/components/storage/CreateStorageDialog"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { DataTable } from "@/components/ui/data-table"
 import { EmptyState } from "@/components/ui/empty-state"
@@ -16,6 +17,7 @@ import { Meter } from "@/components/ui/meter"
 import { PageHeader } from "@/components/ui/page-header"
 import { Skeleton } from "@/components/ui/skeleton"
 import { api, type CephOSD, type CephPool, type CephStatus, type ClusterResource, type ConnectionInventory } from "@/lib/api"
+import { chartToneFor } from "@/lib/fleet"
 import { formatBytes, formatPercentFine } from "@/lib/utils"
 
 const TYPE_COLORS = [
@@ -28,9 +30,11 @@ const TYPE_COLORS = [
 ]
 
 export function StoragePage() {
-  const { data: inventory, isLoading, isError, refetch } = useQuery({
+  const queryClient = useQueryClient()
+  const { data: inventory, isLoading, isError, refetch, isRefetching } = useQuery({
     queryKey: ["inventory"],
     queryFn: () => api.get<ConnectionInventory[]>("/inventory/"),
+    refetchInterval: 30_000,
   })
 
   const connections = inventory ?? []
@@ -220,6 +224,13 @@ export function StoragePage() {
         title="Storage"
         description="Storage pools and Ceph health across every connection."
         icon={Database}
+        onRefresh={() => {
+          void queryClient.invalidateQueries({ queryKey: ["inventory"] })
+          void queryClient.invalidateQueries({ queryKey: ["ceph-status"] })
+          void queryClient.invalidateQueries({ queryKey: ["ceph-pools"] })
+          void queryClient.invalidateQueries({ queryKey: ["ceph-osds"] })
+        }}
+        refreshing={isRefetching}
       />
 
       {isError ? (
@@ -256,7 +267,7 @@ export function StoragePage() {
                 domain={[0, 100]}
                 nameWidth={140}
                 rowHeight={28}
-                colorFor={(p) => (p.value >= 90 ? "var(--status-error)" : p.value >= 75 ? "var(--status-warn)" : undefined)}
+                colorFor={(p) => chartToneFor(p.value)}
                 labelFormatter={(v) => `${v.toFixed(0)}%`}
                 tooltipLabel="Usage"
               />
@@ -307,8 +318,11 @@ export function StoragePage() {
             .filter((t) => t.node)
             .map((t, i) => {
               const q = cephQueries[i]
-              // A failing/absent Ceph endpoint simply means the cluster doesn't
-              // run Ceph — say so instead of hiding the row entirely.
+              // Ceph endpoints fail per-connection; an error most often just
+              // means the cluster doesn't run Ceph, but it used to be
+              // indistinguishable from "no data" — surface the distinction
+              // (with the actual reason on hover) instead of collapsing both
+              // into "Not configured".
               return (
                 <div key={t.connId} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
                   <span className="truncate font-medium">{t.connName}</span>
@@ -322,8 +336,17 @@ export function StoragePage() {
                         {formatBytes(q.data.pgmap.bytes_used)} / {formatBytes(q.data.pgmap.bytes_total)}
                       </span>
                     </div>
+                  ) : q.isPending ? (
+                    <span className="text-xs text-[var(--text-muted)]">Checking…</span>
+                  ) : q.isError ? (
+                    <span className="flex items-center gap-2 text-xs text-[var(--status-warn)]" title={q.error instanceof Error ? q.error.message : undefined}>
+                      Ceph not detected or unavailable
+                      <Button size="sm" variant="ghost" onClick={() => void q.refetch()} aria-label={`Retry Ceph check for ${t.connName}`}>
+                        Retry
+                      </Button>
+                    </span>
                   ) : (
-                    <span className="text-xs text-[var(--text-muted)]">{q.isPending ? "Checking…" : "Not configured"}</span>
+                    <span className="text-xs text-[var(--text-muted)]">Not configured</span>
                   )}
                 </div>
               )

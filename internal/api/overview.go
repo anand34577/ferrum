@@ -23,6 +23,10 @@ const fleetFanoutLimit = 8
 // active Ferrum alerts. Widgets and the Overview page render directly from
 // this instead of re-aggregating raw cluster/resources client-side.
 type fleetOverview struct {
+	// PBS entries carry only the identity/health fields (Online, Error,
+	// LatencyMs, Alerts) — nodes/guests/storage are PVE concepts and stay
+	// zeroed rather than being mislabeled with a failed PVE probe.
+	Type         string `json:"type"`
 	ConnectionID string `json:"connectionId"`
 	Name         string `json:"name"`
 	Host         string `json:"host"`
@@ -94,19 +98,19 @@ type fleetAlertSummary struct {
 // fleetOverviewHandler aggregates every connection. Like /inventory, one
 // unreachable Proxmox host doesn't blank the fleet — it's reported inline.
 func (s *Server) fleetOverviewHandler(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.QueryContext(r.Context(), `SELECT id, name, host, port FROM connections ORDER BY name`)
+	rows, err := s.db.QueryContext(r.Context(), `SELECT id, name, type, host, port FROM connections ORDER BY name`)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	type conn struct {
-		ID, Name, Host string
-		Port           int
+		ID, Name, Type, Host string
+		Port                 int
 	}
 	var conns []conn
 	for rows.Next() {
 		var c conn
-		if err := rows.Scan(&c.ID, &c.Name, &c.Host, &c.Port); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Type, &c.Host, &c.Port); err != nil {
 			rows.Close()
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
@@ -152,7 +156,7 @@ func (s *Server) fleetOverviewHandler(w http.ResponseWriter, r *http.Request) {
 		go func(i int, c conn) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			out[i] = s.buildFleetEntry(r.Context(), c.ID, c.Name, c.Host, c.Port, alertsByConn[c.ID])
+			out[i] = s.buildFleetEntry(r.Context(), c.ID, c.Type, c.Name, c.Host, c.Port, alertsByConn[c.ID])
 		}(i, c)
 	}
 	wg.Wait()
@@ -160,13 +164,37 @@ func (s *Server) fleetOverviewHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (s *Server) buildFleetEntry(ctx context.Context, id, name, host string, port int, alerts fleetAlertSummary) fleetOverview {
+func (s *Server) buildFleetEntry(ctx context.Context, id, connType, name, host string, port int, alerts fleetAlertSummary) fleetOverview {
 	entry := fleetOverview{
+		Type:         connType,
 		ConnectionID: id, Name: name, Host: host, Port: port,
 		Alerts: alerts,
 	}
 
 	start := time.Now()
+	if connType == "pbs" {
+		// PBS hosts don't serve /cluster/resources — probed through the PVE
+		// client they'd all report offline. Check reachability with the
+		// cheapest authenticated PBS call instead; the PBS pages supply the
+		// usage detail, the fleet grid only needs up/down + latency here.
+		err := s.connections.RetryOnUnauthorized(id, func() error {
+			client, cerr := s.connections.PBSClientFor(ctx, id)
+			if cerr != nil {
+				return cerr
+			}
+			_, cerr = client.ListDatastores(ctx)
+			return cerr
+		})
+		entry.LatencyMs = time.Since(start).Milliseconds()
+		entry.CheckedAt = time.Now().UTC().Format(time.RFC3339)
+		if err != nil {
+			entry.Error = err.Error()
+			return entry
+		}
+		entry.Online = true
+		return entry
+	}
+
 	client, err := s.clientFor(ctx, id)
 	if err != nil {
 		entry.Error = err.Error()

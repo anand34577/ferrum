@@ -54,6 +54,9 @@ function AgentSettingsForm({ initial }: { initial: AgentSettings }) {
   const save = useMutation({
     mutationFn: (next: AgentSettings) => api.put<AgentSettings>("/admin/settings/agent", next),
     onSuccess: (data) => {
+      // This form saves instantly on every toggle/blur — without a toast the
+      // admin gets zero confirmation the change reached the server.
+      toast.success("Saved")
       queryClient.setQueryData(["admin", "settings", "agent"], data)
       queryClient.invalidateQueries({ queryKey: ["auth", "agent-status"] })
     },
@@ -75,7 +78,7 @@ function AgentSettingsForm({ initial }: { initial: AgentSettings }) {
             On by default. Turning this off immediately rejects every API-key request — existing keys are kept, not deleted, so re-enabling restores access without reissuing tokens.
           </p>
         </div>
-        <Switch checked={form.apiEnabled} onCheckedChange={(v) => update({ ...form, apiEnabled: v })} />
+        <Switch aria-label="Enable REST API" checked={form.apiEnabled} onCheckedChange={(v) => update({ ...form, apiEnabled: v })} />
       </div>
 
       {!form.apiEnabled && (
@@ -93,7 +96,7 @@ function AgentSettingsForm({ initial }: { initial: AgentSettings }) {
             a user-generated MCP token. Off by default — nothing outside Ferrum can reach this endpoint until you enable it.
           </p>
         </div>
-        <Switch checked={form.mcpEnabled} onCheckedChange={(v) => update({ ...form, mcpEnabled: v })} />
+        <Switch aria-label="Enable MCP" checked={form.mcpEnabled} onCheckedChange={(v) => update({ ...form, mcpEnabled: v })} />
       </div>
 
       {!form.mcpEnabled && (
@@ -122,6 +125,8 @@ function AgentSettingsForm({ initial }: { initial: AgentSettings }) {
           Raise it for complex multi-step questions, lower it to bound cost/latency against a slow provider.
         </p>
       </div>
+
+      <p className="text-xs text-[var(--text-faint)]">Changes are saved automatically.</p>
     </div>
   )
 }

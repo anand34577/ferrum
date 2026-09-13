@@ -17,7 +17,7 @@ func newTestService(t *testing.T) *Service {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	return NewService(db)
+	return NewService(db, nil)
 }
 
 func TestBootstrapCreatesFirstAdminOnly(t *testing.T) {

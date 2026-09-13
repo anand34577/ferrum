@@ -93,7 +93,7 @@ func (s *Server) seedBuiltinNeedleProvider(ctx context.Context) {
 	if anyDefault > 0 {
 		return
 	}
-	if err := s.clearOtherDefaultModels(ctx, modelID); err != nil {
+	if err := s.clearOtherDefaultModels(ctx, s.db, modelID); err != nil {
 		slog.Error("clearing other default AI models", "error", err)
 		return
 	}
@@ -404,11 +404,17 @@ type aiModelRequest struct {
 	IsDefault *bool  `json:"isDefault,omitempty"`
 }
 
+// execer is the subset of *store.DB and *store.Tx that clearOtherDefaultModels
+// needs, so the same statement can run standalone or inside a transaction.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 // clearOtherDefaultModels unsets is_default on every other model so at most
 // one stays the global default — enforced here rather than a DB constraint,
 // same spirit as the rest of Ferrum's settings handlers.
-func (s *Server) clearOtherDefaultModels(ctx context.Context, exceptID string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE ai_provider_models SET is_default = 0 WHERE id != ?`, exceptID)
+func (s *Server) clearOtherDefaultModels(ctx context.Context, db execer, exceptID string) error {
+	_, err := db.ExecContext(ctx, `UPDATE ai_provider_models SET is_default = 0 WHERE id != ?`, exceptID)
 	return err
 }
 
@@ -437,7 +443,16 @@ func (s *Server) addAIModel(w http.ResponseWriter, r *http.Request) {
 	isDefault := req.IsDefault != nil && *req.IsDefault
 	id := uuid.NewString()
 	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := s.db.ExecContext(r.Context(), `
+
+	// One transaction: the new row and clearing the previous default are
+	// all-or-nothing, so a failure can't leave two defaults (or none).
+	tx, err := s.db.Begin()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(r.Context(), `
 		INSERT INTO ai_provider_models (id, provider_id, label, model_id, is_default, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		id, providerID, req.Label, req.ModelID, boolToInt(isDefault), now,
 	); err != nil {
@@ -445,10 +460,14 @@ func (s *Server) addAIModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if isDefault {
-		if err := s.clearOtherDefaultModels(r.Context(), id); err != nil {
+		if err := s.clearOtherDefaultModels(r.Context(), tx, id); err != nil {
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
 	}
 	s.audit(r, "ai.model.create", "settings", req.Label)
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
@@ -484,7 +503,16 @@ func (s *Server) updateAIModel(w http.ResponseWriter, r *http.Request) {
 
 	query := "UPDATE ai_provider_models SET " + strings.Join(sets, ", ") + " WHERE id = ?"
 	args = append(args, modelID)
-	res, err := s.db.ExecContext(r.Context(), query, args...)
+
+	// One transaction: the model update and clearing the previous default
+	// are all-or-nothing, so a failure can't leave two defaults.
+	tx, err := s.db.Begin()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(r.Context(), query, args...)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -494,10 +522,14 @@ func (s *Server) updateAIModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.IsDefault != nil && *req.IsDefault {
-		if err := s.clearOtherDefaultModels(r.Context(), modelID); err != nil {
+		if err := s.clearOtherDefaultModels(r.Context(), tx, modelID); err != nil {
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
 	}
 	s.audit(r, "ai.model.update", "settings", modelID)
 	writeJSON(w, http.StatusOK, map[string]bool{"updated": true})

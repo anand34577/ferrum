@@ -268,15 +268,27 @@ func (s *Server) deleteDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := s.db.ExecContext(r.Context(), `DELETE FROM dashboards WHERE id = ? AND user_id = ?`, id, u.ID); err != nil {
+	// One transaction: the pointer cleanup must never run against a dashboard
+	// that didn't actually get deleted (or vice versa).
+	tx, err := s.db.Begin()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM dashboards WHERE id = ? AND user_id = ?`, id, u.ID); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	// If this was the account's active dashboard, clear the pointer so the
 	// next load falls back to the oldest remaining one instead of a 404.
-	if _, err := s.db.ExecContext(r.Context(),
+	if _, err := tx.Exec(
 		`UPDATE user_preferences SET active_dashboard_id = NULL WHERE user_id = ? AND active_dashboard_id = ?`, u.ID, id,
 	); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
 	}

@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { toast } from "sonner"
+import { useFormDirty } from "@/components/settings/use-form-dirty"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ErrorState } from "@/components/ui/error-state"
+import { FormError } from "@/components/ui/form-error"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -58,6 +60,15 @@ function LifecycleForm({ initial }: { initial: LifecycleSettings }) {
   const [retentionDays, setRetentionDays] = useState(String(initial.retentionDays || 0))
   const [enforce, setEnforce] = useState(initial.enforce)
 
+  // Remounted via key={JSON.stringify(query.data)} on save, so dirty resets
+  // for free. Both sides normalized the way a save normalizes them (the
+  // string field vs the number sent), so "dirty" means "saving now would
+  // send something new".
+  const dirty = useFormDirty(
+    { retentionDays: Number(retentionDays) || 0, enforce },
+    { retentionDays: initial.retentionDays || 0, enforce: initial.enforce },
+  )
+
   const save = useMutation({
     mutationFn: () =>
       api.put<LifecycleSettings>("/settings/lifecycle", {
@@ -68,7 +79,7 @@ function LifecycleForm({ initial }: { initial: LifecycleSettings }) {
       toast.success("Lifecycle settings saved")
       queryClient.setQueryData(["settings", "lifecycle"], data)
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to save lifecycle settings"),
+    // Failure surfaces inline via <FormError> below, not a toast.
   })
 
   return (
@@ -90,9 +101,12 @@ function LifecycleForm({ initial }: { initial: LifecycleSettings }) {
           <p className="text-sm font-medium">Enforce (actually delete)</p>
           <p className="text-xs text-[var(--text-muted)]">Off = dry-run only, every decision still logged to Audit Log.</p>
         </div>
-        <Switch checked={enforce} onCheckedChange={setEnforce} />
+        <Switch aria-label="Enforce (actually delete)" checked={enforce} onCheckedChange={setEnforce} />
       </div>
-      <Button size="sm" loading={save.isPending} onClick={() => save.mutate()}>
+      <FormError
+        message={save.error instanceof ApiError ? save.error.message : save.error ? "Couldn't save lifecycle settings — try again." : null}
+      />
+      <Button size="sm" loading={save.isPending} disabled={!dirty} onClick={() => save.mutate()}>
         Save
       </Button>
     </>

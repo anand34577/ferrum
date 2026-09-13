@@ -33,13 +33,13 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { useConfirm } from "@/components/ui/confirm-dialog"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { EmptyState } from "@/components/ui/empty-state"
 import { ErrorState } from "@/components/ui/error-state"
 import { PageHeader } from "@/components/ui/page-header"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
-import { api, type ToolCallRecord, type UsableAIProvider } from "@/lib/api"
+import { api, notifyUnauthorized, type ToolCallRecord, type UsableAIProvider } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
 import { type Conversation, type DisplayMessage, type MessageUsage, type ReasoningEffort, type ToolCallEntry, useAIConversations } from "@/lib/useAIConversations"
 import { cn, formatRelativeTime } from "@/lib/utils"
@@ -181,8 +181,11 @@ export function AIAssistantPage() {
     queryKey: ["ai", "providers"],
     queryFn: () => api.get<UsableAIProvider[]>("/ai/providers"),
   })
-  const providers = providersQuery.data ?? []
-  const flatModels = useMemo(() => flattenModels(providers), [providers])
+  // Memo inputs must be referentially stable: react-query's structural
+  // sharing keeps `data` the same object between renders, whereas a
+  // `data ?? []` fallback allocates a fresh array every render and would
+  // defeat the memo.
+  const flatModels = useMemo(() => flattenModels(providersQuery.data ?? []), [providersQuery.data])
   const defaultModelId = flatModels.find((m) => m.isDefault)?.modelRowId ?? flatModels[0]?.modelRowId ?? ""
 
   const { conversations, active, activeId, setActiveId, createConversation, deleteConversation, deleteConversations, updateConversation, setMessages } =
@@ -196,6 +199,9 @@ export function AIAssistantPage() {
   const [pendingReasoningEffort, setPendingReasoningEffort] = useState<ReasoningEffort>("")
 
   const [input, setInput] = useState("")
+  // Escape dismisses the slash-command popup without wiping what was typed —
+  // it also lets someone send a literal message that starts with "/".
+  const [slashDismissed, setSlashDismissed] = useState(false)
   const [streamingText, setStreamingText] = useState<string | null>(null)
   const [streamingReasoning, setStreamingReasoning] = useState<string | null>(null)
   const [toolActivity, setToolActivity] = useState<ToolActivity[]>([])
@@ -261,9 +267,9 @@ export function AIAssistantPage() {
     : committedMessages
 
   const slashMatches = useMemo(() => {
-    if (!input.startsWith("/") || input.includes(" ") || input.includes("\n")) return []
+    if (slashDismissed || !input.startsWith("/") || input.includes(" ") || input.includes("\n")) return []
     return SLASH_COMMANDS.filter((c) => c.cmd.startsWith(input.toLowerCase()))
-  }, [input])
+  }, [input, slashDismissed])
 
   useEffect(() => setSlashIndex(0), [slashMatches.length])
 
@@ -307,6 +313,18 @@ export function AIAssistantPage() {
     else setNewBelow(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displayMessages.length, streamingText, streamingReasoning, toolActivity.length])
+
+  // Leaving the page mid-stream must abort the in-flight chat request — the
+  // SSE reader would otherwise keep pulling tokens for a page that no longer
+  // exists. Aborting lands in the same AbortError path as the Stop button
+  // (see runCompletion's catch), so the finally block still runs its usual
+  // cleanup and partial-commit handling.
+  useEffect(
+    () => () => {
+      abortRef.current?.abort()
+    },
+    [],
+  )
 
   function handleScroll() {
     const el = scrollRef.current
@@ -358,6 +376,10 @@ export function AIAssistantPage() {
         }),
       })
       if (!res.ok || !res.body) {
+        // Raw fetch() bypasses lib/api's request(), so 401s need routing
+        // through the same handler it uses — an expired session should land
+        // on the login page, not surface as a chat error bubble.
+        if (res.status === 401) notifyUnauthorized()
         const data = await res.json().catch(() => undefined)
         throw new Error(data?.error ?? `Request failed (${res.status})`)
       }
@@ -508,7 +530,7 @@ export function AIAssistantPage() {
   }
 
   function copyMessage(content: string) {
-    navigator.clipboard.writeText(content).then(() => toast.success("Copied to clipboard"))
+    navigator.clipboard.writeText(content).then(() => toast.success("Copied to clipboard")).catch(() => toast.error("Could not copy to clipboard"))
   }
 
   const lastMessageIsAssistant = committedMessages.at(-1)?.role === "assistant"
@@ -566,7 +588,7 @@ export function AIAssistantPage() {
       <div className="flex min-h-0 flex-1 gap-4 overflow-hidden">
         {/* Conversation history sidebar — desktop only; mobile reaches the
             same list through the History button in the chat panel's header. */}
-        <div className="hidden w-60 shrink-0 flex-col gap-2 md:flex">
+        <div className="hidden w-60 shrink-0 flex-col gap-2 lg:flex">
           <div className="flex items-center gap-1">
             <Button size="sm" variant="secondary" className="flex-1 justify-start" onClick={() => createConversation(modelId, reasoningEffort)}>
               <MessageSquarePlus className="h-3.5 w-3.5" /> New chat
@@ -604,12 +626,13 @@ export function AIAssistantPage() {
         </div>
 
         {/* Mobile conversation history — the sidebar above is hidden below
-            md, so this is the only way to switch or delete a conversation
+            lg, so this is the only way to switch or delete a conversation
             on a narrow viewport. */}
         <Dialog open={historyOpen} onOpenChange={(open) => { setHistoryOpen(open); if (!open) exitSelectMode() }}>
           <DialogContent className="max-w-sm">
             <DialogHeader>
               <DialogTitle>Conversations</DialogTitle>
+              <DialogDescription>Stored in this browser only — they don&apos;t sync to other devices or accounts.</DialogDescription>
             </DialogHeader>
             <div className="flex items-center gap-1">
               <Button size="sm" variant="secondary" className="flex-1 justify-start" onClick={() => { createConversation(modelId, reasoningEffort); setHistoryOpen(false) }}>
@@ -700,11 +723,10 @@ export function AIAssistantPage() {
                   <SelectItem value="high">High reasoning</SelectItem>
                 </SelectContent>
               </Select>
-              <Badge variant="brand" className="hidden sm:inline-flex">Fleet-focused</Badge>
-              <Button size="sm" variant="ghost" className="md:hidden" onClick={() => setHistoryOpen(true)}>
+              <Button size="sm" variant="ghost" className="lg:hidden" onClick={() => setHistoryOpen(true)}>
                 <History className="h-3.5 w-3.5" /> History
               </Button>
-              <Button size="sm" variant="ghost" className="md:hidden" onClick={() => createConversation(modelId, reasoningEffort)}>
+              <Button size="sm" variant="ghost" className="lg:hidden" onClick={() => createConversation(modelId, reasoningEffort)}>
                 <MessageSquarePlus className="h-3.5 w-3.5" /> New
               </Button>
             </div>
@@ -893,7 +915,11 @@ export function AIAssistantPage() {
             <div className="flex items-end gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1.5 pl-3.5 shadow-sm transition-colors focus-within:border-brand-500/60 focus-within:ring-2 focus-within:ring-[var(--ring)]">
               <textarea
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                aria-label="Message the AI assistant"
+                onChange={(e) => {
+                  setInput(e.target.value)
+                  setSlashDismissed(false)
+                }}
                 onKeyDown={(e) => {
                   if (slashMatches.length > 0) {
                     if (e.key === "ArrowDown") {
@@ -912,7 +938,8 @@ export function AIAssistantPage() {
                       return
                     }
                     if (e.key === "Escape") {
-                      setInput("")
+                      e.preventDefault()
+                      setSlashDismissed(true)
                       return
                     }
                   }
@@ -926,11 +953,11 @@ export function AIAssistantPage() {
                 className="max-h-32 flex-1 resize-none bg-transparent py-1.5 text-sm outline-none"
               />
               {streaming ? (
-                <Button variant="destructive" className="shrink-0" size="icon" onClick={stop} title="Stop">
+                <Button variant="secondary" className="shrink-0" size="icon" onClick={stop} title="Stop generating" aria-label="Stop generating">
                   <Square className="h-3.5 w-3.5" />
                 </Button>
               ) : (
-                <Button className="shrink-0" size="icon" onClick={() => send()} disabled={!input.trim()} title="Send">
+                <Button className="shrink-0" size="icon" onClick={() => send()} disabled={!input.trim()} title="Send" aria-label="Send message">
                   <Send className="h-3.5 w-3.5" />
                 </Button>
               )}
@@ -964,6 +991,7 @@ function ActivityPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (o
           <DialogTitle className="flex items-center gap-2">
             <Activity className="h-4 w-4" /> Your AI &amp; MCP activity
           </DialogTitle>
+          <DialogDescription>Every tool call made on your behalf — by the assistant or an MCP client using your keys — most recent first.</DialogDescription>
         </DialogHeader>
         <div className="max-h-[60vh] space-y-1.5 overflow-y-auto">
           {query.isLoading ? (
@@ -1004,8 +1032,6 @@ function ActivityPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (o
   )
 }
 
-/** The conversation-switcher list — shared by the desktop sidebar and the
- * mobile History dialog so they can never drift into two implementations. */
 /** Shown above the conversation list while multi-select is active — the
  * running count plus the one bulk action, so clearing out old chats doesn't
  * mean confirming and clicking the trash icon once per conversation. */
@@ -1025,6 +1051,8 @@ function SelectionBar({ count, total, onSelectAll, onDelete }: { count: number; 
   )
 }
 
+/** The conversation-switcher list — shared by the desktop sidebar and the
+ * mobile History dialog so they can never drift into two implementations. */
 function ConversationList({
   conversations,
   activeId,
@@ -1048,37 +1076,47 @@ function ConversationList({
   return (
     <>
       {conversations.map((c) => (
-        <button
+        // A plain wrapper (not one big <button>) so the per-row delete control
+        // can be a real, keyboard-focusable button instead of an SVG with an
+        // onClick — and so no interactive element ends up nested inside another.
+        <div
           key={c.id}
-          type="button"
-          onClick={() => (selectMode ? onToggleSelect?.(c.id) : onSelect(c.id))}
           className={cn(
-            "group relative flex w-full items-center justify-between gap-1 rounded-lg py-2 pr-2.5 pl-3.5 text-left text-sm transition-colors",
+            "group relative flex w-full items-center gap-1 rounded-lg text-sm transition-colors",
             c.id === activeId ? "bg-[var(--bg-muted)] text-[var(--text)]" : "text-[var(--text-muted)] hover:bg-[var(--bg-surface-hover)]",
           )}
         >
           {c.id === activeId && <span className="absolute top-1.5 bottom-1.5 left-0 w-[3px] rounded-full bg-brand-500" aria-hidden />}
           {selectMode && (
-            <Checkbox
-              checked={selectedIds?.has(c.id) ?? false}
-              onClick={(e) => e.stopPropagation()}
-              onCheckedChange={() => onToggleSelect?.(c.id)}
-            />
+            <span className="pl-3.5">
+              <Checkbox
+                checked={selectedIds?.has(c.id) ?? false}
+                aria-label={`Select ${c.title}`}
+                onCheckedChange={() => onToggleSelect?.(c.id)}
+              />
+            </span>
           )}
-          <span className="min-w-0 flex-1">
+          <button
+            type="button"
+            onClick={() => (selectMode ? onToggleSelect?.(c.id) : onSelect(c.id))}
+            aria-current={c.id === activeId ? "true" : undefined}
+            className="min-w-0 flex-1 rounded-lg py-2 pr-2.5 pl-3.5 text-left"
+          >
             <span className="block truncate">{c.title}</span>
             <span className="block text-[10px] text-[var(--text-muted)]">{formatRelativeTime(c.updatedAt)}</span>
-          </span>
+          </button>
           {!selectMode && (
-            <Trash2
-              className="h-3 w-3 shrink-0 opacity-0 transition-opacity hover:text-[var(--status-error)] group-hover:opacity-100"
-              onClick={(e) => {
-                e.stopPropagation()
-                onDelete(c.id, c.title)
-              }}
-            />
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              className="mr-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 hover:bg-[color-mix(in_oklab,var(--status-error)_12%,transparent)] hover:text-[var(--status-error)]"
+              aria-label={`Delete ${c.title}`}
+              onClick={() => onDelete(c.id, c.title)}
+            >
+              <Trash2 className="h-3 w-3" />
+            </Button>
           )}
-        </button>
+        </div>
       ))}
     </>
   )
@@ -1168,7 +1206,7 @@ function ThinkingBlock({ text, active }: { text: string; active: boolean }) {
 
 function ThinkingDots() {
   return (
-    <span className="flex items-center gap-1 py-0.5" aria-label="Thinking">
+    <span className="flex items-center gap-1 py-0.5" role="status" aria-label="Thinking">
       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--text-muted)] [animation-delay:-0.3s]" />
       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--text-muted)] [animation-delay:-0.15s]" />
       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--text-muted)]" />

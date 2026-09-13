@@ -32,8 +32,12 @@ type bulkActionRequest struct {
 	// Action-specific parameters.
 	SnapshotName string `json:"snapshotName,omitempty"` // required for action=="snapshot"
 	Tags         string `json:"tags,omitempty"`         // used for action=="tag" (empty clears tags)
-	PurgeJobs    bool   `json:"purgeJobs,omitempty"`     // optional for action=="delete"
+	PurgeJobs    bool   `json:"purgeJobs,omitempty"`    // optional for action=="delete"
 }
+
+// maxBulkTargets bounds one request's target list — a body larger than that
+// is abuse or a client bug, not a real bulk operation.
+const maxBulkTargets = 500
 
 // bulkActionResult reports one target's outcome. Results are collected into
 // an array (not failed-fast) so a partial failure across a large or mixed
@@ -70,6 +74,10 @@ func (s *Server) bulkGuestAction(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.Targets) == 0 {
 		writeErrorMsg(w, http.StatusBadRequest, "targets is required")
+		return
+	}
+	if len(req.Targets) > maxBulkTargets {
+		writeErrorMsg(w, http.StatusBadRequest, "too many targets (max 500)")
 		return
 	}
 	if !bulkPowerActions[req.Action] && !bulkNonPowerActions[req.Action] {

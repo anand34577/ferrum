@@ -18,7 +18,7 @@ import (
 type Settings struct {
 	Enabled       bool
 	IntervalHours int
-	Recipients    []string // extra emails, on top of the admin's global SMTP "to" list
+	Recipients    []string  // extra emails, on top of the admin's global SMTP "to" list
 	LastSentAt    time.Time // zero means never sent
 }
 

@@ -1,15 +1,19 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
-import { CheckCircle2, Layers, Loader2, XCircle } from "lucide-react"
+import type { ColumnDef } from "@tanstack/react-table"
+import { CheckCircle2, Layers, XCircle } from "lucide-react"
 import { useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
-import { EmptyState } from "@/components/ui/empty-state"
+import { useConfirm } from "@/components/ui/confirm-dialog"
+import { DataTable } from "@/components/ui/data-table"
+import { ErrorState } from "@/components/ui/error-state"
 import { Input } from "@/components/ui/input"
 import { PageHeader } from "@/components/ui/page-header"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { TypeChip } from "@/components/ui/type-chip"
 import { api, ApiError, type ClusterResource, type ConnectionInventory } from "@/lib/api"
+import { cn } from "@/lib/utils"
 
 // Mirrors api.bulkTarget / api.bulkActionResult (internal/api/bulk.go).
 interface BulkTarget {
@@ -45,22 +49,23 @@ interface GuestRow {
 
 /**
  * Fleet-wide bulk operations: pick guests from any connection/cluster, pick
- * one action, run it across all of them in a single request — the one thing
- * no single-connection Proxmox UI (or PDM) can do. Self-contained: pulls its
- * own guest list from the existing inventory endpoint and is not wired into
- * routing/navigation yet (a follow-up pass does that for everything built
- * this round at once).
+ * one action, run it across all of them in a single request — power actions,
+ * snapshots, tags, or deletion — with per-guest results. Reachable from the
+ * sidebar's Bulk Operations entry (admin only).
  */
 export function BulkOperationsPage() {
-  const [selected, setSelected] = useState<Map<string, GuestRow>>(new Map())
+  const confirm = useConfirm()
+  // Selection is a Set of row ids — DataTable's selection API. The GuestRow
+  // behind each id is re-derived from `rows` wherever the full object is
+  // needed (running the action, naming guests in the confirms).
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   const [action, setAction] = useState<BulkAction>("start")
   const [snapshotName, setSnapshotName] = useState("")
   const [tagValue, setTagValue] = useState("")
   const [purgeJobs, setPurgeJobs] = useState(false)
   const [results, setResults] = useState<BulkActionResult[] | null>(null)
-  const [filter, setFilter] = useState("")
 
-  const { data: inventory, isLoading, isError } = useQuery({
+  const { data: inventory, isLoading, isError, refetch } = useQuery({
     queryKey: ["inventory"],
     queryFn: () => api.get<ConnectionInventory[]>("/inventory/"),
   })
@@ -78,48 +83,15 @@ export function BulkOperationsPage() {
     return out
   }, [inventory])
 
-  const filtered = useMemo(() => {
-    const q = filter.trim().toLowerCase()
-    if (!q) return rows
-    return rows.filter(
-      (r) =>
-        (r.guest.name ?? "").toLowerCase().includes(q) ||
-        String(r.guest.vmid ?? "").includes(q) ||
-        r.guest.node.toLowerCase().includes(q) ||
-        r.connName.toLowerCase().includes(q) ||
-        (r.guest.tags ?? "").toLowerCase().includes(q),
-    )
-  }, [rows, filter])
-
   function key(r: GuestRow) {
     return `${r.connId}/${r.guest.type}/${r.guest.node}/${r.guest.vmid}`
   }
 
-  function toggle(r: GuestRow) {
-    setSelected((prev) => {
-      const next = new Map(prev)
-      const k = key(r)
-      if (next.has(k)) next.delete(k)
-      else next.set(k, r)
-      return next
-    })
-  }
-
-  function toggleAllFiltered() {
-    setSelected((prev) => {
-      const next = new Map(prev)
-      const allSelected = filtered.length > 0 && filtered.every((r) => next.has(key(r)))
-      for (const r of filtered) {
-        if (allSelected) next.delete(key(r))
-        else next.set(key(r), r)
-      }
-      return next
-    })
-  }
+  const selectedRows = useMemo(() => rows.filter((r) => selected.has(key(r))), [rows, selected])
 
   const runMutation = useMutation({
     mutationFn: async () => {
-      const targets: BulkTarget[] = Array.from(selected.values()).map((r) => ({
+      const targets: BulkTarget[] = selectedRows.map((r) => ({
         connId: r.connId,
         type: r.guest.type as "qemu" | "lxc",
         node: r.guest.node,
@@ -139,6 +111,128 @@ export function BulkOperationsPage() {
   const needsSnapshotName = action === "snapshot" && snapshotName.trim() === ""
   const canRun = selected.size > 0 && !needsSnapshotName && !runMutation.isPending
 
+  // The two actions that destroy work or availability confirm first — this is
+  // the one screen that can take down dozens of guests (or delete them
+  // outright) in a single click, the same guard Inventory's bulk bar and the
+  // guest detail dialog put in front of their hard-stop/delete paths.
+  // Graceful actions (start/shutdown/reboot/suspend/resume/snapshot/tag)
+  // stay one-click, matching PVE's list UX.
+  async function run() {
+    if (action === "delete") {
+      const ok = await confirm({
+        title: `Delete ${selected.size} guest${selected.size === 1 ? "" : "s"}?`,
+        description: (
+          <>
+            Each guest and all of its disks is removed from its cluster. This cannot be undone.
+            {purgeJobs && " Associated backup jobs are purged too."}
+            <br />
+            <span className="mt-1.5 block text-[var(--text-muted)]">{selectedNameList()}</span>
+          </>
+        ),
+        confirmLabel: `Delete ${selected.size} guest${selected.size === 1 ? "" : "s"}`,
+      })
+      if (!ok) return
+    }
+    if (action === "stop") {
+      const ok = await confirm({
+        title: `Hard-stop ${selected.size} guest${selected.size === 1 ? "" : "s"}?`,
+        description: (
+          <>
+            Each guest is stopped like pulling the power cord — unsaved data inside the guests is lost.
+            <br />
+            <span className="mt-1.5 block text-[var(--text-muted)]">{selectedNameList()}</span>
+          </>
+        ),
+        confirmLabel: `Stop ${selected.size} guest${selected.size === 1 ? "" : "s"}`,
+      })
+      if (!ok) return
+    }
+    runMutation.mutate()
+  }
+
+  // First 5 names + overflow count — enough to catch "wait, that's not who I
+  // meant to select" without turning the confirm into a scrollable list.
+  function selectedNameList() {
+    const names = selectedRows.map((r) => r.guest.name ?? `#${r.guest.vmid}`)
+    return names.length <= 5 ? names.join(", ") : `${names.slice(0, 5).join(", ")} and ${names.length - 5} more`
+  }
+
+  const resultSummary = useMemo(() => {
+    if (!results) return null
+    const ok = results.filter((r) => r.success).length
+    return { ok, failed: results.length - ok }
+  }, [results])
+
+  // Tags ride along in the guest column's searchable value: DataTable's
+  // built-in search only sees accessor values and the old ad-hoc filter
+  // matched tags too, but there's no tags column to index.
+  const columns = useMemo<ColumnDef<GuestRow>[]>(
+    () => [
+      {
+        id: "guest",
+        header: "Guest",
+        accessorFn: (r) => `${r.guest.name || `#${r.guest.vmid}`} ${r.guest.tags ?? ""}`,
+        cell: (c) => (
+          <span className="flex items-center gap-2">
+            <TypeChip type={c.row.original.guest.type} />
+            <span className="truncate">{c.row.original.guest.name || `#${c.row.original.guest.vmid}`}</span>
+          </span>
+        ),
+      },
+      {
+        id: "vmid",
+        header: "VMID",
+        accessorFn: (r) => r.guest.vmid ?? 0,
+        cell: (c) => <span className="font-mono text-[var(--text-muted)]">{c.getValue<number>()}</span>,
+      },
+      {
+        id: "node",
+        header: "Node",
+        accessorFn: (r) => r.guest.node,
+        cell: (c) => <span className="text-[var(--text-muted)]">{c.getValue<string>()}</span>,
+      },
+      {
+        id: "connection",
+        header: "Connection",
+        accessorFn: (r) => r.connName,
+        cell: (c) => <span className="text-[var(--text-muted)]">{c.getValue<string>()}</span>,
+      },
+      {
+        id: "status",
+        header: "Status",
+        accessorFn: (r) => r.guest.status ?? "",
+        // Shown but not searched, so the search matches exactly what the old
+        // ad-hoc filter matched.
+        enableGlobalFilter: false,
+        cell: (c) => <span className="text-[var(--text-muted)]">{c.getValue<string>() || "-"}</span>,
+      },
+      {
+        id: "result",
+        header: "Result",
+        enableSorting: false,
+        cell: (c) => {
+          const r = c.row.original
+          const result = results?.find(
+            (res) => res.connId === r.connId && res.type === r.guest.type && res.node === r.guest.node && res.vmid === r.guest.vmid,
+          )
+          if (!result) return null
+          return result.success ? (
+            <span className="inline-flex items-center gap-1 text-[var(--status-ok)]">
+              <CheckCircle2 className="h-3.5 w-3.5" /> OK
+            </span>
+          ) : (
+            // Error text stays inline (title only as a tooltip) — a failure
+            // you have to hover for is a failure nobody reads.
+            <span className="inline-flex items-center gap-1 text-[var(--status-error)]" title={result.error}>
+              <XCircle className="h-3.5 w-3.5" /> {result.error}
+            </span>
+          )
+        },
+      },
+    ],
+    [results],
+  )
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
@@ -148,150 +242,92 @@ export function BulkOperationsPage() {
       />
 
       {isError && (
-        <Card>
-          <CardContent className="py-6 text-center text-sm text-[var(--status-error)]">
-            Failed to load fleet inventory.
-          </CardContent>
-        </Card>
+        <ErrorState
+          title="Couldn't load your fleet inventory"
+          message="Guests and nodes could not be fetched, so there is nothing to select yet. Check your connections and try again."
+          onRetry={() => refetch()}
+        />
       )}
 
-      <Card>
-        <CardContent className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-1 flex-wrap items-center gap-2">
-            <Input
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              placeholder="Filter by name, VMID, node, tag…"
-              className="max-w-xs"
-            />
-            <span className="text-xs text-[var(--text-muted)]">
-              {selected.size} of {rows.length} guest{rows.length === 1 ? "" : "s"} selected
-            </span>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <Select value={action} onValueChange={(v) => setAction(v as BulkAction)}>
-              <SelectTrigger className="w-40">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {ACTIONS.map((a) => (
-                  <SelectItem key={a.value} value={a.value}>
-                    {a.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            {action === "snapshot" && (
-              <Input
-                value={snapshotName}
-                onChange={(e) => setSnapshotName(e.target.value)}
-                placeholder="Snapshot name"
-                className="w-40"
-              />
-            )}
-            {action === "tag" && (
-              <Input
-                value={tagValue}
-                onChange={(e) => setTagValue(e.target.value)}
-                placeholder="tags (comma/semicolon)"
-                className="w-48"
-              />
-            )}
-            {action === "delete" && (
-              <label className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
-                <Checkbox checked={purgeJobs} onCheckedChange={(v) => setPurgeJobs(v === true)} />
-                Purge backup jobs
-              </label>
-            )}
-
-            <Button
-              variant={action === "delete" ? "destructive" : "default"}
-              disabled={!canRun}
-              onClick={() => runMutation.mutate()}
-            >
-              {runMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
-              Run on {selected.size} guest{selected.size === 1 ? "" : "s"}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
       {runMutation.isError && (
-        <p className="text-sm text-[var(--status-error)]">
-          {runMutation.error instanceof ApiError ? runMutation.error.message : "Request failed."}
+        <p role="alert" className="text-sm text-[var(--status-error)]">
+          {runMutation.error instanceof ApiError ? runMutation.error.message : "The bulk action could not be submitted — nothing was run. Try again."}
         </p>
       )}
 
-      <Card className="overflow-hidden">
-        {isLoading ? (
-          <CardContent className="py-10 text-center text-sm text-[var(--text-muted)]">Loading inventory…</CardContent>
-        ) : filtered.length === 0 ? (
-          <CardContent>
-            <EmptyState icon={Layers} title="No guests match" description="Adjust the filter, or add a connection first." />
-          </CardContent>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b border-[var(--border)] text-xs text-[var(--text-muted)]">
-                <tr>
-                  <th className="w-10 px-4 py-2">
-                    <Checkbox
-                      checked={filtered.length > 0 && filtered.every((r) => selected.has(key(r)))}
-                      onCheckedChange={() => toggleAllFiltered()}
-                      aria-label="Select all filtered guests"
-                    />
-                  </th>
-                  <th className="px-2 py-2">Guest</th>
-                  <th className="px-2 py-2">VMID</th>
-                  <th className="px-2 py-2">Node</th>
-                  <th className="px-2 py-2">Connection</th>
-                  <th className="px-2 py-2">Status</th>
-                  <th className="px-2 py-2">Result</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((r) => {
-                  const k = key(r)
-                  const checked = selected.has(k)
-                  const result = results?.find(
-                    (res) => res.connId === r.connId && res.type === r.guest.type && res.node === r.guest.node && res.vmid === r.guest.vmid,
-                  )
-                  return (
-                    <tr key={k} className="border-b border-[var(--border)]/60 last:border-0 hover:bg-[var(--bg-surface-hover)]">
-                      <td className="px-4 py-2">
-                        <Checkbox checked={checked} onCheckedChange={() => toggle(r)} aria-label={`Select ${r.guest.name ?? r.guest.vmid}`} />
-                      </td>
-                      <td className="px-2 py-2">
-                        <span className="flex items-center gap-2">
-                          <TypeChip type={r.guest.type} />
-                          <span className="truncate">{r.guest.name || `#${r.guest.vmid}`}</span>
-                        </span>
-                      </td>
-                      <td className="px-2 py-2 font-mono text-xs text-[var(--text-muted)]">{r.guest.vmid}</td>
-                      <td className="px-2 py-2 text-xs text-[var(--text-muted)]">{r.guest.node}</td>
-                      <td className="px-2 py-2 text-xs text-[var(--text-muted)]">{r.connName}</td>
-                      <td className="px-2 py-2 text-xs text-[var(--text-muted)]">{r.guest.status ?? "-"}</td>
-                      <td className="px-2 py-2">
-                        {result &&
-                          (result.success ? (
-                            <span className="inline-flex items-center gap-1 text-xs text-[var(--status-ok)]">
-                              <CheckCircle2 className="h-3.5 w-3.5" /> OK
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 text-xs text-[var(--status-error)]" title={result.error}>
-                              <XCircle className="h-3.5 w-3.5" /> {result.error}
-                            </span>
-                          ))}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+      {resultSummary && (
+        <p className="text-sm text-[var(--text-muted)]" role="status" aria-live="polite">
+          <span className="font-medium text-[var(--status-ok)]">{resultSummary.ok} succeeded</span>
+          {" · "}
+          <span className={cn("font-medium", resultSummary.failed > 0 && "text-[var(--status-error)]")}>{resultSummary.failed} failed</span>
+          {" — per-guest results below"}
+        </p>
+      )}
+
+      <Card>
+        <CardContent className="pt-4">
+          <DataTable
+            columns={columns}
+            data={rows}
+            loading={isLoading}
+            pageSize={15}
+            searchPlaceholder="Filter by name, VMID, node, tag…"
+            emptyMessage="No guests match — adjust the filter, or add a connection first."
+            selection={{ rowId: key, selected, onSelectedChange: setSelected }}
+            toolbar={
+              <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
+                <span className="text-xs text-[var(--text-muted)]" aria-live="polite">
+                  {selected.size} of {rows.length} guest{rows.length === 1 ? "" : "s"} selected
+                </span>
+
+                <Select value={action} onValueChange={(v) => setAction(v as BulkAction)}>
+                  <SelectTrigger className="w-40" aria-label="Bulk action">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ACTIONS.map((a) => (
+                      <SelectItem key={a.value} value={a.value}>
+                        {a.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                {action === "snapshot" && (
+                  <Input
+                    value={snapshotName}
+                    onChange={(e) => setSnapshotName(e.target.value)}
+                    placeholder="Snapshot name"
+                    className="w-40"
+                  />
+                )}
+                {action === "tag" && (
+                  <Input
+                    value={tagValue}
+                    onChange={(e) => setTagValue(e.target.value)}
+                    placeholder="tags (comma/semicolon)"
+                    className="w-48"
+                  />
+                )}
+                {action === "delete" && (
+                  <label className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
+                    <Checkbox checked={purgeJobs} onCheckedChange={(v) => setPurgeJobs(v === true)} />
+                    Purge backup jobs
+                  </label>
+                )}
+
+                <Button
+                  variant={action === "delete" ? "destructive" : "default"}
+                  disabled={!canRun}
+                  loading={runMutation.isPending}
+                  onClick={() => void run()}
+                >
+                  Run on {selected.size} guest{selected.size === 1 ? "" : "s"}
+                </Button>
+              </div>
+            }
+          />
+        </CardContent>
       </Card>
     </div>
   )
