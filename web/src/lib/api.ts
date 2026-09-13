@@ -63,7 +63,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (data?.code) {
       for (const handler of errorCodeHandlers) handler(data.code)
     }
-    throw new ApiError(res.status, data?.error ?? res.statusText, data?.code)
+    // `||` (not ??) so empty values fall through: statusText is "" over
+    // HTTP/2, and an empty message renders as an icon-only toast. The typeof
+    // guard keeps a non-string `error` (e.g. an OpenAI-style object from a
+    // proxy) from becoming "[object Object]".
+    throw new ApiError(
+      res.status,
+      (typeof data?.error === "string" && data.error) || res.statusText || `Request failed (HTTP ${res.status})`,
+      data?.code,
+    )
   }
   return data as T
 }
