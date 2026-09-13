@@ -12,7 +12,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { api, type AlertInstance } from "@/lib/api"
-import { useEventStream } from "@/lib/useEventStream"
+import { useSseEvents } from "@/lib/sse"
 import { cn, formatAlertValue } from "@/lib/utils"
 
 const SEVERITY_DOT: Record<string, string> = { critical: "bg-[var(--status-error)]", warning: "bg-[var(--status-warn)]" }
@@ -44,36 +44,37 @@ export function NotificationBell() {
   // Live push: a triggered/resolved alert invalidates both queries
   // immediately instead of waiting up to 30s for the next poll. A brand new
   // critical alert also gets a toast, since it's the one case worth
-  // interrupting the operator for even if the bell is closed.
-  useEventStream({
-    types: ["alert.triggered", "alert.resolved"],
-    maxBuffered: 0,
-    onEvent: (evt) => {
-      queryClient.invalidateQueries({ queryKey: ["alerts-summary"] })
-      queryClient.invalidateQueries({ queryKey: ["alerts", "active"] })
-      if (evt.type === "alert.triggered") {
-        const payload = evt.payload as { severity?: string; resourceName?: string } | undefined
-        if (payload?.severity === "critical") {
-          toast.error(payload.resourceName ? `Critical alert: ${payload.resourceName}` : "New critical alert", {
-            action: { label: "View", onClick: () => navigate("/alerts") },
-          })
-        }
+  // interrupting the operator for even if the bell is closed. Subscribes to
+  // the app's shared SSE connection (lib/sse) — no second EventSource here.
+  useSseEvents(["alert.triggered", "alert.resolved"], (evt) => {
+    queryClient.invalidateQueries({ queryKey: ["alerts-summary"] })
+    queryClient.invalidateQueries({ queryKey: ["alerts", "active"] })
+    if (evt.type === "alert.triggered") {
+      const payload = evt.payload as { severity?: string; resourceName?: string } | undefined
+      if (payload?.severity === "critical") {
+        toast.error(payload.resourceName ? `Critical alert: ${payload.resourceName}` : "New critical alert", {
+          action: { label: "View", onClick: () => navigate("/alerts") },
+        })
       }
-    },
+    }
   })
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger
-        className="relative flex h-9 w-9 items-center justify-center rounded-md text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-muted)] hover:text-[var(--text)]"
+        className="relative flex h-9 w-9 items-center justify-center rounded-md text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text)]"
         aria-label={total > 0 ? `${total} active alert${total === 1 ? "" : "s"}` : "Notifications — nothing active"}
       >
         <Bell className="h-4 w-4" aria-hidden />
         {total > 0 && (
           <span
             className={cn(
-              "absolute right-1 top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-sm px-0.5 text-[9px] font-bold leading-none text-white",
-              summaryQuery.data?.critical ? "bg-[var(--status-error)]" : "bg-[var(--status-warn)]",
+              "absolute right-1 top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-sm px-0.5 text-[9px] font-bold leading-none",
+              summaryQuery.data?.critical
+                ? "bg-[var(--status-error)] text-white"
+                : // Dark themes set --status-warn to a light amber — white text
+                  // drops to ~1.8:1 there, so flip to black like MasterCautionBar.
+                  "bg-[var(--status-warn)] text-white dark:text-black",
             )}
             aria-hidden
           >

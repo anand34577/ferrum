@@ -5,10 +5,70 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// sensitiveArgKeys are tool-argument key names whose values must never be
+// persisted or echoed to the browser: tool args flow into ai_tool_calls via
+// recordToolCall and into the live tool-call SSE envelope in ai_chat.go, and
+// several tools (guest agent set-password, connection create/test, ...) carry
+// plaintext credentials in their arguments.
+var sensitiveArgKeys = map[string]bool{
+	"password":   true,
+	"cipassword": true,
+	"secret":     true,
+	"token":      true,
+	"apikey":     true,
+	"api_key":    true,
+}
+
+// redactSensitive returns v with every map value under a sensitive-looking
+// key (case-insensitively — args come from the model, not from our own
+// structs) replaced by "[redacted]". Everything else, including keys like
+// sshPublicKey, is preserved.
+func redactSensitive(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(val))
+		for k, item := range val {
+			if sensitiveArgKeys[strings.ToLower(k)] {
+				out[k] = "[redacted]"
+				continue
+			}
+			out[k] = redactSensitive(item)
+		}
+		return out
+	case []any:
+		out := make([]any, len(val))
+		for i, item := range val {
+			out[i] = redactSensitive(item)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+// redactToolArgs is redactSensitive for the raw JSON a tool call carries.
+// Arguments that don't parse as JSON are returned unchanged — tool clients
+// always send JSON objects, so there's nothing to key a redaction on.
+func redactToolArgs(args json.RawMessage) json.RawMessage {
+	if len(args) == 0 {
+		return args
+	}
+	var parsed any
+	if err := json.Unmarshal(args, &parsed); err != nil {
+		return args
+	}
+	out, err := json.Marshal(redactSensitive(parsed))
+	if err != nil {
+		return args
+	}
+	return out
+}
 
 // recordToolCall implements mcp.RecordFunc — the single place every tool
 // invocation (from the AI Assistant's own loop or an external MCP client)
@@ -19,7 +79,7 @@ import (
 func (s *Server) recordToolCall(ctx context.Context, userID, source, tool string, args json.RawMessage, ok bool, errMsg string) {
 	var argsCol sql.NullString
 	if len(args) > 0 {
-		argsCol = sql.NullString{String: string(args), Valid: true}
+		argsCol = sql.NullString{String: string(redactToolArgs(args)), Valid: true}
 	}
 	var errCol sql.NullString
 	if errMsg != "" {

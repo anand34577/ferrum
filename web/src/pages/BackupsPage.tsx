@@ -5,6 +5,7 @@ import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { CollapsibleCard } from "@/components/ui/collapsible-card"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { EmptyState } from "@/components/ui/empty-state"
 import { ErrorState } from "@/components/ui/error-state"
@@ -15,15 +16,37 @@ import { PageHeader } from "@/components/ui/page-header"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusDot } from "@/components/ui/status-dot"
+import { Timestamp } from "@/components/ui/timestamp"
 import { Hint } from "@/components/ui/tooltip"
 import { api, ApiError, type BackupJob, type ClusterResource, type ConnectionInventory, type ReplicationJob, type ReplicationStatus } from "@/lib/api"
+
+// PVE accepts both systemd-style calendar events ("sat 02:00", "mon-fri 08:00",
+// "*:0/15") and classic 5-field cron ("0 2 * * 6"). A full parser lives
+// server-side in PVE; this client-side check only catches obvious garbage
+// (empty, no digits, too many fields) before it reaches the API, while the
+// examples + presets below keep the syntax discoverable.
+function scheduleLooksInvalid(s: string): boolean {
+  const v = s.trim()
+  if (!v) return true
+  if (!/\d/.test(v)) return true
+  if (v.split(/\s+/).length > 6) return true
+  return false
+}
+
+const SCHEDULE_PRESETS: { label: string; value: string }[] = [
+  { label: "Daily 02:00", value: "02:00" },
+  { label: "Sat 02:00", value: "sat 02:00" },
+  { label: "Mon–Fri 08:00", value: "mon-fri 08:00" },
+  { label: "Every 15 min", value: "*:0/15" },
+]
 
 export function BackupsPage() {
   const queryClient = useQueryClient()
   const confirm = useConfirm()
-  const { data: inventory, isLoading, isError, refetch } = useQuery({
+  const { data: inventory, isLoading, isError, refetch, isRefetching } = useQuery({
     queryKey: ["inventory"],
     queryFn: () => api.get<ConnectionInventory[]>("/inventory/"),
+    refetchInterval: 30_000,
   })
   const connections = inventory ?? []
 
@@ -128,6 +151,13 @@ export function BackupsPage() {
         title="Backups"
         description="Scheduled vzdump jobs across every connection."
         icon={HardDrive}
+        onRefresh={() => {
+          void queryClient.invalidateQueries({ queryKey: ["inventory"] })
+          void queryClient.invalidateQueries({ queryKey: ["backup-jobs"] })
+          void queryClient.invalidateQueries({ queryKey: ["replication-jobs"] })
+          void queryClient.invalidateQueries({ queryKey: ["replication-status"] })
+        }}
+        refreshing={isRefetching}
       />
 
       {isError ? (
@@ -145,11 +175,7 @@ export function BackupsPage() {
         />
       ) : (
         <>
-          <Card>
-            <CardHeader>
-              <CardTitle>Schedule a backup job</CardTitle>
-            </CardHeader>
-            <CardContent>
+          <CollapsibleCard title="Schedule a backup job">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <div className="space-y-1.5">
                   <Label>Connection</Label>
@@ -176,7 +202,32 @@ export function BackupsPage() {
                     value={scheduleForm.schedule}
                     onChange={(e) => setScheduleForm({ ...scheduleForm, schedule: e.target.value })}
                     placeholder="sat 02:00"
+                    aria-invalid={scheduleForm.schedule !== "" && scheduleLooksInvalid(scheduleForm.schedule)}
                   />
+                  {/* PVE's schedule syntax was previously a guess-the-format
+                      text box — the examples and presets make it teachable. */}
+                  <p className="text-[11px] leading-relaxed text-[var(--text-muted)]">
+                    Calendar expression or cron: <span className="font-mono">sat 02:00</span>,{" "}
+                    <span className="font-mono">mon-fri 08:00</span>, <span className="font-mono">*:0/15</span>, or{" "}
+                    <span className="font-mono">0 2 * * 6</span>.
+                  </p>
+                  <div className="flex flex-wrap gap-1">
+                    {SCHEDULE_PRESETS.map((p) => (
+                      <button
+                        key={p.value}
+                        type="button"
+                        onClick={() => setScheduleForm({ ...scheduleForm, schedule: p.value })}
+                        className="rounded-sm border border-[var(--border)] px-1.5 py-0.5 text-[11px] text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text)]"
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                  {scheduleForm.schedule !== "" && scheduleLooksInvalid(scheduleForm.schedule) && (
+                    <p className="text-xs text-[var(--status-error)]" role="alert">
+                      Doesn't look like a schedule — it needs a time (e.g. 02:00) and optional days, or a 5-field cron expression.
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-1.5">
                   <Label>Storage</Label>
@@ -302,19 +353,14 @@ export function BackupsPage() {
                 className="mt-3"
                 size="sm"
                 loading={createJob.isPending}
-                disabled={!scheduleConnId || !scheduleForm.schedule || !scheduleForm.storage}
+                disabled={!scheduleConnId || !scheduleForm.storage || scheduleLooksInvalid(scheduleForm.schedule)}
                 onClick={() => createJob.mutate()}
               >
                 {!createJob.isPending && <Plus className="h-3.5 w-3.5" />} Schedule job
               </Button>
-            </CardContent>
-          </Card>
+          </CollapsibleCard>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Run a backup now</CardTitle>
-            </CardHeader>
-            <CardContent>
+          <CollapsibleCard title="Run a backup now">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="space-y-1.5">
                   <Label>Connection</Label>
@@ -376,8 +422,7 @@ export function BackupsPage() {
               >
                 {!runNow.isPending && <Play className="h-3.5 w-3.5" />} Run backup
               </Button>
-            </CardContent>
-          </Card>
+          </CollapsibleCard>
 
           {connections.map((c, i) => {
             const q = jobQueries[i]
@@ -389,7 +434,7 @@ export function BackupsPage() {
                 <CardContent className="space-y-2">
                   {q.isLoading && <Skeleton className="h-14" />}
                   {q.isError && (
-                    <p className="text-sm text-[var(--text-muted)]">Could not load backup jobs for this connection.</p>
+                    <ErrorState title={`Couldn't load backup jobs for ${c.name}`} onRetry={q.refetch} />
                   )}
                   {q.data?.length === 0 && (
                     <p className="text-sm text-[var(--text-muted)]">No scheduled backup jobs — schedule one above.</p>
@@ -407,8 +452,7 @@ export function BackupsPage() {
                         <Hint label="Remove job">
                           <Button
                             size="icon"
-                            variant="ghost"
-                            className="hover:bg-[color-mix(in_oklab,var(--status-error)_12%,transparent)] hover:text-[var(--status-error)]"
+                            variant="ghost-danger"
                             aria-label={`Remove job ${job.id}`}
                             onClick={() => removeJob(c.connectionId, c.name, job.id)}
                           >
@@ -490,8 +534,8 @@ function ReplicationCard({ connId, name, nodes }: { connId: string; name: string
                 </p>
                 <p className="break-words text-xs text-[var(--text-muted)] tabular">
                   {job.schedule ?? "manual"}
-                  {status?.last_sync ? ` · last sync ${new Date(status.last_sync * 1000).toLocaleString()}` : ""}
-                  {status?.next_sync ? ` · next ${new Date(status.next_sync * 1000).toLocaleString()}` : ""}
+                  {status?.last_sync ? <> · last sync <Timestamp iso={new Date(status.last_sync * 1000).toISOString()} /></> : ""}
+                  {status?.next_sync ? <> · next <Timestamp iso={new Date(status.next_sync * 1000).toISOString()} /></> : ""}
                 </p>
                 {status?.error && <p className="break-words text-xs text-[var(--status-error)]">{status.error}</p>}
               </div>

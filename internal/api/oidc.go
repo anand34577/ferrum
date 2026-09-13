@@ -57,6 +57,42 @@ func randomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
+// oidcStateCookie binds the /oidc/callback round-trip to the browser that
+// started it: the state is planted in this cookie at /oidc/login and must
+// come back with the callback's query state, so one user's login redirect
+// can't be replayed against another's session (CSRF on the callback). The
+// server-side state map remains the nonce store — the cookie is only the
+// "same browser that started this" check.
+const oidcStateCookie = "ferrum_oidc_state"
+
+// oidcStateCookiePath scopes the state cookie to the OIDC route tree it
+// belongs to; it's also the Path both set and clear must use to match.
+const oidcStateCookiePath = "/api/v1/auth/oidc"
+
+func (s *Server) setOIDCStateCookie(w http.ResponseWriter, r *http.Request, state string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     oidcStateCookie,
+		Value:    state,
+		Path:     oidcStateCookiePath,
+		HttpOnly: true,
+		Secure:   s.cookieSecure(r),
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   600, // outlives the server-side state's 5-minute TTL slightly
+	})
+}
+
+func (s *Server) clearOIDCStateCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     oidcStateCookie,
+		Value:    "",
+		Path:     oidcStateCookiePath,
+		HttpOnly: true,
+		Secure:   s.cookieSecure(r),
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+}
+
 // oidcConfig tells the frontend whether to show an SSO button, without
 // exposing any secret — the login page needs this before the user has
 // authenticated, so it's intentionally not behind requireAuth.
@@ -82,6 +118,7 @@ func (s *Server) oidcLogin(w http.ResponseWriter, r *http.Request) {
 		writeErrorMsg(w, http.StatusBadGateway, "could not reach the SSO provider")
 		return
 	}
+	s.setOIDCStateCookie(w, r, state)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
@@ -101,12 +138,20 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	state := r.URL.Query().Get("state")
+	cookieState, cookieErr := r.Cookie(oidcStateCookie)
 	nonce, ok := consumeOIDCState(state)
-	if !ok {
-		slog.Warn("OIDC callback with unknown or expired state")
+	// The callback must be the same browser that started the login: the
+	// state cookie has to be present and carry exactly the query state.
+	// Both sides are consumed either way so a replayed URL never validates.
+	if !ok || cookieErr != nil || cookieState.Value != state {
+		s.clearOIDCStateCookie(w, r)
+		slog.Warn("OIDC callback with unknown, expired, or mismatched state")
 		http.Redirect(w, r, "/login?sso_error=1", http.StatusFound)
 		return
 	}
+	// The state has served its purpose — drop the cookie before continuing,
+	// so it's gone regardless of how the rest of the flow ends.
+	s.clearOIDCStateCookie(w, r)
 
 	code := r.URL.Query().Get("code")
 	claims, err := oidc.Exchange(code, nonce)

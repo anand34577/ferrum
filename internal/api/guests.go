@@ -41,8 +41,12 @@ type updateGuestConfigRequest struct {
 	Sockets int    `json:"sockets,omitempty"`
 	Memory  int    `json:"memory,omitempty"`
 	Boot    string `json:"boot,omitempty"`
-	Tags    string `json:"tags,omitempty"`
-	Notes   string `json:"notes,omitempty"`
+	// Tags/Notes are pointers so a field absent from the body (nil — leave
+	// untouched) is distinguishable from one explicitly sent empty (clear
+	// it): PVE has no "set to empty" for config keys, clearing means
+	// delete=<key>.
+	Tags  *string `json:"tags,omitempty"`
+	Notes *string `json:"notes,omitempty"`
 }
 
 func (s *Server) updateGuestConfig(w http.ResponseWriter, r *http.Request) {
@@ -64,8 +68,26 @@ func (s *Server) updateGuestConfig(w http.ResponseWriter, r *http.Request) {
 	setIfPositive(form, "sockets", req.Sockets)
 	setIfPositive(form, "memory", req.Memory)
 	setIfNonEmpty(form, "boot", req.Boot)
-	setIfNonEmpty(form, "tags", req.Tags)
-	setIfNonEmpty(form, "description", req.Notes)
+	// PVE clears a config key via the comma-separated "delete" list, not an
+	// empty value — so an explicitly-empty tags/notes becomes a delete.
+	var deletes []string
+	if req.Tags != nil {
+		if *req.Tags == "" {
+			deletes = append(deletes, "tags")
+		} else {
+			form.Set("tags", *req.Tags)
+		}
+	}
+	if req.Notes != nil {
+		if *req.Notes == "" {
+			deletes = append(deletes, "description")
+		} else {
+			form.Set("description", *req.Notes)
+		}
+	}
+	if len(deletes) > 0 {
+		form.Set("delete", strings.Join(deletes, ","))
+	}
 	if len(form) == 0 {
 		writeErrorMsg(w, http.StatusBadRequest, "no fields to update")
 		return
@@ -1144,6 +1166,16 @@ func (s *Server) updateGuestFirewallOptions(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// guestBackupsResponse wraps the flat backup list the endpoint used to
+// return with the per-storage failures hit while collecting it — additive
+// shape: previously a bare array, so consumers need the new object form.
+type guestBackupsResponse struct {
+	Backups []pve.StorageContentItem `json:"backups"`
+	// Warnings lists one entry per backup-capable storage that couldn't be
+	// listed; empty (omitted) means every storage answered.
+	Warnings []string `json:"warnings,omitempty"`
+}
+
 // guestBackups aggregates backup archives for one guest across every
 // storage on its node that's configured to hold backups — the caller
 // shouldn't need to already know which storage a backup landed on.
@@ -1165,17 +1197,23 @@ func (s *Server) guestBackups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var all []pve.StorageContentItem
+	var warnings []string // per-storage failures, surfaced instead of silently dropped
 	for _, st := range storages {
 		if !strings.Contains(st.Content, "backup") {
 			continue
 		}
 		items, err := client.GuestBackups(r.Context(), node, st.Storage, vmid)
 		if err != nil {
-			continue // one unreachable/misconfigured storage shouldn't blank the whole list
+			// One unreachable/misconfigured storage shouldn't blank the
+			// whole list — but the failure is part of the answer, or a
+			// "no backups found" would hide a storage that couldn't even
+			// be asked.
+			warnings = append(warnings, st.Storage+": "+err.Error())
+			continue
 		}
 		all = append(all, items...)
 	}
-	writeJSON(w, http.StatusOK, all)
+	writeJSON(w, http.StatusOK, guestBackupsResponse{Backups: all, Warnings: warnings})
 }
 
 // --- Create VM / LXC ---
@@ -1218,6 +1256,13 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 		writeErrorMsg(w, http.StatusBadRequest, "node, cores, and memoryMb are required")
 		return
 	}
+	// The cloud-init drive (ide3) is created on the same storage as the VM
+	// disk — without a storage there is nothing to place it on and PVE
+	// would reject the create outright.
+	if req.CIUser != "" && req.Storage == "" {
+		writeErrorMsg(w, http.StatusBadRequest, "ciUser requires storage: set storage to the same target as the VM disk so the cloud-init drive can be created on it")
+		return
+	}
 
 	client, err := s.clientFor(r.Context(), connID)
 	if err != nil {
@@ -1242,7 +1287,9 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	s.audit(r, "vm.create", "vm", req.Node+"/qemu/"+chi.URLParam(r, "id"))
+	// The create routes carry no {vmid} URL segment — the target is the
+	// (possibly auto-assigned) id the VM was actually created with.
+	s.audit(r, "vm.create", "vm", req.Node+"/qemu/"+strconv.Itoa(req.VMID))
 	slog.Info("VM created", "connectionId", connID, "node", req.Node, "vmid", req.VMID, "name", req.Name)
 	writeJSON(w, http.StatusCreated, map[string]any{"upid": upid, "vmid": req.VMID})
 }
@@ -1306,7 +1353,7 @@ func (s *Server) createLXC(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	s.audit(r, "lxc.create", "vm", req.Node+"/lxc/"+chi.URLParam(r, "id"))
+	s.audit(r, "lxc.create", "vm", req.Node+"/lxc/"+strconv.Itoa(req.VMID))
 	slog.Info("LXC created", "connectionId", connID, "node", req.Node, "vmid", req.VMID, "hostname", req.Hostname)
 	writeJSON(w, http.StatusCreated, map[string]any{"upid": upid, "vmid": req.VMID})
 }

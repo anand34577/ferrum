@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"ferrum/internal/pve"
 )
 
 // ansibleHost is one guest's rendered inventory entry.
@@ -94,8 +96,12 @@ func GenerateAnsibleInventory(connectionName string, guests []Guest) string {
 
 func writeHostBlock(b *strings.Builder, hosts []ansibleHost, indent string) {
 	for _, h := range hosts {
-		if h.ip != "" {
-			fmt.Fprintf(b, "%s%s:\n%s  ansible_host: %s\n", indent, h.name, indent, h.ip)
+		// Agent-reported IPs are guest-controlled data; re-validating here
+		// keeps a crafted value from injecting YAML keys (firstAgentIP
+		// already filters, but this package takes IPs as plain input and
+		// must stay safe on its own).
+		if ip := pve.SanitizeAgentIP(h.ip); ip != "" {
+			fmt.Fprintf(b, "%s%s:\n%s  ansible_host: %s\n", indent, h.name, indent, ip)
 		} else {
 			fmt.Fprintf(b, "%s%s: {}\n", indent, h.name)
 		}

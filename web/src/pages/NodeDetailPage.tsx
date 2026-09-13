@@ -1,5 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Activity, Cpu, HardDrive, MemoryStick, Network, Play, Power, RefreshCw, Server, SquareTerminal, Square, Terminal, Thermometer, Upload, Zap } from "lucide-react"
+import { Activity, ChevronDown, Cpu, HardDrive, MemoryStick, Network, Play, Power, RefreshCw, Server, SquareTerminal, Square, Terminal, Thermometer, Upload, Zap } from "lucide-react"
 import { useMemo, useState } from "react"
 import { useParams } from "react-router-dom"
 import { toast } from "sonner"
@@ -12,6 +12,14 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useConfirm } from "@/components/ui/confirm-dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ErrorState } from "@/components/ui/error-state"
 import { Meter } from "@/components/ui/meter"
@@ -20,6 +28,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Hint } from "@/components/ui/tooltip"
 import {
   api,
   ApiError,
@@ -32,7 +41,7 @@ import {
   type SmartData,
   type Storage,
 } from "@/lib/api"
-import { buildShellUrl } from "@/lib/console"
+import { buildShellUrl, openConsolePopup } from "@/lib/console"
 import { FORMATTERS, NODE_SERIES, buildRRDRows, hasAnySeries, rowNum, type ChartRow, type SeriesSpec } from "@/lib/metrics"
 import { cn, formatBytes, formatPercentFine, formatRate, formatUptime } from "@/lib/utils"
 
@@ -60,6 +69,7 @@ export function NodeDetailPage() {
   const [peaks, setPeaks] = useState(true)
 
   const statusQuery = useQuery({ queryKey: ["node-status", connId, node], queryFn: () => api.get<NodeStatus>(`${base}/status`), refetchInterval: 15_000 })
+  const isRefetching = statusQuery.isRefetching
   const rrdAvgQuery = useQuery({
     queryKey: ["node-rrd", connId, node, timeframe, "avg"],
     queryFn: () => api.get<RRDPoint[]>(`${base}/rrddata?timeframe=${timeframe}`),
@@ -116,6 +126,14 @@ export function NodeDetailPage() {
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Upgrade failed"),
   })
+  const aptRefreshMutation = useMutation({
+    mutationFn: () => api.post(`${base}/apt/refresh`),
+    onSuccess: () => {
+      toast.success("Package index refresh started")
+      queryClient.invalidateQueries({ queryKey: ["node-apt", connId, node] })
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Couldn't refresh the package index"),
+  })
   const wakeOnLanMutation = useMutation({
     mutationFn: () => api.post(`${base}/wakeonlan`),
     onSuccess: () => toast.success("Wake-on-LAN packet sent"),
@@ -133,9 +151,12 @@ export function NodeDetailPage() {
   })
   const openShellMutation = useMutation({
     mutationFn: () => api.post<{ wsPath: string }>(`${base}/shell`),
-    onSuccess: ({ wsPath }) => window.open(buildShellUrl(connId, node, wsPath, node), "_blank", "width=900,height=600"),
+    onSuccess: ({ wsPath }) => openConsolePopup(buildShellUrl(connId, node, node), "width=900,height=600", { wsPath }),
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to open shell"),
   })
+
+  const powerPending =
+    wakeOnLanMutation.isPending || startAllMutation.isPending || stopAllMutation.isPending || rebootMutation.isPending || shutdownMutation.isPending
 
   // Both node power actions take the whole host down — always confirm.
   async function rebootNode() {
@@ -161,6 +182,18 @@ export function NodeDetailPage() {
       confirmLabel: "Stop all",
     })
     if (ok) stopAllMutation.mutate()
+  }
+
+  // apt upgrade installs every pending package on a production host — the
+  // same class of action as reboot/shutdown, so it confirms too (it used to
+  // be the only one-click mutation on this page that changed the host).
+  async function upgradeAll() {
+    const ok = await confirm({
+      title: `Upgrade all packages on ${node}?`,
+      description: `${aptQuery.data?.length ?? 0} update${(aptQuery.data?.length ?? 0) === 1 ? "" : "s"} will be installed. Services with updated packages may restart, and a reboot may be required afterwards.`,
+      confirmLabel: "Upgrade all",
+    })
+    if (ok) upgradeMutation.mutate()
   }
 
   const status = statusQuery.data
@@ -229,26 +262,47 @@ export function NodeDetailPage() {
         description={status ? `${status.pveversion ?? "Proxmox VE"} · up ${formatUptime(status.uptime)}` : undefined}
         icon={Server}
         back={{ to: "/inventory", label: "Inventory" }}
+        onRefresh={() => void queryClient.invalidateQueries()}
+        refreshing={isRefetching}
         actions={
           <>
             <Button variant="secondary" size="sm" onClick={() => openShellMutation.mutate()} loading={openShellMutation.isPending}>
               {!openShellMutation.isPending && <SquareTerminal className="h-3.5 w-3.5" />} Shell
             </Button>
-            <Button variant="secondary" size="sm" onClick={() => wakeOnLanMutation.mutate()} loading={wakeOnLanMutation.isPending}>
-              {!wakeOnLanMutation.isPending && <Zap className="h-3.5 w-3.5" />} Wake-on-LAN
-            </Button>
-            <Button variant="secondary" size="sm" onClick={() => startAllMutation.mutate()} loading={startAllMutation.isPending}>
-              {!startAllMutation.isPending && <Play className="h-3.5 w-3.5" />} Start all
-            </Button>
-            <Button variant="secondary" size="sm" onClick={() => stopAllGuests()} loading={stopAllMutation.isPending}>
-              {!stopAllMutation.isPending && <Square className="h-3.5 w-3.5" />} Stop all
-            </Button>
-            <Button variant="secondary" size="sm" onClick={() => rebootNode()} loading={rebootMutation.isPending}>
-              {!rebootMutation.isPending && <RefreshCw className="h-3.5 w-3.5" />} Reboot
-            </Button>
-            <Button variant="destructive" size="sm" onClick={() => shutdownNode()} loading={shutdownMutation.isPending}>
-              {!shutdownMutation.isPending && <Power className="h-3.5 w-3.5" />} Shutdown
-            </Button>
+            {/* Guest and host power actions live behind one menu: six
+                side-by-side buttons made a solid-red Shutdown the loudest
+                thing on the page. Reboot/Shutdown still confirm before
+                doing anything. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="secondary" size="sm" loading={powerPending}>
+                  {!powerPending && <Power className="h-3.5 w-3.5" />} Power <ChevronDown className="h-3.5 w-3.5 opacity-60" aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuLabel>Guests on {node}</DropdownMenuLabel>
+                <DropdownMenuItem onSelect={() => startAllMutation.mutate()}>
+                  <Play className="h-3.5 w-3.5 text-[var(--text-muted)]" /> Start all guests
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => void stopAllGuests()}>
+                  <Square className="h-3.5 w-3.5 text-[var(--text-muted)]" /> Stop all guests
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Host</DropdownMenuLabel>
+                <DropdownMenuItem onSelect={() => wakeOnLanMutation.mutate()}>
+                  <Zap className="h-3.5 w-3.5 text-[var(--text-muted)]" /> Wake-on-LAN
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => void rebootNode()}>
+                  <RefreshCw className="h-3.5 w-3.5 text-[var(--text-muted)]" /> Reboot host…
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => void shutdownNode()}
+                  className="text-[var(--status-error)] data-[highlighted]:bg-[color-mix(in_oklab,var(--status-error)_10%,transparent)]"
+                >
+                  <Power className="h-3.5 w-3.5" /> Shut down host…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </>
         }
       />
@@ -570,12 +624,25 @@ export function NodeDetailPage() {
           <Card>
             <CardHeader className="flex-row items-center justify-between space-y-0">
               <CardTitle>Pending updates</CardTitle>
-              {(aptQuery.data?.length ?? 0) > 0 && (
-                <Button size="sm" onClick={() => upgradeMutation.mutate()} loading={upgradeMutation.isPending}>
-                  {!upgradeMutation.isPending && <Upload className="h-3.5 w-3.5" />}
-                  Upgrade all
-                </Button>
-              )}
+              <div className="flex items-center gap-2">
+                <Hint label="Re-fetch the package index (apt update)">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    loading={aptRefreshMutation.isPending}
+                    onClick={() => aptRefreshMutation.mutate()}
+                  >
+                    {!aptRefreshMutation.isPending && <RefreshCw className="h-3.5 w-3.5" />}
+                    Refresh index
+                  </Button>
+                </Hint>
+                {(aptQuery.data?.length ?? 0) > 0 && (
+                  <Button size="sm" onClick={() => void upgradeAll()} loading={upgradeMutation.isPending}>
+                    {!upgradeMutation.isPending && <Upload className="h-3.5 w-3.5" />}
+                    Upgrade all
+                  </Button>
+                )}
+              </div>
             </CardHeader>
             <CardContent className="space-y-1.5">
               {aptQuery.isError ? (

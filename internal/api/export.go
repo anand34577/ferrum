@@ -71,7 +71,10 @@ func (s *Server) gatherExportGuests(ctx context.Context, connID string, withAgen
 // firstAgentIP best-effort resolves a guest's live IP for the Ansible
 // export. Any failure (agent not installed/running for QEMU, container
 // stopped, etc) just means no IP — never surfaced as an export-blocking
-// error, since most fleets have guests without the agent enabled.
+// error, since most fleets have guests without the agent enabled. Reported
+// addresses are sanitized (pve.SanitizeAgentIP) before use: agent output
+// comes from inside the guest and must never be embedded verbatim in
+// generated files.
 func firstAgentIP(ctx context.Context, client *pve.Client, res pve.ClusterResource) string {
 	var ifaces []pve.AgentNetworkInterface
 	var err error
@@ -88,7 +91,7 @@ func firstAgentIP(ctx context.Context, client *pve.Client, res pve.ClusterResour
 			continue
 		}
 		for _, ip := range iface.IPAddresses {
-			if ip != "" {
+			if ip := pve.SanitizeAgentIP(ip); ip != "" {
 				return ip
 			}
 		}

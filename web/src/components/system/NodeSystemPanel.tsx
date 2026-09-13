@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Loader2, Play, RotateCw, ShieldCheck, Square, Trash2, Upload } from "lucide-react"
+import { Play, RotateCw, ShieldCheck, Square, Trash2, Upload } from "lucide-react"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
@@ -181,8 +181,8 @@ export function NodeSystemPanel({ connId, node }: NodeSystemPanelProps) {
                   </div>
                 ))}
               </div>
-              <Button size="sm" disabled={saveDns.isPending} onClick={() => saveDns.mutate()}>
-                {saveDns.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Save DNS
+              <Button size="sm" loading={saveDns.isPending} onClick={() => saveDns.mutate()}>
+                Save DNS
               </Button>
             </>
           )}
@@ -221,8 +221,8 @@ export function NodeSystemPanel({ connId, node }: NodeSystemPanelProps) {
           ) : (
             <>
               <Textarea className="text-xs" rows={6} value={hostsData} onChange={(e) => setHostsData(e.target.value)} />
-              <Button size="sm" disabled={saveHosts.isPending} onClick={() => saveHosts.mutate()}>
-                {saveHosts.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Save hosts file
+              <Button size="sm" loading={saveHosts.isPending} onClick={() => saveHosts.mutate()}>
+                Save hosts file
               </Button>
             </>
           )}
@@ -284,6 +284,10 @@ export function NodeSystemPanel({ connId, node }: NodeSystemPanelProps) {
                     <p className="truncate text-xs text-[var(--text-muted)]">{c.subject || c.issuer || "-"}</p>
                   </div>
                   {c.notafter && (
+                    // Wall-clock at paint is intentional: expiry is day-granular and
+                    // the panel re-renders on every certificates refetch, so a
+                    // mounted badge never needs to re-evaluate on a timer.
+                    // eslint-disable-next-line react/purity
                     <Badge variant={c.notafter * 1000 < Date.now() ? "error" : "default"}>
                       Expires {new Date(c.notafter * 1000).toLocaleDateString()}
                     </Badge>
@@ -322,8 +326,8 @@ export function NodeSystemPanel({ connId, node }: NodeSystemPanelProps) {
               value={keyPem}
               onChange={(e) => setKeyPem(e.target.value)}
             />
-            <Button size="sm" disabled={!certPem || uploadCert.isPending} onClick={() => uploadCert.mutate()}>
-              {uploadCert.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />} Upload
+            <Button size="sm" disabled={!certPem} loading={uploadCert.isPending} onClick={() => uploadCert.mutate()}>
+              {!uploadCert.isPending && <Upload className="h-3.5 w-3.5" />} Upload
             </Button>
           </div>
         </CardContent>

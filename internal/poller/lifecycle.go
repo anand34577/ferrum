@@ -101,20 +101,29 @@ func (e *LifecycleEvaluator) evaluateOnce(ctx context.Context) {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, lifecycleFanoutLimit)
 	for _, conn := range conns {
+		if conn.Type == "pbs" {
+			// The retention sweep drives PVE APIs (snapshots, vzdump
+			// listings); PBS remotes have no part in it, so skip them up
+			// front rather than logging an unreachable warning every tick.
+			continue
+		}
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(conn connections.Info) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
+			// fetchClusterResources retries once on a 401 (fresh login), so
+			// a ticket that expired mid-sweep can't skip a connection's
+			// retention pass.
+			resources, err := fetchClusterResources(ctx, e.conns, conn.ID)
+			if err != nil {
+				slog.Warn("lifecycle evaluator: fetching cluster resources failed, skipping", "connectionId", conn.ID, "name", conn.Name, "error", err)
+				return
+			}
 			client, err := e.conns.ClientFor(ctx, conn.ID)
 			if err != nil {
 				slog.Warn("lifecycle evaluator: connection unreachable, skipping", "connectionId", conn.ID, "name", conn.Name, "error", err)
-				return
-			}
-			resources, err := client.ClusterResources(ctx)
-			if err != nil {
-				slog.Warn("lifecycle evaluator: fetching cluster resources failed, skipping", "connectionId", conn.ID, "name", conn.Name, "error", err)
 				return
 			}
 
@@ -131,6 +140,28 @@ func (e *LifecycleEvaluator) evaluateOnce(ctx context.Context) {
 	wg.Wait()
 
 	e.reconcileOrphanDisks(ctx, seen)
+	e.pruneActivityLogs(ctx)
+}
+
+// retainedActivityRows caps how many rows each append-only activity table
+// keeps — this sweep runs hourly and is the one periodic job positioned to
+// bound audit_log, ai_tool_calls, and lifecycle_actions, which would
+// otherwise grow without limit.
+const retainedActivityRows = 10000
+
+// pruneActivityLogs deletes everything but the newest retainedActivityRows
+// rows from the append-only activity tables — the same pattern
+// notify.WebhookDispatcher.pruneDeliveries uses. Best-effort: a failure is
+// logged, never fails the sweep.
+func (e *LifecycleEvaluator) pruneActivityLogs(ctx context.Context) {
+	for _, table := range []string{"audit_log", "ai_tool_calls", "lifecycle_actions"} {
+		// Table names come from the fixed list above, never user input.
+		if _, err := e.db.ExecContext(ctx, fmt.Sprintf(
+			`DELETE FROM %s WHERE id NOT IN (SELECT id FROM %s ORDER BY created_at DESC LIMIT ?)`, table, table,
+		), retainedActivityRows); err != nil {
+			slog.Error("lifecycle evaluator: pruning activity log failed", "table", table, "error", err)
+		}
+	}
 }
 
 // --- Snapshot retention sweep ---

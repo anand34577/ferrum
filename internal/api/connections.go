@@ -25,6 +25,7 @@ type connectionDTO struct {
 	Username           string `json:"username,omitempty"`
 	TokenID            string `json:"tokenId,omitempty"`
 	VerifyTLS          bool   `json:"verifyTls"`
+	TLSFingerprint     string `json:"tlsFingerprint,omitempty"` // SHA-256 pin; empty = unset
 	BehindReverseProxy bool   `json:"behindReverseProxy"`
 	CreatedAt          string `json:"createdAt"`
 }
@@ -40,12 +41,13 @@ type createConnectionRequest struct {
 	TokenID            string `json:"tokenId,omitempty"`
 	TokenSecret        string `json:"tokenSecret,omitempty"`
 	VerifyTLS          bool   `json:"verifyTls"`
+	TLSFingerprint     string `json:"tlsFingerprint,omitempty"`
 	BehindReverseProxy bool   `json:"behindReverseProxy"`
 }
 
 func (s *Server) listConnections(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.QueryContext(r.Context(), `
-		SELECT id, name, type, host, port, auth_type, COALESCE(username,''), COALESCE(token_id,''), verify_tls, behind_reverse_proxy, created_at
+		SELECT id, name, type, host, port, auth_type, COALESCE(username,''), COALESCE(token_id,''), verify_tls, COALESCE(tls_fingerprint,''), behind_reverse_proxy, created_at
 		FROM connections ORDER BY name`)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
@@ -57,7 +59,7 @@ func (s *Server) listConnections(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var c connectionDTO
 		var verify, reverse int
-		if err := rows.Scan(&c.ID, &c.Name, &c.Type, &c.Host, &c.Port, &c.AuthType, &c.Username, &c.TokenID, &verify, &reverse, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Type, &c.Host, &c.Port, &c.AuthType, &c.Username, &c.TokenID, &verify, &c.TLSFingerprint, &reverse, &c.CreatedAt); err != nil {
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -103,10 +105,10 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 	id := uuid.NewString()
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err = s.db.ExecContext(r.Context(), `
-		INSERT INTO connections (id, name, type, host, port, auth_type, token_id, token_secret_enc, username, password_enc, verify_tls, behind_reverse_proxy, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO connections (id, name, type, host, port, auth_type, token_id, token_secret_enc, username, password_enc, verify_tls, tls_fingerprint, behind_reverse_proxy, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, req.Name, req.Type, req.Host, req.Port, req.AuthType, req.TokenID, tokenSecretEnc, req.Username, passwordEnc,
-		boolToInt(req.VerifyTLS), boolToInt(req.BehindReverseProxy), now, now,
+		boolToInt(req.VerifyTLS), req.TLSFingerprint, boolToInt(req.BehindReverseProxy), now, now,
 	)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
@@ -130,16 +132,20 @@ func defaultPortFor(connType string) int {
 // optional — only fields the caller sends are changed, so editing just the
 // name doesn't force re-entering a password/token.
 type updateConnectionRequest struct {
-	Name               *string `json:"name,omitempty"`
-	Type               *string `json:"type,omitempty"`
-	Host               *string `json:"host,omitempty"`
-	Port               *int    `json:"port,omitempty"`
-	AuthType           *string `json:"authType,omitempty"`
-	Username           *string `json:"username,omitempty"`
-	Password           *string `json:"password,omitempty"`
-	TokenID            *string `json:"tokenId,omitempty"`
-	TokenSecret        *string `json:"tokenSecret,omitempty"`
-	VerifyTLS          *bool   `json:"verifyTls,omitempty"`
+	Name        *string `json:"name,omitempty"`
+	Type        *string `json:"type,omitempty"`
+	Host        *string `json:"host,omitempty"`
+	Port        *int    `json:"port,omitempty"`
+	AuthType    *string `json:"authType,omitempty"`
+	Username    *string `json:"username,omitempty"`
+	Password    *string `json:"password,omitempty"`
+	TokenID     *string `json:"tokenId,omitempty"`
+	TokenSecret *string `json:"tokenSecret,omitempty"`
+	VerifyTLS   *bool   `json:"verifyTls,omitempty"`
+	// TLSFingerprint pins the server certificate (SHA-256 hex). A pointer so
+	// absent (nil — untouched) differs from explicitly sent empty (clear the
+	// pin), mirroring how tags/notes clearing works on guest config.
+	TLSFingerprint     *string `json:"tlsFingerprint,omitempty"`
 	BehindReverseProxy *bool   `json:"behindReverseProxy,omitempty"`
 }
 
@@ -194,6 +200,10 @@ func (s *Server) updateConnection(w http.ResponseWriter, r *http.Request) {
 	if req.VerifyTLS != nil {
 		set("verify_tls", boolToInt(*req.VerifyTLS))
 	}
+	if req.TLSFingerprint != nil {
+		// Stored as given; matching normalizes case/colons at compare time.
+		set("tls_fingerprint", *req.TLSFingerprint)
+	}
 	if req.BehindReverseProxy != nil {
 		set("behind_reverse_proxy", boolToInt(*req.BehindReverseProxy))
 	}
@@ -229,8 +239,13 @@ func (s *Server) updateConnection(w http.ResponseWriter, r *http.Request) {
 	query += " WHERE id = ?"
 	args = append(args, id)
 
-	if _, err := s.db.ExecContext(r.Context(), query, args...); err != nil {
+	res, err := s.db.ExecContext(r.Context(), query, args...)
+	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeErrorMsg(w, http.StatusNotFound, "connection not found")
 		return
 	}
 	// Drop any cached ticket so edited credentials (or a demoted verify-TLS
@@ -242,8 +257,13 @@ func (s *Server) updateConnection(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteConnection(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if _, err := s.db.ExecContext(r.Context(), `DELETE FROM connections WHERE id = ?`, id); err != nil {
+	res, err := s.db.ExecContext(r.Context(), `DELETE FROM connections WHERE id = ?`, id)
+	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeErrorMsg(w, http.StatusNotFound, "connection not found")
 		return
 	}
 	// Deleting a connection is meant to revoke access to it now — drop the

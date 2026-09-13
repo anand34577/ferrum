@@ -83,7 +83,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
       setCopied(true)
       toast.success("Copied to clipboard")
       setTimeout(() => setCopied(false), 1500)
-    })
+    }).catch(() => toast.error("Could not copy to clipboard"))
   }
   return (
     <div className="overflow-hidden rounded-md border border-[var(--border)]">

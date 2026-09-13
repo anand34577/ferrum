@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { toast } from "sonner"
+import { useFormDirty } from "@/components/settings/use-form-dirty"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ErrorState } from "@/components/ui/error-state"
+import { FormError } from "@/components/ui/form-error"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -59,24 +61,38 @@ export function DigestSettingsCard() {
   )
 }
 
+// The exact body a save sends — used for both the mutation and dirty
+// tracking, so "dirty" always means "saving now would send something new".
+function digestPayload(enabled: boolean, intervalHours: string, recipients: string) {
+  return {
+    enabled,
+    intervalHours: Number(intervalHours),
+    recipients: recipients.split(",").map((r) => r.trim()).filter(Boolean),
+  }
+}
+
 function DigestForm({ initial }: { initial: DigestSettings }) {
   const queryClient = useQueryClient()
   const [enabled, setEnabled] = useState(initial.enabled)
   const [intervalHours, setIntervalHours] = useState(String(initial.intervalHours || 168))
   const [recipients, setRecipients] = useState(initial.recipients.join(", "))
 
+  // Remounted via key={JSON.stringify(query.data)} on save, so dirty resets
+  // for free. Compared against the form's own initial state pushed through
+  // the same normalization — never the raw server response.
+  const dirty = useFormDirty(
+    digestPayload(enabled, intervalHours, recipients),
+    digestPayload(initial.enabled, String(initial.intervalHours || 168), initial.recipients.join(", ")),
+  )
+
   const save = useMutation({
     mutationFn: () =>
-      api.put<DigestSettings>("/admin/settings/digest", {
-        enabled,
-        intervalHours: Number(intervalHours),
-        recipients: recipients.split(",").map((r) => r.trim()).filter(Boolean),
-      }),
+      api.put<DigestSettings>("/admin/settings/digest", digestPayload(enabled, intervalHours, recipients)),
     onSuccess: (data) => {
       toast.success("Digest settings saved")
       queryClient.setQueryData(["admin", "settings", "digest"], data)
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to save digest settings"),
+    // Failure surfaces inline via <FormError> below, not a toast.
   })
 
   const sendNow = useMutation({
@@ -94,7 +110,7 @@ function DigestForm({ initial }: { initial: DigestSettings }) {
             {initial.lastSentAt ? `Last sent ${new Date(initial.lastSentAt).toLocaleString()}` : "Never sent yet."}
           </p>
         </div>
-        <Switch checked={enabled} onCheckedChange={setEnabled} />
+        <Switch aria-label="Send digest" checked={enabled} onCheckedChange={setEnabled} />
       </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
@@ -117,13 +133,17 @@ function DigestForm({ initial }: { initial: DigestSettings }) {
           <Textarea rows={1} value={recipients} onChange={(e) => setRecipients(e.target.value)} placeholder="ops@example.com, oncall@example.com" />
         </div>
       </div>
+      <FormError
+        message={save.error instanceof ApiError ? save.error.message : save.error ? "Couldn't save digest settings — try again." : null}
+      />
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" loading={save.isPending} onClick={() => save.mutate()}>
+        <Button size="sm" loading={save.isPending} disabled={!dirty} onClick={() => save.mutate()}>
           Save
         </Button>
         <Button size="sm" variant="outline" loading={sendNow.isPending} onClick={() => sendNow.mutate()} disabled={recipients.trim().length === 0}>
           Send now
         </Button>
+        <p className="w-full text-xs text-[var(--text-faint)]">"Send now" delivers with the settings as last saved — save first if you just edited anything.</p>
       </div>
     </>
   )

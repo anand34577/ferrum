@@ -1,7 +1,7 @@
 import { useState } from "react"
-import { toast } from "sonner"
 import { AuthLayout } from "@/components/layout/AuthLayout"
 import { Button } from "@/components/ui/button"
+import { FormError } from "@/components/ui/form-error"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { api, ApiError } from "@/lib/api"
@@ -11,15 +11,17 @@ export function SetupPage() {
   const { refresh } = useAuth()
   const [form, setForm] = useState({ username: "", email: "", password: "" })
   const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
     setSubmitting(true)
+    setError(null)
     try {
       await api.post("/auth/setup", form)
       refresh()
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Setup failed")
+      setError(err instanceof ApiError ? err.message : "Setup failed — the server didn't accept the account.")
     } finally {
       setSubmitting(false)
     }
@@ -31,6 +33,7 @@ export function SetupPage() {
       subtitle="Create the first admin account to get started."
     >
       <form onSubmit={onSubmit} className="space-y-4">
+        <FormError message={error} />
         <div className="space-y-1.5">
           <Label htmlFor="username">Username</Label>
           <Input

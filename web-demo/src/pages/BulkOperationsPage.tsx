@@ -47,9 +47,7 @@ interface GuestRow {
  * Fleet-wide bulk operations: pick guests from any connection/cluster, pick
  * one action, run it across all of them in a single request — the one thing
  * no single-connection Proxmox UI (or PDM) can do. Self-contained: pulls its
- * own guest list from the existing inventory endpoint and is not wired into
- * routing/navigation yet (a follow-up pass does that for everything built
- * this round at once).
+ * own guest list from the existing inventory endpoint.
  */
 export function BulkOperationsPage() {
   const [selected, setSelected] = useState<Map<string, GuestRow>>(new Map())

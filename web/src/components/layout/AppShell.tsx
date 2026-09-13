@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   ClipboardList,
   Database,
+  DatabaseBackup,
   GitBranch,
   HardDrive,
   LayoutDashboard,
@@ -33,10 +34,12 @@ import { api } from "@/lib/api"
 import { CommandPalette } from "@/components/layout/CommandPalette"
 import { MasterCautionBar } from "@/components/layout/MasterCautionBar"
 import { NotificationBell } from "@/components/layout/NotificationBell"
+import { OfflineBanner } from "@/components/layout/OfflineBanner"
 import { ShortcutsDialog } from "@/components/layout/ShortcutsDialog"
 import { MobileDrawer, SidebarContent } from "@/components/layout/MobileDrawer"
 import { StatusDot } from "@/components/ui/status-dot"
 import { useAuth } from "@/lib/auth"
+import { SseConnection, useSseStatus } from "@/lib/sse"
 import { useTheme } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 import {
@@ -73,6 +76,7 @@ const navGroups: { label: string; items: NavItemSpec[] }[] = [
     label: "Infrastructure",
     items: [
       { to: "/storage", label: "Storage", icon: Database },
+      { to: "/pbs", label: "PBS Backups", icon: DatabaseBackup },
       { to: "/pools", label: "Resource Pools", icon: Layers },
       { to: "/ha", label: "High Availability", icon: ShieldCheck },
       { to: "/cluster", label: "Cluster & SDN", icon: GitBranch, adminOnly: true },
@@ -116,6 +120,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { effectiveTheme, toggle } = useTheme()
   const navigate = useNavigate()
   const location = useLocation()
+  // One EventSource for the whole app — the telemetry pill and the
+  // notification bell both subscribe through lib/sse instead of each
+  // opening their own stream.
+  const sseStatus = useSseStatus()
   // Persisted across reloads — an admin who collapses the rail for screen
   // space shouldn't have to redo it every session.
   const [collapsed, setCollapsed] = useState(() => {
@@ -177,6 +185,8 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-full">
+      {/* Owns the app's single SSE connection — see lib/sse. */}
+      <SseConnection />
       <CommandPalette />
       <ShortcutsDialog />
 
@@ -225,6 +235,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </MobileDrawer>
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <OfflineBanner />
         <MasterCautionBar />
         <header
           className="app-header sticky top-0 z-30 flex shrink-0 items-center justify-between gap-2 border-b border-[var(--border)] bg-[var(--bg-surface)]/80 px-4 [backdrop-filter:var(--header-blur)]"
@@ -252,9 +263,25 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="hidden items-center gap-2.5 rounded-sm border border-[var(--border)] bg-[var(--bg-surface)]/90 px-3 py-1 text-xs font-medium text-[var(--text-muted)] backdrop-blur-xs lg:flex">
-              <StatusDot status="ok" pulse />
-              <span className="panel-label text-[10px]">Fleet Telemetry Live</span>
+            {/* Phones have no ⌘K — give the palette a visible entry point
+                where the full search field is hidden. */}
+            <button
+              onClick={() => document.dispatchEvent(new CustomEvent("ferrum:open-command-palette"))}
+              className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text)] sm:hidden"
+              aria-label="Search inventory and commands"
+            >
+              <Search className="h-4 w-4" />
+            </button>
+            {/* Mirrors the real SSE lifecycle (lib/sse) — the fleet dashboard
+                must not claim "live" while the stream is down. */}
+            <div className="hidden items-center gap-2.5 rounded-sm border border-[var(--border)] bg-[var(--bg-surface)]/90 px-3 py-1 text-xs font-medium text-[var(--text-muted)] backdrop-blur-xs lg:flex" role="status">
+              <StatusDot
+                status={sseStatus === "open" ? "ok" : sseStatus === "connecting" ? "warn" : "error"}
+                pulse={sseStatus === "open"}
+              />
+              <span className="panel-label text-[10px]">
+                {sseStatus === "open" ? "Fleet Telemetry Live" : sseStatus === "connecting" ? "Telemetry connecting…" : "Telemetry offline"}
+              </span>
             </div>
 
             <NotificationBell />

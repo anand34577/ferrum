@@ -102,6 +102,3 @@ export function utilizationTone(pct: number): "ok" | "warn" | "error" {
   if (pct >= 75) return "warn"
   return "ok"
 }
-
-/** Sum of allocated guest resources vs physical capacity — the overcommit
- * math behind the capacity-planning widget. */

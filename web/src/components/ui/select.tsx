@@ -35,7 +35,7 @@ export function SelectContent({ className, children, ...props }: ComponentProps<
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
         className={cn(
-          "z-50 max-h-[var(--radix-select-content-available-height,18rem)] min-w-[8rem] overflow-y-auto overscroll-contain rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] p-1.5 shadow-lg dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_12px_28px_rgba(0,0,0,0.6)]",
+          "z-50 max-h-[var(--radix-select-content-available-height,18rem)] min-w-[8rem] overflow-y-auto overscroll-contain rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] p-1.5 shadow-lg",
           "data-[state=open]:animate-in data-[state=open]:fade-in data-[state=open]:zoom-in-95",
           "data-[state=closed]:animate-out data-[state=closed]:fade-out data-[state=closed]:zoom-out-95",
           className,

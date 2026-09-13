@@ -17,6 +17,12 @@ const buttonVariants = cva(
           "border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text)] active:bg-[var(--bg-muted)]",
         ghost:
           "text-[var(--text-muted)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text)] active:bg-[var(--bg-muted)]",
+        // A ghost button reserved for destructive row actions (delete/remove).
+        // The color only appears on hover/press so a toolbar of these still
+        // reads calm — same treatment the hand-rolled className copies of
+        // this pattern used across pages, centralized here so they can't drift.
+        "ghost-danger":
+          "text-[var(--text-muted)] hover:bg-[color-mix(in_oklab,var(--status-error)_12%,transparent)] hover:text-[var(--status-error)] active:bg-[color-mix(in_oklab,var(--status-error)_20%,transparent)]",
         destructive:
           "border border-[color-mix(in_oklab,var(--status-error)_60%,black)] bg-[var(--status-error)] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.14)] hover:brightness-110 active:brightness-95",
         outline:

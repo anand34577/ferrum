@@ -9,6 +9,7 @@ import { useConfirm } from "@/components/ui/confirm-dialog"
 import { EmptyState } from "@/components/ui/empty-state"
 import { ErrorState } from "@/components/ui/error-state"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { PageHeader } from "@/components/ui/page-header"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -26,6 +27,7 @@ import {
 
 function ClusterFirewallSwitch({ connId }: { connId: string }) {
   const queryClient = useQueryClient()
+  const confirm = useConfirm()
   const optionsQuery = useQuery({
     queryKey: ["fw-options", connId],
     queryFn: () => api.get<{ enable: number }>(`/connections/${connId}/cluster/firewall/options`),
@@ -40,6 +42,20 @@ function ClusterFirewallSwitch({ connId }: { connId: string }) {
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to update firewall options"),
   })
 
+  // Turning the firewall OFF removes a live protection — worth one confirm;
+  // enabling needs none.
+  async function handleToggle(enable: boolean) {
+    if (!enable) {
+      const ok = await confirm({
+        title: "Disable the cluster firewall?",
+        description: "Cluster-wide rules stop being enforced on every node until it's turned back on.",
+        confirmLabel: "Disable",
+      })
+      if (!ok) return
+    }
+    toggle.mutate(enable)
+  }
+
   if (optionsQuery.isError) {
     return <p className="text-xs text-[var(--text-muted)]">Couldn't load firewall status.</p>
   }
@@ -47,7 +63,7 @@ function ClusterFirewallSwitch({ connId }: { connId: string }) {
 
   return (
     <label className="flex items-center gap-2 text-sm">
-      <Switch checked={enabled} onCheckedChange={(v) => toggle.mutate(v)} disabled={toggle.isPending} />
+      <Switch checked={enabled} onCheckedChange={(v) => void handleToggle(v)} disabled={toggle.isPending} />
       Cluster firewall {enabled ? "enabled" : "disabled"}
     </label>
   )
@@ -133,16 +149,24 @@ function AliasesAndIPSets({ connId }: { connId: string }) {
         </Button>
         {showAliasForm && (
           <div className="grid grid-cols-1 gap-3 rounded-md border border-[var(--border)] p-3 sm:grid-cols-3">
-            <Input placeholder="Name" value={aliasForm.name} onChange={(e) => setAliasForm({ ...aliasForm, name: e.target.value })} />
-            <Input placeholder="CIDR" value={aliasForm.cidr} onChange={(e) => setAliasForm({ ...aliasForm, cidr: e.target.value })} />
-            <Button size="sm" disabled={!aliasForm.name || !aliasForm.cidr || addAlias.isPending} onClick={() => addAlias.mutate()}>
-              Add
-            </Button>
+            <div className="space-y-1.5">
+              <Label htmlFor="alias-name">Name</Label>
+              <Input id="alias-name" placeholder="internal-net" value={aliasForm.name} onChange={(e) => setAliasForm({ ...aliasForm, name: e.target.value })} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="alias-cidr">CIDR or IP</Label>
+              <Input id="alias-cidr" placeholder="10.0.0.0/24" value={aliasForm.cidr} onChange={(e) => setAliasForm({ ...aliasForm, cidr: e.target.value })} />
+            </div>
+            <div className="flex items-end">
+              <Button size="sm" disabled={!aliasForm.name || !aliasForm.cidr || addAlias.isPending} loading={addAlias.isPending} onClick={() => addAlias.mutate()}>
+                Add alias
+              </Button>
+            </div>
           </div>
         )}
         <div className="space-y-1.5">
           {aliasesQuery.isLoading && <Skeleton className="h-9" />}
-          {aliasesQuery.isError && <p className="text-sm text-[var(--text-muted)]">Could not load aliases.</p>}
+          {aliasesQuery.isError && <ErrorState title="Couldn't load aliases" onRetry={() => void aliasesQuery.refetch()} className="py-6" />}
           {aliasesQuery.data?.map((a) => (
             <div key={a.name} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
               <span className="min-w-0 break-all">
@@ -152,8 +176,8 @@ function AliasesAndIPSets({ connId }: { connId: string }) {
               <Hint label="Delete alias">
                 <Button
                   size="icon"
-                  variant="ghost"
-                  className="shrink-0 hover:bg-[color-mix(in_oklab,var(--status-error)_12%,transparent)] hover:text-[var(--status-error)]"
+                  variant="ghost-danger"
+                  className="shrink-0"
                   aria-label={`Delete alias ${a.name}`}
                   onClick={() => removeAlias(a.name)}
                 >
@@ -172,16 +196,24 @@ function AliasesAndIPSets({ connId }: { connId: string }) {
         </Button>
         {showIPSetForm && (
           <div className="grid grid-cols-1 gap-3 rounded-md border border-[var(--border)] p-3 sm:grid-cols-3">
-            <Input placeholder="Name" value={ipsetForm.name} onChange={(e) => setIpsetForm({ ...ipsetForm, name: e.target.value })} />
-            <Input placeholder="Comment" value={ipsetForm.comment} onChange={(e) => setIpsetForm({ ...ipsetForm, comment: e.target.value })} />
-            <Button size="sm" disabled={!ipsetForm.name || addIPSet.isPending} onClick={() => addIPSet.mutate()}>
-              Create
-            </Button>
+            <div className="space-y-1.5">
+              <Label htmlFor="ipset-name">Name</Label>
+              <Input id="ipset-name" placeholder="admin-workstations" value={ipsetForm.name} onChange={(e) => setIpsetForm({ ...ipsetForm, name: e.target.value })} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ipset-comment">Comment (optional)</Label>
+              <Input id="ipset-comment" value={ipsetForm.comment} onChange={(e) => setIpsetForm({ ...ipsetForm, comment: e.target.value })} />
+            </div>
+            <div className="flex items-end">
+              <Button size="sm" disabled={!ipsetForm.name || addIPSet.isPending} loading={addIPSet.isPending} onClick={() => addIPSet.mutate()}>
+                Create IP set
+              </Button>
+            </div>
           </div>
         )}
         <div className="space-y-1.5">
           {ipsetsQuery.isLoading && <Skeleton className="h-9" />}
-          {ipsetsQuery.isError && <p className="text-sm text-[var(--text-muted)]">Could not load IP sets.</p>}
+          {ipsetsQuery.isError && <ErrorState title="Couldn't load IP sets" onRetry={() => void ipsetsQuery.refetch()} className="py-6" />}
           {ipsetsQuery.data?.map((s) => (
             <div key={s.name} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
               <span className="min-w-0 break-words">
@@ -191,8 +223,8 @@ function AliasesAndIPSets({ connId }: { connId: string }) {
               <Hint label="Delete IP set">
                 <Button
                   size="icon"
-                  variant="ghost"
-                  className="shrink-0 hover:bg-[color-mix(in_oklab,var(--status-error)_12%,transparent)] hover:text-[var(--status-error)]"
+                  variant="ghost-danger"
+                  className="shrink-0"
                   aria-label={`Delete IP set ${s.name}`}
                   onClick={() => removeIPSet(s.name)}
                 >
@@ -223,7 +255,7 @@ function ConnectionFirewall({ connId, name, nodes }: { connId: string; name: str
       <CardContent className="space-y-4">
         <div className="flex flex-wrap items-center gap-2">
           <Select value={scope} onValueChange={(v) => setScope(v as "cluster" | "node")}>
-            <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-40" aria-label="Firewall scope"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="cluster">Cluster-wide</SelectItem>
               <SelectItem value="node">Per-node</SelectItem>
@@ -231,7 +263,7 @@ function ConnectionFirewall({ connId, name, nodes }: { connId: string; name: str
           </Select>
           {scope === "node" && nodes.length > 0 && (
             <Select value={node} onValueChange={setNode}>
-              <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-40" aria-label="Node"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {nodes.map((n) => (
                   <SelectItem key={n.node} value={n.node}>{n.node}</SelectItem>
@@ -257,9 +289,11 @@ function ConnectionFirewall({ connId, name, nodes }: { connId: string; name: str
 }
 
 export function FirewallPage() {
-  const { data: inventory, isLoading, isError, refetch } = useQuery({
+  const queryClient = useQueryClient()
+  const { data: inventory, isLoading, isError, refetch, isRefetching } = useQuery({
     queryKey: ["inventory"],
     queryFn: () => api.get<ConnectionInventory[]>("/inventory/"),
+    refetchInterval: 30_000,
   })
   const connections = inventory ?? []
 
@@ -269,6 +303,8 @@ export function FirewallPage() {
         title="Firewall"
         description="Cluster and per-node firewall rules, aliases, and IP sets. Manage a guest's own rules from its detail dialog in Inventory."
         icon={Shield}
+        onRefresh={() => void queryClient.invalidateQueries()}
+        refreshing={isRefetching}
       />
 
       {isError ? (

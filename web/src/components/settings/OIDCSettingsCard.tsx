@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { toast } from "sonner"
+import { useFormDirty } from "@/components/settings/use-form-dirty"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ErrorState } from "@/components/ui/error-state"
+import { FormError } from "@/components/ui/form-error"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -65,6 +67,11 @@ export function OIDCSettingsCard() {
 function OIDCSettingsForm({ initial }: { initial: OIDCSettings }) {
   const queryClient = useQueryClient()
   const [form, setForm] = useState({ ...initial, clientSecret: "" })
+  // The GET omits the stored client secret, so dirty is measured against the
+  // form's own initial state (secret field starts blank) — never the raw
+  // server response. Remounted via key={JSON.stringify(query.data)} on save,
+  // so dirty resets for free.
+  const dirty = useFormDirty(form, { ...initial, clientSecret: "" })
 
   const save = useMutation({
     mutationFn: () =>
@@ -83,7 +90,7 @@ function OIDCSettingsForm({ initial }: { initial: OIDCSettings }) {
       toast.success("SSO settings saved")
       queryClient.setQueryData(["admin", "settings", "oidc"], data)
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to save SSO settings"),
+    // Failure surfaces inline via <FormError> below, not a toast.
   })
 
   return (
@@ -93,7 +100,7 @@ function OIDCSettingsForm({ initial }: { initial: OIDCSettings }) {
           <p className="text-sm font-medium">Enable SSO</p>
           <p className="text-xs text-[var(--text-muted)]">Shows a "Continue with ..." button on the login page.</p>
         </div>
-        <Switch checked={form.enabled} onCheckedChange={(v) => setForm({ ...form, enabled: v })} />
+        <Switch aria-label="Enable SSO" checked={form.enabled} onCheckedChange={(v) => setForm({ ...form, enabled: v })} />
       </div>
 
       <div className="flex items-center justify-between rounded-md border border-[var(--border)] px-3 py-2.5">
@@ -104,7 +111,7 @@ function OIDCSettingsForm({ initial }: { initial: OIDCSettings }) {
             useful when accounts should only be provisioned by an admin.
           </p>
         </div>
-        <Switch checked={form.allowAutoProvision} onCheckedChange={(v) => setForm({ ...form, allowAutoProvision: v })} />
+        <Switch aria-label="Auto-create new accounts" checked={form.allowAutoProvision} onCheckedChange={(v) => setForm({ ...form, allowAutoProvision: v })} />
       </div>
 
       <div className="rounded-md border border-[var(--border)] px-3 py-2.5">
@@ -116,7 +123,7 @@ function OIDCSettingsForm({ initial }: { initial: OIDCSettings }) {
               (the provider rejects the redirect with "invalid_redirect_uri").
             </p>
           </div>
-          <Switch checked={form.singleLogout} onCheckedChange={(v) => setForm({ ...form, singleLogout: v })} />
+          <Switch aria-label="Also sign out at the identity provider (Single Logout)" checked={form.singleLogout} onCheckedChange={(v) => setForm({ ...form, singleLogout: v })} />
         </div>
         {form.postLogoutRedirectUrl && (
           <div className="mt-2.5 flex items-center gap-2">
@@ -127,7 +134,12 @@ function OIDCSettingsForm({ initial }: { initial: OIDCSettings }) {
               type="button"
               size="sm"
               variant="outline"
-              onClick={() => navigator.clipboard.writeText(form.postLogoutRedirectUrl!).then(() => toast.success("Copied"))}
+              onClick={() => {
+                navigator.clipboard
+                  .writeText(form.postLogoutRedirectUrl!)
+                  .then(() => toast.success("Copied"))
+                  .catch(() => toast.error("Could not copy to clipboard"))
+              }}
             >
               Copy
             </Button>
@@ -172,7 +184,10 @@ function OIDCSettingsForm({ initial }: { initial: OIDCSettings }) {
         </div>
       </div>
 
-      <Button size="sm" loading={save.isPending} onClick={() => save.mutate()}>
+      <FormError
+        message={save.error instanceof ApiError ? save.error.message : save.error ? "Couldn't save SSO settings — try again." : null}
+      />
+      <Button size="sm" loading={save.isPending} disabled={!dirty} onClick={() => save.mutate()}>
         Save SSO settings
       </Button>
     </>

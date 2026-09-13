@@ -139,7 +139,7 @@ func runServer(ctx context.Context, cfg config.Config) {
 		os.Exit(1)
 	}
 
-	authSvc := auth.NewService(db)
+	authSvc := auth.NewService(db, secretBox)
 	srv := api.New(db, authSvc, secretBox, api.ServerOptions{
 		SecureCookies: cfg.Server.SecureCookies,
 		BehindProxy:   cfg.Server.BehindProxy,
@@ -163,7 +163,7 @@ func runServer(ctx context.Context, cfg config.Config) {
 	evaluator.SetBus(eventBus)
 	srv.SetAlertEvaluator(evaluator)
 
-	webhookDispatcher := notify.NewWebhookDispatcher(db)
+	webhookDispatcher := notify.NewWebhookDispatcher(db, secretBox)
 	srv.SetWebhookDispatcher(webhookDispatcher)
 
 	digestScheduler := digest.NewScheduler(db, connections.New(db, secretBox))

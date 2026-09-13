@@ -6,6 +6,7 @@ import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { scopedConnection } from "@/lib/fleet"
 import { cn } from "@/lib/utils"
 import { WidgetError } from "@/components/dashboard/WidgetChrome"
+import { Skeleton } from "@/components/ui/skeleton"
 
 const metricLabel: Record<CapacityWarning["metric"], string> = {
   disk: "Disk",
@@ -40,7 +41,7 @@ export function CapacityForecastWidget({ settings }: { settings: WidgetSettings 
   if (isError) return <WidgetError />
 
   if (isLoading) {
-    return <p className="text-sm text-[var(--text-muted)]">Loading forecast…</p>
+    return <Skeleton className="h-24" />
   }
 
   if (rows.length === 0) {

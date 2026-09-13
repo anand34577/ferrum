@@ -107,6 +107,20 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate the role before creating anything, so a bad id can't leave a
+	// half-set-up account behind.
+	if req.RoleID != "" {
+		var roleExists int
+		if err := s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM rbac_roles WHERE id = ?`, req.RoleID).Scan(&roleExists); err != nil {
+			s.writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if roleExists == 0 {
+			writeErrorMsg(w, http.StatusBadRequest, "unknown role")
+			return
+		}
+	}
+
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
@@ -118,6 +132,15 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		`INSERT INTO users (id, username, email, password_hash, is_admin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		id, req.Username, req.Email, string(hash), boolToInt(req.IsAdmin), now, now,
 	); err != nil {
+		// The pre-check above is inherently racy: a concurrent create can
+		// land between it and the INSERT and fail it here. Re-check and
+		// report the friendly conflict instead of a 500; anything else is
+		// a genuine server fault.
+		var nowExists int
+		if cerr := s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM users WHERE username = ? OR email = ?`, req.Username, req.Email).Scan(&nowExists); cerr == nil && nowExists > 0 {
+			writeErrorMsg(w, http.StatusConflict, "a user with that username or email already exists")
+			return
+		}
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -221,6 +244,20 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.IsAdmin != nil {
 		set("is_admin", boolToInt(*req.IsAdmin))
+	}
+	// Validate the role before touching anything, so a bad id can't clear
+	// the user's existing assignment (the DELETE below runs unconditionally
+	// once we get that far).
+	if req.RoleID != nil && *req.RoleID != "" {
+		var roleExists int
+		if err := s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM rbac_roles WHERE id = ?`, *req.RoleID).Scan(&roleExists); err != nil {
+			s.writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if roleExists == 0 {
+			writeErrorMsg(w, http.StatusBadRequest, "unknown role")
+			return
+		}
 	}
 	if len(sets) == 0 && req.RoleID == nil {
 		writeErrorMsg(w, http.StatusBadRequest, "no fields to update")

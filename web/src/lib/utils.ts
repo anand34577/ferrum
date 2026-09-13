@@ -107,6 +107,19 @@ export function formatRelativeTime(iso: string): string {
   return `${Math.floor(secs / 86400)}d ago`
 }
 
+/** Deep link to a guest: Inventory scoped to the guest's connection, with
+ * the guest's detail dialog auto-opened on arrival (see InventoryPage's
+ * focusGuest handling). Guests have no route of their own — the detail view
+ * is a dialog over the tree — so this is the one shareable/bookmarkable URL
+ * for "show me this VM", used by Task Center rows, alerts, topology, and
+ * paste-into-an-incident-channel links. */
+export function guestUrl(connId: string, vmid: number | string | undefined, name?: string): string {
+  const params = new URLSearchParams({ conn: connId })
+  if (vmid !== undefined && vmid !== null) params.set("focusGuest", String(vmid))
+  else if (name) params.set("focusGuest", name)
+  return `/inventory?${params.toString()}`
+}
+
 /** Badge tone for a guest/node running state — shared so "running"/"online"
  * vs "stopped"/"offline" doesn't drift between pages. */
 export function guestStatusVariant(status?: string): "ok" | "warn" | "error" | "default" {

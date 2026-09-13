@@ -14,7 +14,7 @@ function CopyBlock({ text }: { text: string }) {
       setCopied(true)
       toast.success("Copied to clipboard")
       setTimeout(() => setCopied(false), 2000)
-    })
+    }).catch(() => toast.error("Could not copy to clipboard"))
   }
   return (
     <div className="flex items-start gap-2">

@@ -5,7 +5,10 @@ package pve
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +17,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,11 +26,24 @@ import (
 const maxResponseBytes = 32 << 20 // 32 MiB — RRD blobs and task logs stay far below this
 
 // ErrUnauthorized reports that PVE rejected our credentials (expired ticket
-// or bad token); callers use it to invalidate cached sessions.
+// or bad token); do() wraps 401 responses in it, and callers can detect that
+// case with errors.Is(err, ErrUnauthorized) to invalidate cached sessions.
 var ErrUnauthorized = errors.New("pve: unauthorized")
 
-// IsUnauthorized reports whether err (or its chain) is a PVE auth rejection.
-func IsUnauthorized(err error) bool { return errors.Is(err, ErrUnauthorized) }
+// ResponseTooLargeError reports an upstream response body that exceeded
+// maxResponseBytes. The body is deliberately truncated at the limit instead
+// of exhausting memory, but surfaced as this explicit error so callers never
+// see the confusing "unexpected end of JSON input" that json.Unmarshal
+// produces on a half-read body.
+type ResponseTooLargeError struct {
+	Method string
+	Path   string
+	Limit  int
+}
+
+func (e *ResponseTooLargeError) Error() string {
+	return fmt.Sprintf("pve %s %s response exceeded %d MiB limit", e.Method, e.Path, e.Limit>>20)
+}
 
 // NotAvailableError marks an upstream feature that isn't present on the
 // target server — Ceph not installed ("binary not installed:
@@ -117,12 +134,20 @@ type Client struct {
 	// streamClient has no whole-request timeout — see New.
 	streamClient *http.Client
 
+	// skipVerify / fingerprint select the TLS transport, applied once in
+	// New after all Options ran (applyTransport) so option order can't
+	// produce a half-configured client. fingerprint wins: a pinned
+	// certificate replaces the CA chain as the trust root.
+	skipVerify  bool
+	fingerprint string // normalized: lowercase hex, no colons
+
 	// API-token auth (preferred): "PVEAPIToken=user@realm!tokenid=secret"
 	apiTokenHeader string
 
-	// Ticket auth (username/password): filled in by Login. A Client is not
-	// safe for concurrent use while a Login is in flight; the connections
-	// resolver serializes Login per connection.
+	// authMu guards the ticket-auth fields below: Login writes them (once
+	// per login) while any number of concurrent requests read them through
+	// authenticate/WSAuth on the shared cached client.
+	authMu sync.Mutex
 	ticket string
 	csrf   string
 }
@@ -142,12 +167,83 @@ var insecureTransport = func() *http.Transport {
 
 func WithInsecureSkipVerify(skip bool) Option {
 	return func(c *Client) {
-		if !skip {
-			return // keep the default transport (proxy support, HTTP/2, pool tuning)
+		c.skipVerify = skip
+	}
+}
+
+// WithFingerprint pins the server's TLS certificate: only a connection that
+// presents a certificate whose SHA-256 fingerprint matches fp (lowercase
+// hex, colons optional — the value `openssl s_client` / pvenode cert show)
+// is accepted, instead of trusting the system CA pool. Empty fp is a no-op.
+func WithFingerprint(fp string) Option {
+	return func(c *Client) {
+		if normalized := normalizeFingerprint(fp); normalized != "" {
+			c.fingerprint = normalized
 		}
+	}
+}
+
+// applyTransport selects the TLS transport from skipVerify/fingerprint.
+// Called once from New, after every Option, so the options' relative order
+// never matters. A pinned client gets its own transport: its TLS config
+// carries the per-client pin check.
+func (c *Client) applyTransport() {
+	switch {
+	case c.fingerprint != "":
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.TLSClientConfig = &tls.Config{
+			// The pin check below is the whole trust decision: chain and
+			// hostname validation are skipped exactly like skip-verify, but
+			// any certificate not matching the configured fingerprint is
+			// rejected before a request is sent.
+			InsecureSkipVerify:    true, //nolint:gosec // deliberate: fingerprint pinning replaces CA validation
+			VerifyPeerCertificate: c.verifyFingerprint,
+		}
+		c.httpClient.Transport = tr
+		c.streamClient.Transport = tr
+	case c.skipVerify:
 		c.httpClient.Transport = insecureTransport
 		c.streamClient.Transport = insecureTransport
 	}
+}
+
+// verifyFingerprint is the VerifyPeerCertificate hook for pinned clients:
+// it compares the SHA-256 of the leaf certificate's DER (rawCerts[0]) against
+// the configured fingerprint (see fingerprintMatches). certFingerprintSHA256
+// yields the same value PVE prints for its node certificates. Chain
+// verification never ran in pinned mode (see applyTransport), so
+// verifiedChains is always empty here.
+func (c *Client) verifyFingerprint(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+	if len(rawCerts) == 0 {
+		return errors.New("pve: server presented no certificate to pin against")
+	}
+	got := certFingerprintSHA256(rawCerts[0])
+	if !fingerprintMatches(c.fingerprint, got) {
+		return fmt.Errorf("pve: TLS certificate fingerprint mismatch — server presented %s, expected %s (as configured on the connection); update the fingerprint or remove it", got, c.fingerprint)
+	}
+	return nil
+}
+
+// normalizeFingerprint folds a fingerprint into lowercase hex without
+// separators, so "AA:BB:…" and "aabb…" compare equal.
+func normalizeFingerprint(fp string) string {
+	return strings.ToLower(strings.ReplaceAll(fp, ":", ""))
+}
+
+// certFingerprintSHA256 returns the SHA-256 digest of a DER-encoded
+// certificate as lowercase hex — the value `openssl x509 -fingerprint
+// -sha256` shows, minus the colons.
+func certFingerprintSHA256(der []byte) string {
+	sum := sha256.Sum256(der)
+	return hex.EncodeToString(sum[:])
+}
+
+// fingerprintMatches reports whether a configured pin matches a server
+// certificate fingerprint; both sides may carry colons and mixed case. An
+// empty configured pin never matches — pinning is opt-in.
+func fingerprintMatches(configured, got string) bool {
+	configured = normalizeFingerprint(configured)
+	return configured != "" && configured == normalizeFingerprint(got)
 }
 
 // New creates a client for a Proxmox host reachable at host:port.
@@ -163,6 +259,7 @@ func New(host string, port int, opts ...Option) *Client {
 	for _, opt := range opts {
 		opt(c)
 	}
+	c.applyTransport()
 	return c
 }
 
@@ -202,8 +299,10 @@ func (c *Client) Login(ctx context.Context, username, password string) error {
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&out); err != nil {
 		return err
 	}
+	c.authMu.Lock()
 	c.ticket = out.Data.Ticket
 	c.csrf = out.Data.CSRFPreventionToken
+	c.authMu.Unlock()
 	return nil
 }
 
@@ -220,6 +319,14 @@ func isNotAvailable(status int, body string) bool {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body url.Values, out any) error {
+	return c.doOn(ctx, c.httpClient, method, path, body, out)
+}
+
+// doOn is do() against an explicit HTTP client — the streamClient for the
+// rare calls that legitimately outlive httpClient's 15s whole-request
+// timeout (cluster join blocks until the joining node has synced corosync
+// state, which can take minutes).
+func (c *Client) doOn(ctx context.Context, hc *http.Client, method, path string, body url.Values, out any) error {
 	var reqBody io.Reader
 	if body != nil {
 		reqBody = strings.NewReader(body.Encode())
@@ -233,15 +340,18 @@ func (c *Client) do(ctx context.Context, method, path string, body url.Values, o
 	}
 	c.authenticate(req)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return err
+	}
+	if len(raw) > maxResponseBytes {
+		return &ResponseTooLargeError{Method: method, Path: path, Limit: maxResponseBytes}
 	}
 	if resp.StatusCode >= 300 {
 		err := &StatusError{Method: method, Path: path, StatusCode: resp.StatusCode, Body: string(raw)}
@@ -281,9 +391,12 @@ func (c *Client) PostMultipart(ctx context.Context, path, contentType string, bo
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return err
+	}
+	if len(raw) > maxResponseBytes {
+		return &ResponseTooLargeError{Method: http.MethodPost, Path: path, Limit: maxResponseBytes}
 	}
 	if resp.StatusCode >= 300 {
 		err := &StatusError{Method: http.MethodPost, Path: path, StatusCode: resp.StatusCode, Body: string(raw)}
@@ -331,6 +444,8 @@ func (c *Client) WSAuth() (headerKey, headerVal string, cookieName, cookieVal st
 	if c.apiTokenHeader != "" {
 		return "Authorization", c.apiTokenHeader, "", ""
 	}
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
 	return "", "", "PVEAuthCookie", c.ticket
 }
 
@@ -339,10 +454,13 @@ func (c *Client) authenticate(req *http.Request) {
 		req.Header.Set("Authorization", c.apiTokenHeader)
 		return
 	}
-	if c.ticket != "" {
-		req.AddCookie(&http.Cookie{Name: "PVEAuthCookie", Value: c.ticket})
+	c.authMu.Lock()
+	ticket, csrf := c.ticket, c.csrf
+	c.authMu.Unlock()
+	if ticket != "" {
+		req.AddCookie(&http.Cookie{Name: "PVEAuthCookie", Value: ticket})
 		if req.Method != http.MethodGet {
-			req.Header.Set("CSRFPreventionToken", c.csrf)
+			req.Header.Set("CSRFPreventionToken", csrf)
 		}
 	}
 }

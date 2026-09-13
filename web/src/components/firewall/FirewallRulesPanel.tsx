@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { DataTable } from "@/components/ui/data-table"
+import { ErrorState } from "@/components/ui/error-state"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -206,7 +207,7 @@ export function FirewallRulesPanel({ basePath, queryKey }: { basePath: string; q
         </div>
       )}
       {rulesQuery.isError ? (
-        <p className="text-sm text-[var(--text-muted)]">Could not load firewall rules.</p>
+        <ErrorState title="Couldn't load firewall rules" onRetry={() => void rulesQuery.refetch()} />
       ) : (
         <DataTable
           columns={columns}

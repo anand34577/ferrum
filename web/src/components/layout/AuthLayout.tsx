@@ -16,7 +16,7 @@ export function AuthLayout({ title, subtitle, children }: { title: string; subti
         style={{ backgroundImage: "var(--page-grid)", backgroundSize: "32px 32px" }}
       />
       <div className="relative w-full max-w-sm">
-        <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] p-8 shadow-xl dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_20px_50px_rgba(0,0,0,0.7)]">
+        <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] p-8 shadow-lg">
           <div className="mb-6 text-center">
             <BrandMark size="lg" className="mx-auto mb-3" />
             <h1 className="panel-label text-xl font-bold text-[var(--text)]">{title}</h1>

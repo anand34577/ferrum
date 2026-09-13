@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react"
+import { api } from "@/lib/api"
 
 /**
  * Mirrors the server's internal/events.Event (see internal/api/events.go) —
@@ -30,6 +31,10 @@ export interface UseEventStreamOptions {
   /** Set to false to not connect at all (e.g. while a page that doesn't
    * need live updates is mounted). Default true. */
   enabled?: boolean
+  /** Notified on every connection lifecycle change ("connecting" | "open" |
+   * "closed") — lets a shared owner mirror the status into a store without
+   * resorting to polling. Optional. */
+  onStatusChange?: (status: EventStreamStatus) => void
 }
 
 export interface UseEventStreamResult {
@@ -49,6 +54,9 @@ const DEFAULT_MAX_BUFFERED = 100
 // once.
 const RECONNECT_BASE_MS = 1000
 const RECONNECT_MAX_MS = 30000
+// Consecutive failed connections before we suspect the session has expired
+// (rather than the server merely restarting) and probe once — see onerror.
+const AUTH_PROBE_THRESHOLD = 3
 
 /**
  * Subscribes to the server's live event stream (GET /api/v1/events, SSE —
@@ -57,12 +65,11 @@ const RECONNECT_MAX_MS = 30000
  * periodically, since the stream sits behind the same request-timeout
  * middleware as the rest of the API — this is expected, not an error).
  *
- * Not wired into any page yet — this is the standalone hook, ready for a
- * follow-up pass to consume once the pages it would touch aren't being
- * actively edited elsewhere.
+ * Consumed today by NotificationBell (live alert badge) and AppShell (the
+ * "Fleet Telemetry Live" pill mirrors `status`).
  */
 export function useEventStream(options: UseEventStreamOptions = {}): UseEventStreamResult {
-  const { types, maxBuffered = DEFAULT_MAX_BUFFERED, onEvent, enabled = true } = options
+  const { types, maxBuffered = DEFAULT_MAX_BUFFERED, onEvent, enabled = true, onStatusChange } = options
   const [status, setStatus] = useState<EventStreamStatus>("connecting")
   const [events, setEvents] = useState<FerrumEvent[]>([])
 
@@ -75,10 +82,17 @@ export function useEventStream(options: UseEventStreamOptions = {}): UseEventStr
   onEventRef.current = onEvent
   const typesRef = useRef(types)
   typesRef.current = types
+  const onStatusChangeRef = useRef(onStatusChange)
+  onStatusChangeRef.current = onStatusChange
+
+  const updateStatus = (next: EventStreamStatus) => {
+    setStatus(next)
+    onStatusChangeRef.current?.(next)
+  }
 
   useEffect(() => {
     if (!enabled) {
-      setStatus("closed")
+      updateStatus("closed")
       return
     }
 
@@ -86,15 +100,18 @@ export function useEventStream(options: UseEventStreamOptions = {}): UseEventStr
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined
     let attempt = 0
     let stopped = false
+    // Consecutive failed connections without a successful open in between.
+    let failedConnections = 0
 
     const connect = () => {
       if (stopped) return
-      setStatus("connecting")
+      updateStatus("connecting")
       source = new EventSource("/api/v1/events", { withCredentials: true })
 
       source.onopen = () => {
         attempt = 0
-        setStatus("open")
+        failedConnections = 0
+        updateStatus("open")
       }
 
       source.onmessage = (msg: MessageEvent<string>) => {
@@ -123,8 +140,20 @@ export function useEventStream(options: UseEventStreamOptions = {}): UseEventStr
         // backoff+reconnect rather than trusting the browser's built-in
         // (unbounded, no-backoff) retry.
         source?.close()
-        setStatus("connecting")
+        updateStatus("connecting")
         if (stopped) return
+        // A streak of consecutive failures usually means the session expired
+        // rather than the server bouncing: fire one authenticated probe —
+        // the api layer's 401 handler triggers the sign-out flow, which
+        // unmounts the app and closes this stream. The streak resets after
+        // probing so the probe itself retries at the same bounded backoff
+        // instead of hammering /auth/me. The probe result is deliberately
+        // ignored here; a 401 does the work, any other failure is noise.
+        failedConnections += 1
+        if (failedConnections >= AUTH_PROBE_THRESHOLD) {
+          failedConnections = 0
+          api.get("/auth/me").catch(() => {})
+        }
         const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** attempt) * (0.75 + Math.random() * 0.5)
         attempt += 1
         reconnectTimer = setTimeout(connect, delay)

@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { useConfirm } from "@/components/ui/confirm-dialog"
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ErrorState } from "@/components/ui/error-state"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -150,7 +150,15 @@ export function AIProvidersCard() {
   })
 
   async function handleRemove(p: AIProvider) {
-    if (await confirm({ title: `Remove "${p.name}"?`, description: `Its ${p.models.length} model(s) will no longer be selectable in the AI Assistant.` })) {
+    const n = p.models.length
+    if (
+      await confirm({
+        title: `Remove "${p.name}"?`,
+        description: n === 0
+          ? "Its models — if any — will no longer be selectable in the AI Assistant."
+          : `Its ${n} model${n === 1 ? "" : "s"} will no longer be selectable in the AI Assistant.`,
+      })
+    ) {
       remove.mutate(p.id)
       if (editingId === p.id) setOpen(false)
     }
@@ -229,6 +237,9 @@ export function AIProvidersCard() {
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>{editingId ? "Edit provider" : "Add AI provider"}</DialogTitle>
+            <DialogDescription>
+              Any server speaking OpenAI's chat-completions API. The models you add here are what users pick from in the AI Assistant.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             {!editingId && (
@@ -284,7 +295,7 @@ export function AIProvidersCard() {
                 <p className="text-sm font-medium">Enabled</p>
                 <p className="text-xs text-[var(--text-muted)]">Visible to users in the AI Assistant picker.</p>
               </div>
-              <Switch checked={form.isEnabled} onCheckedChange={(v) => setForm({ ...form, isEnabled: v })} />
+              <Switch aria-label="Enabled" checked={form.isEnabled} onCheckedChange={(v) => setForm({ ...form, isEnabled: v })} />
             </div>
 
             <div className="flex items-center justify-between">

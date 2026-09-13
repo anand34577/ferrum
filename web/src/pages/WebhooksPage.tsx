@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { CheckCircle2, ChevronDown, Copy, Plus, Send, Trash2, Webhook as WebhookIcon, XCircle } from "lucide-react"
+import { CheckCircle2, ChevronDown, Copy, Pencil, Plus, Send, Trash2, Webhook as WebhookIcon, XCircle } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
@@ -16,6 +16,7 @@ import { Label } from "@/components/ui/label"
 import { PageHeader } from "@/components/ui/page-header"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
+import { Timestamp } from "@/components/ui/timestamp"
 import { api, ApiError } from "@/lib/api"
 
 // Mirrors internal/api/webhooks.go's webhookDTO / webhookDeliveryDTO and the
@@ -52,6 +53,8 @@ const EVENT_TYPES = [
 ]
 
 interface FormState {
+  /** Present when editing an existing webhook — the dialog serves both. */
+  id?: string
   name: string
   url: string
   eventTypes: string[]
@@ -84,6 +87,32 @@ export function WebhooksPage() {
     },
     onError: (err) => setFormError(err instanceof ApiError ? err.message : "Failed to create webhook"),
   })
+
+  // Editing in place beats the old delete-and-recreate flow, which minted a
+  // new signing secret that had to be redistributed to every receiver.
+  const updateMutation = useMutation({
+    mutationFn: (body: FormState) =>
+      api.put<Webhook>(`/settings/webhooks/${body.id}/`, {
+        name: body.name,
+        url: body.url,
+        eventTypes: body.eventTypes,
+        active: body.active,
+      }),
+    onSuccess: () => {
+      toast.success("Webhook updated")
+      queryClient.invalidateQueries({ queryKey: ["webhooks"] })
+      setDialogOpen(false)
+      setForm(emptyForm)
+      setFormError(null)
+    },
+    onError: (err) => setFormError(err instanceof ApiError ? err.message : "Failed to update webhook"),
+  })
+
+  function editHook(hook: Webhook) {
+    setForm({ id: hook.id, name: hook.name, url: hook.url, eventTypes: hook.eventTypes, active: hook.active })
+    setFormError(null)
+    setDialogOpen(true)
+  }
 
   const toggleActiveMutation = useMutation({
     mutationFn: (hook: Webhook) => api.put<Webhook>(`/settings/webhooks/${hook.id}/`, { ...hook, active: !hook.active }),
@@ -122,8 +151,10 @@ export function WebhooksPage() {
       <PageHeader
         title="Webhooks"
         description="Fan events (alerts, connection status, guest lifecycle) out to any HTTP endpoint — Slack, PagerDuty, n8n, or your own automation, signed with HMAC-SHA256 so receivers can verify authenticity."
+        onRefresh={() => void queryClient.invalidateQueries({ queryKey: ["webhooks"] })}
+        refreshing={webhooksQuery.isRefetching}
         actions={
-          <Button onClick={() => setDialogOpen(true)}>
+          <Button onClick={() => { setForm(emptyForm); setFormError(null); setDialogOpen(true) }}>
             <Plus className="h-4 w-4" /> Add webhook
           </Button>
         }
@@ -153,12 +184,13 @@ export function WebhooksPage() {
             onToggleExpand={() => setExpandedId((id) => (id === hook.id ? null : hook.id))}
             onToggleActive={() => toggleActiveMutation.mutate(hook)}
             onTest={() => testMutation.mutate(hook.id)}
+            onEdit={() => editHook(hook)}
             onDelete={async () => {
               if (await confirm({ title: "Delete webhook?", description: `"${hook.name}" will stop receiving events immediately.`, destructive: true })) {
                 deleteMutation.mutate(hook.id)
               }
             }}
-            testPending={testMutation.isPending}
+            testPending={testMutation.isPending && testMutation.variables === hook.id}
           />
         ))}
       </div>
@@ -166,8 +198,12 @@ export function WebhooksPage() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Add webhook</DialogTitle>
-            <DialogDescription>The signing secret is shown once, right after creation — store it somewhere safe.</DialogDescription>
+            <DialogTitle>{form.id ? `Edit "${form.name}"` : "Add webhook"}</DialogTitle>
+            <DialogDescription>
+              {form.id
+                ? "Changes apply to future deliveries — the signing secret stays the same."
+                : "The signing secret is shown once, right after creation — store it somewhere safe."}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1.5">
@@ -190,7 +226,7 @@ export function WebhooksPage() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <Switch checked={form.active} onCheckedChange={(active) => setForm({ ...form, active })} />
+              <Switch aria-label="Active" checked={form.active} onCheckedChange={(active) => setForm({ ...form, active })} />
               <Label>Active</Label>
             </div>
             <FormError message={formError} />
@@ -199,12 +235,15 @@ export function WebhooksPage() {
             <Button variant="ghost" onClick={() => setDialogOpen(false)}>
               Cancel
             </Button>
-            <Button
-              disabled={!form.name || !form.url || createMutation.isPending}
-              onClick={() => createMutation.mutate(form)}
-            >
-              Create webhook
-            </Button>
+            {form.id ? (
+              <Button loading={updateMutation.isPending} disabled={!form.name || !form.url} onClick={() => updateMutation.mutate(form)}>
+                Save changes
+              </Button>
+            ) : (
+              <Button loading={createMutation.isPending} disabled={!form.name || !form.url} onClick={() => createMutation.mutate(form)}>
+                Create webhook
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -223,9 +262,12 @@ export function WebhooksPage() {
             <Button
               size="sm"
               variant="ghost"
+              aria-label="Copy signing secret"
               onClick={() => {
-                if (revealedSecret?.secret) navigator.clipboard.writeText(revealedSecret.secret)
-                toast.success("Copied to clipboard")
+                if (!revealedSecret?.secret) return
+                navigator.clipboard.writeText(revealedSecret.secret).then(() => {
+                  toast.success("Copied to clipboard")
+                }).catch(() => toast.error("Could not copy to clipboard"))
               }}
             >
               <Copy className="h-3.5 w-3.5" />
@@ -246,6 +288,7 @@ function WebhookRow({
   onToggleExpand,
   onToggleActive,
   onTest,
+  onEdit,
   onDelete,
   testPending,
 }: {
@@ -254,6 +297,7 @@ function WebhookRow({
   onToggleExpand: () => void
   onToggleActive: () => void
   onTest: () => void
+  onEdit: () => void
   onDelete: () => void
   testPending: boolean
 }) {
@@ -289,8 +333,11 @@ function WebhookRow({
           </div>
           <Badge variant={hook.active ? "default" : "outline"}>{hook.active ? "Active" : "Paused"}</Badge>
           <Switch checked={hook.active} onCheckedChange={onToggleActive} aria-label={hook.active ? "Pause webhook" : "Activate webhook"} />
-          <Button size="sm" variant="ghost" onClick={onTest} disabled={testPending}>
-            <Send className="h-3.5 w-3.5" /> Test
+          <Button size="sm" variant="ghost" onClick={onEdit} aria-label={`Edit ${hook.name}`}>
+            <Pencil className="h-3.5 w-3.5" />
+          </Button>
+          <Button size="sm" variant="ghost" onClick={onTest} loading={testPending}>
+            {!testPending && <Send className="h-3.5 w-3.5" />} Test
           </Button>
           <Button size="sm" variant="ghost" onClick={onDelete} aria-label={`Delete ${hook.name}`}>
             <Trash2 className="h-3.5 w-3.5 text-[var(--status-error)]" />
@@ -315,10 +362,13 @@ function WebhookRow({
                   <span className="text-[var(--text-faint)]">attempt {d.attempt}</span>
                   {d.statusCode !== undefined && <span className="text-[var(--text-faint)]">HTTP {d.statusCode}</span>}
                   {d.error && <span className="min-w-0 flex-1 truncate text-[var(--status-error)]">{d.error}</span>}
-                  <span className="ml-auto shrink-0 text-[var(--text-faint)]">{new Date(d.createdAt).toLocaleString()}</span>
+                  <Timestamp iso={d.createdAt} mode="absolute" className="ml-auto shrink-0 text-[var(--text-faint)]" />
                 </li>
               ))}
             </ul>
+            {(deliveriesQuery.data?.length ?? 0) > 20 && (
+              <p className="text-xs text-[var(--text-faint)]">Showing the 20 most recent deliveries.</p>
+            )}
           </div>
         )}
       </CardContent>

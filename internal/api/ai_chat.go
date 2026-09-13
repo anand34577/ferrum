@@ -464,12 +464,17 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 			// flushed live — the browser keeps whatever arrived before this
 			// point, see streamError's doc comment) before it failed; say
 			// so instead of the misleading "could not reach" framing that
-			// belongs to an actual connection failure below.
+			// belongs to an actual connection failure below. Either way the
+			// upstream's own error text never reaches the browser — it can
+			// carry provider-side detail (model paths, auth state) that
+			// isn't this user's to see; only the sanitized message goes out.
 			var se *streamError
 			if errors.As(err, &se) {
-				writeSSEError(w, flusher, "AI provider error: "+se.Error())
+				slog.Error("ai chat: provider failed mid-stream", "error", se.Error())
+				writeSSEError(w, flusher, "the AI provider rejected the request")
 			} else {
-				writeSSEError(w, flusher, "could not reach AI provider: "+err.Error())
+				slog.Error("ai chat: could not reach the AI provider", "error", err.Error())
+				writeSSEError(w, flusher, "could not reach the AI provider")
 			}
 			return
 		}
@@ -554,7 +559,9 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 
 			var argsParsed any
 			_ = json.Unmarshal([]byte(argsStr), &argsParsed)
-			writeSSEJSON(w, flusher, toolCallEnvelope{ToolCall: &toolActivity{Name: name, Args: argsParsed}})
+			// The live envelope gets the same redaction recordToolCall applies
+			// to the persisted copy — args often carry credentials.
+			writeSSEJSON(w, flusher, toolCallEnvelope{ToolCall: &toolActivity{Name: name, Args: redactSensitive(argsParsed)}})
 
 			resultText, isErr := s.mcp.CallTool(ctx, user, "chat", name, json.RawMessage(argsStr))
 			writeSSEJSON(w, flusher, toolResultEnvelope{ToolResult: &toolActivity{Name: name, OK: !isErr, Result: truncateForDisplay(resultText)}})

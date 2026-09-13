@@ -4,6 +4,8 @@ package poller
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -137,17 +139,25 @@ func (e *AlertEvaluator) evaluateOnce(ctx context.Context) {
 		go func(i int, conn connections.Info) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			client, err := e.conns.ClientFor(ctx, conn.ID)
+			if conn.Type == "pbs" {
+				// PBS remotes don't serve /cluster/resources — without this
+				// branch they'd be driven through the PVE client below and
+				// persisted as permanently "down" on every tick. Probe with
+				// the cheapest authenticated call instead so they get real
+				// up/down health like every other connection.
+				if err := probePBS(ctx, e.conns, conn.ID); err != nil {
+					slog.Warn("alert evaluator: connection unreachable, skipping", "connectionId", conn.ID, "name", conn.Name, "error", err)
+					results[i] = fetched{conn: conn, err: err}
+					return
+				}
+				results[i] = fetched{conn: conn, ok: true}
+				return
+			}
+			resources, err := fetchClusterResources(ctx, e.conns, conn.ID)
 			if err != nil {
 				// The inventory UI surfaces unreachable connections; here we
 				// still want a trail for "why did alerts stop updating".
 				slog.Warn("alert evaluator: connection unreachable, skipping", "connectionId", conn.ID, "name", conn.Name, "error", err)
-				results[i] = fetched{conn: conn, err: err}
-				return
-			}
-			resources, err := client.ClusterResources(ctx)
-			if err != nil {
-				slog.Warn("alert evaluator: fetching cluster resources failed, skipping", "connectionId", conn.ID, "name", conn.Name, "error", err)
 				results[i] = fetched{conn: conn, err: err}
 				return
 			}
@@ -160,21 +170,26 @@ func (e *AlertEvaluator) evaluateOnce(ctx context.Context) {
 	// answers at all matters regardless of whether the admin has configured
 	// any threshold rule, since a fully offline cluster is the one case
 	// metric-threshold rules can never catch (there's no metric to evaluate).
+	pveResources := map[string][]pve.ClusterResource{}
 	for _, f := range results {
 		e.recordConnectionHealth(ctx, f.conn, f.ok, f.err)
 		if !f.ok {
 			continue
 		}
 		polled[f.conn.ID] = true
-		// Smallest viable "this credential still works" signal: a
-		// successful cluster/resources call already IS a successful
-		// authenticated request, so there is no separate probe to add.
+		// Smallest viable "this credential still works" signal: a successful
+		// authenticated call (cluster/resources for PVE, datastore list for
+		// PBS) already IS a successful authenticated request, so there is no
+		// separate probe to add.
 		if _, err := e.db.ExecContext(ctx, `UPDATE connections SET last_verified_at = ? WHERE id = ?`,
 			time.Now().UTC().Format(time.RFC3339), f.conn.ID,
 		); err != nil {
 			slog.Error("alert evaluator: recording last_verified_at failed", "connectionId", f.conn.ID, "error", err)
 		}
-		e.evaluateConnection(ctx, f.conn, f.resources, rules, seen)
+		if f.conn.Type == "pve" {
+			pveResources[f.conn.ID] = f.resources
+			e.evaluateConnection(ctx, f.conn, f.resources, rules, seen)
+		}
 	}
 
 	e.reconcileMissing(ctx, rules, polled, seen)
@@ -183,7 +198,40 @@ func (e *AlertEvaluator) evaluateOnce(ctx context.Context) {
 	// same alert_rules/alert_instances tables as metric-threshold rules
 	// above (see certificates.go) — no parallel alerting mechanism.
 	e.checkConnectionStaleness(ctx, conns)
-	e.checkCertificateExpiry(ctx, conns)
+	e.checkCertificateExpiry(ctx, conns, pveResources)
+}
+
+// fetchClusterResources resolves a PVE client for connID and fetches
+// /cluster/resources, re-running both once when upstream rejects the cached
+// ticket with 401 (the retry logs in fresh through the resolver). Non-auth
+// errors are returned as-is. Shared by the alert evaluator, the lifecycle
+// evaluator, and the certificate check so the re-login path lives in one
+// place.
+func fetchClusterResources(ctx context.Context, conns *connections.Resolver, connID string) ([]pve.ClusterResource, error) {
+	var resources []pve.ClusterResource
+	err := conns.RetryOnUnauthorized(connID, func() error {
+		client, cerr := conns.ClientFor(ctx, connID)
+		if cerr != nil {
+			return cerr
+		}
+		resources, cerr = client.ClusterResources(ctx)
+		return cerr
+	})
+	return resources, err
+}
+
+// probePBS checks whether a PBS connection is reachable with the cheapest
+// authenticated call its client offers; the result is deliberately opaque —
+// only success/failure feeds connection health.
+func probePBS(ctx context.Context, conns *connections.Resolver, connID string) error {
+	return conns.RetryOnUnauthorized(connID, func() error {
+		client, err := conns.PBSClientFor(ctx, connID)
+		if err != nil {
+			return err
+		}
+		_, err = client.ListDatastores(ctx)
+		return err
+	})
 }
 
 func (e *AlertEvaluator) evaluateConnection(ctx context.Context, conn connections.Info, resources []pve.ClusterResource, rules []rule, seen map[string]map[string]bool) {
@@ -351,7 +399,15 @@ func (e *AlertEvaluator) reconcileMissing(ctx context.Context, rules []rule, pol
 func (e *AlertEvaluator) upsertActive(ctx context.Context, ru rule, conn connections.Info, resourceID, resourceName string, value float64) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	var existingID string
-	isNew := e.db.QueryRowContext(ctx, `SELECT id FROM alert_instances WHERE rule_id = ? AND resource_id = ?`, ru.ID, resourceID).Scan(&existingID) != nil
+	// isNew must be answered by ErrNoRows specifically: any other lookup
+	// error is unknown state, so the whole upsert is skipped rather than
+	// risking a spurious "alert triggered" notification for an existing row.
+	err := e.db.QueryRowContext(ctx, `SELECT id FROM alert_instances WHERE rule_id = ? AND resource_id = ?`, ru.ID, resourceID).Scan(&existingID)
+	isNew := errors.Is(err, sql.ErrNoRows)
+	if err != nil && !isNew {
+		slog.Error("alert evaluator: checking for an existing instance failed", "rule", ru.ID, "resource", resourceID, "error", err)
+		return
+	}
 
 	// Atomic upsert: the unique (rule_id, resource_id) constraint decides
 	// insert vs update in one statement, so a racing evaluator can't create

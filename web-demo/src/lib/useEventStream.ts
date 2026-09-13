@@ -56,10 +56,6 @@ const RECONNECT_MAX_MS = 30000
  * with exponential backoff if the connection drops (which it will
  * periodically, since the stream sits behind the same request-timeout
  * middleware as the rest of the API — this is expected, not an error).
- *
- * Not wired into any page yet — this is the standalone hook, ready for a
- * follow-up pass to consume once the pages it would touch aren't being
- * actively edited elsewhere.
  */
 export function useEventStream(options: UseEventStreamOptions = {}): UseEventStreamResult {
   const { types, maxBuffered = DEFAULT_MAX_BUFFERED, onEvent, enabled = true } = options

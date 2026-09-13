@@ -2,6 +2,8 @@ package poller
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"ferrum/internal/connections"
+	"ferrum/internal/pve"
 )
 
 // Synthetic, always-present alert_rules rows that back the built-in
@@ -99,15 +102,16 @@ func (e *AlertEvaluator) checkConnectionStaleness(ctx context.Context, conns []c
 }
 
 // checkCertificateExpiry fetches every node's TLS certificates (PVE's
-// /nodes/{node}/certificates/info) for every connection and alerts on
+// /nodes/{node}/certificates/info) for every PVE connection and alerts on
 // ones nearing expiry. Gated to certCheckInterval since it costs one HTTP
 // round trip per node, on top of the per-connection cluster/resources call
-// evaluateOnce already made this tick.
+// evaluateOnce already made this tick — resourcesByConn is that call's
+// result, shared in rather than re-fetched per connection here.
 //
-// PBS certificate monitoring was left out of this round: PBS cert info
-// needs its own client work (see task notes) rather than reusing this PVE
-// call shape, so only PVE connections are covered here.
-func (e *AlertEvaluator) checkCertificateExpiry(ctx context.Context, conns []connections.Info) {
+// PBS certificate monitoring isn't implemented: PBS cert info needs its own
+// client work rather than reusing this PVE call shape, so only PVE
+// connections are covered here.
+func (e *AlertEvaluator) checkCertificateExpiry(ctx context.Context, conns []connections.Info, resourcesByConn map[string][]pve.ClusterResource) {
 	e.certCheckMu.Lock()
 	due := e.lastCertCheck.IsZero() || time.Since(e.lastCertCheck) >= certCheckInterval
 	if due {
@@ -119,19 +123,15 @@ func (e *AlertEvaluator) checkCertificateExpiry(ctx context.Context, conns []con
 	}
 
 	for _, conn := range conns {
-		client, err := e.conns.ClientFor(ctx, conn.ID)
-		if err != nil {
-			continue // unreachable connection is already covered by connection_health/staleness
-		}
-		resources, err := client.ClusterResources(ctx)
-		if err != nil {
-			continue
+		resources, ok := resourcesByConn[conn.ID]
+		if !ok {
+			continue // unreachable (or PBS) this tick — already covered by connection_health/staleness
 		}
 		for _, res := range resources {
 			if res.Type != "node" || res.Node == "" {
 				continue
 			}
-			certs, err := client.NodeCertificates(ctx, res.Node)
+			certs, err := e.nodeCertificates(ctx, conn.ID, res.Node)
 			if err != nil {
 				slog.Warn("alert evaluator: fetching node certificates failed", "connectionId", conn.ID, "node", res.Node, "error", err)
 				continue
@@ -157,6 +157,22 @@ func (e *AlertEvaluator) checkCertificateExpiry(ctx context.Context, conns []con
 	}
 }
 
+// nodeCertificates fetches one node's certificates, re-resolving the client
+// and retrying once when upstream rejects the cached ticket with 401 (see
+// Resolver.RetryOnUnauthorized).
+func (e *AlertEvaluator) nodeCertificates(ctx context.Context, connID, node string) ([]pve.NodeCertificate, error) {
+	var certs []pve.NodeCertificate
+	err := e.conns.RetryOnUnauthorized(connID, func() error {
+		client, cerr := e.conns.ClientFor(ctx, connID)
+		if cerr != nil {
+			return cerr
+		}
+		certs, cerr = client.NodeCertificates(ctx, node)
+		return cerr
+	})
+	return certs, err
+}
+
 // upsertSystemAlert is upsertActive's counterpart for the built-in rules
 // above: same insert-or-update-preserving-silence shape, but severity is
 // computed per-instance (closer to expiry = worse) rather than copied from
@@ -165,7 +181,14 @@ func (e *AlertEvaluator) checkCertificateExpiry(ctx context.Context, conns []con
 func (e *AlertEvaluator) upsertSystemAlert(ctx context.Context, ruleID, metric string, conn connections.Info, resourceID, resourceName string, value, threshold float64, severity string) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	var existingID string
-	isNew := e.db.QueryRowContext(ctx, `SELECT id FROM alert_instances WHERE rule_id = ? AND resource_id = ?`, ruleID, resourceID).Scan(&existingID) != nil
+	// Only ErrNoRows means "new"; any other lookup error is unknown state —
+	// skip the whole upsert rather than risk a duplicate notification.
+	err := e.db.QueryRowContext(ctx, `SELECT id FROM alert_instances WHERE rule_id = ? AND resource_id = ?`, ruleID, resourceID).Scan(&existingID)
+	isNew := errors.Is(err, sql.ErrNoRows)
+	if err != nil && !isNew {
+		slog.Error("alert evaluator: checking for an existing built-in alert failed", "rule", ruleID, "resource", resourceID, "error", err)
+		return
+	}
 
 	if _, err := e.db.ExecContext(ctx, `
 		INSERT INTO alert_instances (id, rule_id, connection_id, connection_name, resource_id, resource_name, metric, value, threshold, severity, status, triggered_at, updated_at)

@@ -21,6 +21,14 @@ export function onUnauthorized(handler: UnauthorizedHandler): () => void {
   return () => unauthorizedHandlers.delete(handler)
 }
 
+/** Fires the same handlers a 401 from any api.* call triggers — for the few
+ * call sites that use raw fetch() and therefore bypass request()'s 401
+ * handling (the AI chat's SSE stream), so an expired session there also
+ * lands on the login page instead of surfacing as a chat error. */
+export function notifyUnauthorized(): void {
+  for (const handler of unauthorizedHandlers) handler()
+}
+
 // Handlers registered via onErrorCode fire for any API error that carries a
 // `code` field — used for errors the UI must react to structurally (e.g.
 // "totp_required" redirecting to the enrollment page), where matching the
@@ -976,4 +984,137 @@ export interface ToolCallRecord {
   ok: boolean
   error?: string
   createdAt: string
+}
+
+// --- PBS (Proxmox Backup Server) remotes, mounted on connections of type
+// "pbs" — mirrors pbs.* (internal/pbs/datastore.go, internal/pbs/jobs.go),
+// served under /connections/{id}/pbs/... by internal/api/pbs.go. ---
+
+// Mirrors pbs.GCStatus — a datastore's last garbage-collection outcome.
+// Every field is omitempty upstream and nothing here carries a timestamp:
+// live run state comes from PBSTaskStatus, not this object.
+export interface PBSGCStatus {
+  upid?: string
+  "index-file-count"?: number
+  "index-data-bytes"?: number
+  "disk-bytes"?: number
+  "disk-chunks"?: number
+  "removed-bytes"?: number
+  "removed-chunks"?: number
+  "pending-bytes"?: number
+  "pending-chunks"?: number
+  "removed-bad"?: number
+  "still-bad"?: number
+}
+
+// Mirrors pbs.TypeCounts / pbs.Counts — per backup type (ct/host/vm/other)
+// group and snapshot tallies from the datastore status endpoint.
+export interface PBSTypeCounts {
+  groups: number
+  snapshots: number
+}
+
+export interface PBSCounts {
+  ct?: PBSTypeCounts
+  host?: PBSTypeCounts
+  vm?: PBSTypeCounts
+  other?: PBSTypeCounts
+}
+
+// Mirrors pbs.Datastore — one row of the datastore listing. The usage fields
+// are only filled by the with-usage variant the API exposes; a store whose
+// status fetch failed keeps its row with `error` set instead of failing the
+// whole listing.
+export interface PBSDatastore {
+  store: string
+  comment?: string
+  // PBS maintenance mode, e.g. "read-only" or "offline" (may carry a ":reason" suffix).
+  maintenance?: string
+  total?: number
+  used?: number
+  avail?: number
+  "gc-status"?: PBSGCStatus
+  counts?: PBSCounts
+  error?: string
+}
+
+// Mirrors pbs.Namespace — one entry under a datastore's namespace tree.
+export interface PBSNamespace {
+  ns: string
+  comment?: string
+}
+
+// Mirrors pbs.BackupGroup — one backup-type/backup-id pair (e.g. vm/100)
+// within a datastore; prune runs against one of these, not a whole store.
+export interface PBSBackupGroup {
+  "backup-type": string
+  "backup-id": string
+  // Unix seconds of the newest snapshot in the group; absent when empty.
+  "last-backup"?: number
+  "backup-count"?: number
+  comment?: string
+}
+
+// Mirrors pbs.SnapshotVerification — a snapshot's last verify outcome
+// ("ok" | "failed" once a verify has run).
+export interface PBSSnapshotVerification {
+  upid?: string
+  state?: string
+}
+
+// Mirrors pbs.Snapshot — one backup snapshot in a datastore.
+export interface PBSSnapshot {
+  "backup-type": string
+  "backup-id": string
+  "backup-time": number
+  size?: number
+  protected?: boolean
+  comment?: string
+  files?: string[]
+  owner?: string
+  verification?: PBSSnapshotVerification
+}
+
+// Mirrors pbs.PruneResult — one row of a prune run's report: the snapshot
+// considered and whether it was (or would be, on a dry run) kept.
+export interface PBSPruneResult {
+  "backup-time": number
+  keep: boolean
+}
+
+// Mirrors pbs.SyncJob — pulls backups from a remote PBS/PVE source into a
+// local datastore on a schedule.
+export interface PBSSyncJob {
+  id: string
+  store: string
+  ns?: string
+  remote?: string
+  "remote-store": string
+  "remote-ns"?: string
+  schedule?: string
+  comment?: string
+  "remove-vanished"?: boolean
+}
+
+// Mirrors pbs.VerifyJob — checks snapshot integrity in a datastore on a
+// schedule. Neither job type carries last-run state; polling the UPID
+// returned by a run is the only way to observe one.
+export interface PBSVerifyJob {
+  id: string
+  store: string
+  ns?: string
+  schedule?: string
+  comment?: string
+  "ignore-verified"?: boolean
+  "outdated-after"?: number
+}
+
+// Mirrors pbs.Task — a PBS background task's status, polled by UPID (the
+// handle returned by GC start and sync/verify job runs). `status` is
+// "running" | "stopped"; `exitstatus` ("OK" or the failure detail) only
+// appears once stopped — there is no end-time field.
+export interface PBSTaskStatus {
+  upid: string
+  status: string
+  exitstatus?: string
 }

@@ -25,12 +25,13 @@ import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 import { api, type ClusterResource, type Connection, type ConnectionInventory } from "@/lib/api"
 import { useTheme } from "@/lib/theme"
-import { cn, formatBytes, formatPercentFine } from "@/lib/utils"
+import { cn, formatBytes, formatPercentFine, guestUrl } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { ErrorState } from "@/components/ui/error-state"
 import { Meter } from "@/components/ui/meter"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusDot } from "@/components/ui/status-dot"
+import { TypeChip } from "@/components/ui/type-chip"
 
 const STATUS_COLOR: Record<string, string> = {
   online: "var(--status-ok)",
@@ -65,18 +66,6 @@ function LoadBar({ pct }: { pct: number }) {
   return <Meter value={pct} size="xs" label="Load" className="min-w-10 flex-1" />
 }
 
-function Chip({ kind }: { kind: string }) {
-  const styles =
-    kind === "VM"
-      ? "bg-[color-mix(in_oklab,var(--chart-1)_15%,transparent)] text-[var(--chart-1)]"
-      : kind === "LXC"
-        ? "bg-[color-mix(in_oklab,var(--chart-2)_15%,transparent)] text-[var(--chart-2)]"
-        : "bg-[var(--bg-muted)] text-[var(--text-muted)]"
-  return <span className={cn("shrink-0 rounded-sm px-1 py-px font-mono text-[9px] font-semibold uppercase tracking-wide", styles)}>{kind}</span>
-}
-
-/** The central hub everything hangs from — double-click the title to rename
- * it (persisted locally). */
 function RootNameEditor({
   initial,
   onSave,
@@ -234,13 +223,15 @@ function PveNode({ data }: NodeProps<Node<{ label: string; status: string; cpu: 
 
 /** VM / container: type chip, status dot, and live CPU / RAM / disk load. */
 function GuestNode({ data }: NodeProps<Node<{ label: string; vmid: number; status: string; type: string; cpu: number; mem: number; maxmem: number; disk: number; maxdisk: number }>>) {
-  const kind = data.type === "lxc" ? "LXC" : "VM"
   const memPct = data.maxmem ? (data.mem / data.maxmem) * 100 : 0
   const diskPct = data.maxdisk ? (data.disk / data.maxdisk) * 100 : 0
   return (
-    <div className="w-44 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 shadow-sm">
+    <div
+      className="w-44 cursor-pointer rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 shadow-sm transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-hover)]"
+      title="Open in Inventory"
+    >
       <div className="flex items-center gap-1.5">
-        <Chip kind={kind} />
+        <TypeChip type={data.type} size="sm" />
         <span className="truncate text-xs font-medium" title={data.label}>{data.label}</span>
         <span className="ml-auto flex shrink-0 items-center gap-1">
           <span className="font-mono text-[9px] text-[var(--text-faint)] tabular">#{data.vmid}</span>
@@ -322,6 +313,7 @@ function injectSvgBackground(dataUrl: string, width: number, height: number, col
  * a child of <ReactFlow> — useReactFlow() only resolves inside that tree. */
 function ExportSvgButton() {
   const { getNodes } = useReactFlow()
+  const [exporting, setExporting] = useState(false)
 
   async function exportSvg() {
     const nodes = getNodes()
@@ -337,6 +329,7 @@ function ExportSvgButton() {
 
     const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#ffffff"
     try {
+      setExporting(true)
       const rawDataUrl = await toSvg(viewportEl, {
         backgroundColor: bg,
         width,
@@ -354,12 +347,14 @@ function ExportSvgButton() {
       a.click()
     } catch {
       toast.error("Couldn't export the topology as SVG")
+    } finally {
+      setExporting(false)
     }
   }
 
   return (
-    <Button type="button" size="sm" variant="outline" onClick={() => void exportSvg()}>
-      <Download className="h-3.5 w-3.5" /> Export SVG
+    <Button type="button" size="sm" variant="outline" onClick={() => void exportSvg()} loading={exporting}>
+      {!exporting && <Download className="h-3.5 w-3.5" />} Export SVG
     </Button>
   )
 }
@@ -491,8 +486,13 @@ export function TopologyPage() {
           onNodeClick={(_, node) => {
             if (node.type === "pveNode" && node.data.connId && node.data.nodeName) {
               navigate(`/nodes/${node.data.connId}/${node.data.nodeName}`)
-            } else if (node.type === "overflow") {
-              navigate("/inventory")
+            } else if (node.type === "guest" && node.data.connId) {
+              // The most numerous card on the page used to be a dead end —
+              // a click now opens that guest in Inventory (detail dialog
+              // auto-opened via guestUrl's focusGuest param).
+              navigate(guestUrl(node.data.connId as string, node.data.vmid as number | undefined, node.data.label as string))
+            } else if (node.type === "overflow" && node.data.connId) {
+              navigate(`/inventory?conn=${encodeURIComponent(node.data.connId as string)}`)
             }
           }}
         >
@@ -548,7 +548,7 @@ export function TopologyPage() {
             </Panel>
           )}
           {hasGraph && (
-            <Panel position="top-left" className="!m-2 flex items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-[11px] text-[var(--text-muted)] shadow-xs">
+            <Panel position="top-left" className="!m-2 hidden items-center gap-2 rounded-md lg:flex border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-[11px] text-[var(--text-muted)] shadow-xs">
               <Boxes className="h-3.5 w-3.5" />
               Drag any card to rearrange · positions are remembered
             </Panel>
@@ -683,6 +683,7 @@ function buildGraph(
           position: savedPositions[guestId] ?? { x: 1010, y: nodeY + guestIdx * 84 - ((slots - 1) * 84) / 2 },
           data: {
             label: g.name ?? `#${g.vmid}`,
+            connId: conn.connectionId,
             vmid: g.vmid ?? 0,
             status: g.status ?? "unknown",
             type: g.type,
@@ -707,7 +708,7 @@ function buildGraph(
           id: overflowId,
           type: "overflow",
           position: savedPositions[overflowId] ?? { x: 1010, y: nodeY + nodeGuests.length * 84 - ((slots - 1) * 84) / 2 },
-          data: { count: overflowCount },
+          data: { count: overflowCount, connId: conn.connectionId, nodeName: pn.node },
         })
         edges.push({
           id: `e-${nodeId}-${overflowId}`,

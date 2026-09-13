@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	"ferrum/internal/mcp"
 	"ferrum/internal/needle"
 	"ferrum/internal/notify"
+	"ferrum/internal/pbs"
 	"ferrum/internal/poller"
 	"ferrum/internal/pve"
 	"ferrum/internal/secrets"
@@ -229,6 +231,11 @@ func (s *Server) Router() http.Handler {
 	r.Use(middleware.Timeout(30 * time.Second))
 
 	r.Route("/api/v1", func(r chi.Router) {
+		// Cross-origin request check — see originCheck. Mounted on the whole
+		// /api/v1 group (login included) because every state-changing route
+		// beneath it is protected by the session cookie.
+		r.Use(s.originCheck)
+
 		// Bound every JSON body; handlers never need more than a few KiB. A
 		// multipart upload (ISO/template files) sets its own, much larger
 		// bound itself — see uploadStorageContent.
@@ -716,12 +723,14 @@ func (s *Server) Router() http.Handler {
 				r.Use(s.requireAdminForMutations)
 				r.Get("/", s.listAlertRules)
 				r.Post("/", s.createAlertRule)
+				r.Put("/{id}", s.updateAlertRule)
 				r.Delete("/{id}", s.deleteAlertRule)
 			})
 			r.Route("/alerts", func(r chi.Router) {
 				r.Get("/", s.listAlerts)
 				r.Get("/summary", s.alertsSummary)
-				r.Post("/{id}/silence", s.silenceAlert)
+				r.With(s.requireAdminForMutations).Post("/{id}/silence", s.silenceAlert)
+				r.With(s.requireAdminForMutations).Post("/{id}/unsilence", s.unSilenceAlert)
 			})
 			r.Get("/connection-health", s.connectionHealth)
 
@@ -928,6 +937,62 @@ func (s *Server) cors(next http.Handler) http.Handler {
 	})
 }
 
+// originCheck is CSRF defense for every mutating route under /api/v1,
+// complementing the session cookie. The threat: a cross-site form POST —
+// login CSRF above all, which SameSite=Lax does not prevent for top-level
+// navigations — would otherwise ride the victim's ambient cookie (or plant
+// an attacker-chosen session via a forged login). Browsers mark cross-site
+// requests with an Origin header (all POSTs) or Sec-Fetch-Site; curl and
+// API-key clients send neither and are unaffected, as are the bearer-only
+// MCP endpoint (outside this group) and the /ws console (single-use
+// tickets). A configured CORS origin is allowed so a 3rd-party browser app
+// keeps working.
+func (s *Server) originCheck(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		default:
+			next.ServeHTTP(w, r)
+			return
+		}
+		if origin := r.Header.Get("Origin"); origin != "" {
+			u, err := url.Parse(origin)
+			switch {
+			case err != nil || u.Host == "":
+				writeErrorMsg(w, http.StatusForbidden, "cross-origin request blocked")
+			case strings.EqualFold(u.Host, s.requestHost(r)) || s.corsOriginAllowed(origin):
+				next.ServeHTTP(w, r)
+			default:
+				writeErrorMsg(w, http.StatusForbidden, "cross-origin request blocked")
+			}
+			return
+		}
+		// No Origin (some browsers omit it on navigations): Sec-Fetch-Site
+		// is the newer and more explicit marker, sent on every fetch.
+		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			writeErrorMsg(w, http.StatusForbidden, "cross-origin request blocked")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// requestHost is the host the client believes it is talking to. Behind a
+// proxy the proxy may rewrite Host, so X-Forwarded-Host — when the
+// deployment declared one is in front — is the externally visible host an
+// Origin should be compared against.
+func (s *Server) requestHost(r *http.Request) string {
+	if s.options.BehindProxy {
+		if fh := r.Header.Get("X-Forwarded-Host"); fh != "" {
+			if i := strings.Index(fh, ","); i >= 0 { // multi-hop proxies append; the client-facing host comes first
+				fh = fh[:i]
+			}
+			return strings.TrimSpace(fh)
+		}
+	}
+	return r.Host
+}
+
 // rateLimitAIChat caps how often the authenticated caller can start a new
 // /ai/chat completion — see aiChatMaxPerMinute. Keyed by user ID, so it
 // applies the same whether the caller is the browser SPA (session cookie)
@@ -958,27 +1023,59 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		h.Set("Content-Security-Policy",
-			"default-src 'self'; "+
-				"script-src 'self'; "+
-				"style-src 'self' 'unsafe-inline'; "+
-				"img-src 'self' data: blob:; "+
-				// data: is needed for the Topology page's SVG export
-				// (html-to-image inlines @font-face as base64 data URIs so
-				// the exported file is self-contained) — without it the
-				// browser blocks that inlined @font-face while rendering
-				// the export's foreignObject content.
-				"font-src 'self' data:; "+
-				"connect-src 'self' ws: wss:; "+
-				"object-src 'none'; "+
-				"frame-ancestors 'none'; "+
-				"base-uri 'self'; "+
-				"form-action 'self'")
+		h.Set("Content-Security-Policy", s.csp(r))
 		if s.cookieSecure(r) {
 			h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// csp builds the per-request Content-Security-Policy. connect-src pins the
+// WebSocket schemes to the request's own Host instead of a protocol-wide
+// wildcard — the only WS client is the console proxy dialing back to the
+// origin the page was served from. The Host is sanitized to a conservative
+// charset before embedding so a crafted Host header can't smuggle extra CSP
+// directives (header injection); with nothing safe to pin, it falls back to
+// the old `ws: wss:` wildcards.
+func (s *Server) csp(r *http.Request) string {
+	wsSrc := "ws: wss:"
+	if host := sanitizeCSPHost(s.requestHost(r)); host != "" {
+		wsSrc = "ws://" + host + " wss://" + host
+	}
+	return "default-src 'self'; " +
+		"script-src 'self'; " +
+		"style-src 'self' 'unsafe-inline'; " +
+		"img-src 'self' data: blob:; " +
+		// data: is needed for the Topology page's SVG export
+		// (html-to-image inlines @font-face as base64 data URIs so
+		// the exported file is self-contained) — without it the
+		// browser blocks that inlined @font-face while rendering
+		// the export's foreignObject content.
+		"font-src 'self' data:; " +
+		"connect-src 'self' " + wsSrc + "; " +
+		"object-src 'none'; " +
+		"frame-ancestors 'none'; " +
+		"base-uri 'self'; " +
+		"form-action 'self'"
+}
+
+// sanitizeCSPHost keeps only characters a real Host can contain (letters,
+// digits, dots, hyphens, colons for the port, brackets for IPv6 literals) —
+// anything else means the value isn't safe to embed in a response header.
+func sanitizeCSPHost(host string) string {
+	if host == "" {
+		return ""
+	}
+	for _, r := range host {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '.', r == '-', r == ':', r == '[', r == ']':
+		default:
+			return ""
+		}
+	}
+	return host
 }
 
 func userFromContext(r *http.Request) *auth.User {
@@ -1019,22 +1116,49 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// writeError maps an error to a client response. 5xx responses are sanitized
-// to a generic message (the details — SQL fragments, file paths, driver
-// errors — are logged server-side instead); 4xx/502 messages are shown to
-// the user because they describe actionable input or upstream problems.
+// writeError maps an error to a client response. Upstream Proxmox 4xx
+// rejections carry an actionable message ("bad prune options", an unknown
+// parameter) — their status and message pass through so the user can fix
+// what they sent. Upstream 5xx and any local 5xx stay sanitized to a generic
+// message: an upstream 500 body can be a proxy error page or stack trace,
+// and local errors can carry SQL fragments, file paths, or driver errors —
+// the details are logged server-side instead. An upstream 401 also keeps the
+// caller's status: the dashboard frontend signs the user out on any 401, and
+// an expired PBS/PVE ticket must read as a broken connection, not log them
+// out of Ferrum.
 func (s *Server) writeError(w http.ResponseWriter, status int, err error) {
+	var pveErr *pve.StatusError
+	if errors.As(err, &pveErr) {
+		s.writeUpstreamError(w, status, pveErr.StatusCode, pveErr.Message(), err)
+		return
+	}
+	var pbsErr *pbs.StatusError
+	if errors.As(err, &pbsErr) {
+		s.writeUpstreamError(w, status, pbsErr.StatusCode, pbsErr.Message(), err)
+		return
+	}
 	if status >= 500 {
 		slog.Error("request failed", "status", status, "error", err)
 		writeErrorMsg(w, status, "internal server error")
 		return
 	}
-	var pveErr *pve.StatusError
-	if errors.As(err, &pveErr) {
-		writeErrorMsg(w, status, pveErr.Message())
+	writeErrorMsg(w, status, err.Error())
+}
+
+// writeUpstreamError responds for an upstream Proxmox StatusError: 4xx gets
+// the upstream status and message (except 401, which must not surface as a
+// dashboard-session 401 — see writeError), everything else stays sanitized.
+func (s *Server) writeUpstreamError(w http.ResponseWriter, status, upstreamStatus int, upstreamMsg string, err error) {
+	if upstreamStatus < 400 || upstreamStatus >= 500 {
+		slog.Error("request failed", "status", status, "error", err)
+		writeErrorMsg(w, status, "internal server error")
 		return
 	}
-	writeErrorMsg(w, status, err.Error())
+	if upstreamStatus == http.StatusUnauthorized {
+		writeErrorMsg(w, status, upstreamMsg)
+		return
+	}
+	writeErrorMsg(w, upstreamStatus, upstreamMsg)
 }
 
 func writeErrorMsg(w http.ResponseWriter, status int, msg string) {

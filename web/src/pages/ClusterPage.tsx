@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { GitBranch, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react"
+import { GitBranch, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
@@ -50,9 +50,11 @@ function parseExtraFields(text: string): Record<string, string> {
 }
 
 export function ClusterPage() {
-  const { data: inventory, isLoading, isError, refetch } = useQuery({
+  const queryClient = useQueryClient()
+  const { data: inventory, isLoading, isError, refetch, isRefetching } = useQuery({
     queryKey: ["inventory"],
     queryFn: () => api.get<ConnectionInventory[]>("/inventory/"),
+    refetchInterval: 30_000,
   })
   const connections = inventory ?? []
   const [connId, setConnId] = useState("")
@@ -61,7 +63,12 @@ export function ClusterPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader title="Cluster & SDN" description="Cluster membership and software-defined networking, per connection." />
+      <PageHeader
+        title="Cluster & SDN"
+        description="Cluster membership and software-defined networking, per connection."
+        onRefresh={() => void queryClient.invalidateQueries()}
+        refreshing={isRefetching}
+      />
 
       {isError ? (
         <ErrorState title="Couldn't load connections" onRetry={refetch} />
@@ -257,12 +264,29 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
     const ok = await confirm({ title: `Delete vnet "${vnet}"?`, description: "Guests attached to it lose network connectivity until reattached.", confirmLabel: "Delete vnet" })
     if (ok) deleteVnet.mutate(vnet)
   }
+  async function removeSubnet(subnet: string) {
+    const ok = await confirm({ title: `Delete subnet "${subnet}"?`, description: "Guests on this subnet keep their static addresses, but new allocations from it stop.", confirmLabel: "Delete subnet" })
+    if (ok) deleteSubnet.mutate(subnet)
+  }
+
+  // Cluster-wide activation deserves the same guard as the single-resource
+  // deletes beside it — one misclick used to reconfigure live networking on
+  // every node with no confirmation.
+  async function applySdn() {
+    const ok = await confirm({
+      title: "Apply pending SDN changes?",
+      description:
+        "This pushes the pending network configuration (zones, vnets, subnets, controllers) out to every node in the cluster and makes it live. A mistake here can disrupt running guests' networking.",
+      confirmLabel: "Apply to cluster",
+    })
+    if (ok) applyConfig.mutate()
+  }
 
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
-        <Button size="sm" disabled={applyConfig.isPending} onClick={() => applyConfig.mutate()}>
-          {applyConfig.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Apply pending changes
+        <Button size="sm" loading={applyConfig.isPending} onClick={() => void applySdn()}>
+          {!applyConfig.isPending && <RefreshCw className="h-3.5 w-3.5" />} Apply pending changes
         </Button>
       </div>
 
@@ -282,7 +306,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
                     <Badge>{z.type}</Badge>
                     {z.pending ? <Badge variant="warn">Pending</Badge> : null}
                   </div>
-                  <Button size="icon" variant="ghost" aria-label={`Delete zone ${z.zone}`} onClick={() => removeZone(z.zone)}>
+                  <Button size="icon" variant="ghost-danger" aria-label={`Delete zone ${z.zone}`} onClick={() => removeZone(z.zone)}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </div>
@@ -315,7 +339,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
             {/* Default (h-9) size, not sm (h-8) — matches the Input/Select
                 beside it exactly so items-end bottom-alignment lands the
                 button's edge flush with theirs instead of 4px short. */}
-            <Button disabled={!zoneForm.zone || createZone.isPending} onClick={() => createZone.mutate()}>
+            <Button loading={createZone.isPending} disabled={!zoneForm.zone} onClick={() => createZone.mutate()}>
               <Plus className="h-3.5 w-3.5" /> Add zone
             </Button>
           </div>
@@ -347,7 +371,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
                     {v.tag ? <Badge variant="default">VLAN {v.tag}</Badge> : null}
                     {v.pending ? <Badge variant="warn">Pending</Badge> : null}
                   </button>
-                  <Button size="icon" variant="ghost" aria-label={`Delete vnet ${v.vnet}`} onClick={() => removeVnet(v.vnet)}>
+                  <Button size="icon" variant="ghost-danger" aria-label={`Delete vnet ${v.vnet}`} onClick={() => removeVnet(v.vnet)}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </div>
@@ -375,7 +399,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
               <Label>VLAN tag</Label>
               <Input type="number" placeholder="optional" value={vnetForm.tag} onChange={(e) => setVnetForm((f) => ({ ...f, tag: e.target.value }))} className="w-24" />
             </div>
-            <Button disabled={!vnetForm.vnet || !vnetForm.zone || createVnet.isPending} onClick={() => createVnet.mutate()}>
+            <Button loading={createVnet.isPending} disabled={!vnetForm.vnet || !vnetForm.zone} onClick={() => createVnet.mutate()}>
               <Plus className="h-3.5 w-3.5" /> Add vnet
             </Button>
           </div>
@@ -396,7 +420,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
                   <div key={s.subnet} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm transition-colors animate-in fade-in slide-in-from-top-1 duration-200 hover:bg-[var(--bg-surface-hover)]">
                     <span className="font-mono">{s.subnet}</span>
                     {s.gateway && <Badge>gw: {s.gateway}</Badge>}
-                    <Button size="icon" variant="ghost" aria-label={`Delete subnet ${s.subnet}`} onClick={() => deleteSubnet.mutate(s.subnet)}>
+                    <Button size="icon" variant="ghost-danger" aria-label={`Delete subnet ${s.subnet}`} onClick={() => removeSubnet(s.subnet)}>
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
                   </div>
@@ -413,7 +437,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
                 <Label>Gateway</Label>
                 <Input placeholder="10.0.0.1" value={subnetForm.gateway} onChange={(e) => setSubnetForm((f) => ({ ...f, gateway: e.target.value }))} className="w-32" />
               </div>
-              <Button disabled={!subnetForm.cidr || createSubnet.isPending} onClick={() => createSubnet.mutate()}>
+              <Button loading={createSubnet.isPending} disabled={!subnetForm.cidr} onClick={() => createSubnet.mutate()}>
                 <Plus className="h-3.5 w-3.5" /> Add subnet
               </Button>
             </div>
@@ -437,7 +461,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
                     <span className="font-medium">{c.controller}</span>
                     <Badge>{c.type}</Badge>
                   </div>
-                  <Button size="icon" variant="ghost" aria-label={`Delete controller ${c.controller}`} onClick={() => removeController(c.controller)}>
+                  <Button size="icon" variant="ghost-danger" aria-label={`Delete controller ${c.controller}`} onClick={() => removeController(c.controller)}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </div>
@@ -477,7 +501,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
                 this row taller than a single-line field. */}
             <div className="space-y-1.5">
               <Label className="invisible" aria-hidden>Add</Label>
-              <Button disabled={!controllerForm.controller || createController.isPending} onClick={() => createController.mutate()}>
+              <Button loading={createController.isPending} disabled={!controllerForm.controller} onClick={() => createController.mutate()}>
                 <Plus className="h-3.5 w-3.5" /> Add controller
               </Button>
             </div>
@@ -501,7 +525,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
                     <span className="font-medium">{i.ipam}</span>
                     <Badge>{i.type}</Badge>
                   </div>
-                  <Button size="icon" variant="ghost" aria-label={`Delete IPAM ${i.ipam}`} onClick={() => removeIpam(i.ipam)}>
+                  <Button size="icon" variant="ghost-danger" aria-label={`Delete IPAM ${i.ipam}`} onClick={() => removeIpam(i.ipam)}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </div>
@@ -536,7 +560,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
             </div>
             <div className="space-y-1.5">
               <Label className="invisible" aria-hidden>Add</Label>
-              <Button disabled={!ipamForm.ipam || createIpam.isPending} onClick={() => createIpam.mutate()}>
+              <Button loading={createIpam.isPending} disabled={!ipamForm.ipam} onClick={() => createIpam.mutate()}>
                 <Plus className="h-3.5 w-3.5" /> Add IPAM
               </Button>
             </div>
@@ -625,7 +649,7 @@ function ClusterNodesPanel({ base, connId }: { base: string; connId: string }) {
                 <span className="font-medium">{n.name}</span>
                 <div className="flex items-center gap-2">
                   {n.nodeid !== undefined && <Badge>nodeid {n.nodeid}</Badge>}
-                  <Button size="icon" variant="ghost" aria-label={`Remove ${n.name}`} onClick={() => confirmRemoveNode(n.name)}>
+                  <Button size="icon" variant="ghost-danger" aria-label={`Remove ${n.name}`} onClick={() => confirmRemoveNode(n.name)}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </div>
@@ -643,7 +667,7 @@ function ClusterNodesPanel({ base, connId }: { base: string; connId: string }) {
             <div className="flex gap-2">
               <Input placeholder="cluster name" value={clusterName} onChange={(e) => setClusterName(e.target.value)} />
               <Button disabled={!clusterName || createCluster.isPending} onClick={() => createCluster.mutate()}>
-                Create
+                Create cluster
               </Button>
             </div>
             <div className="border-t border-[var(--border)] pt-3">
@@ -702,13 +726,19 @@ function AccessPanel({ base, connId }: { base: string; connId: string }) {
 
   // Users and ACL are the two lists here that scale with the org, not with
   // how much an admin has manually configured (an LDAP/AD realm can hand PVE
-  // hundreds of users; a per-path ACL is often one row per user per pool) —
-  // Realms/Roles stay small and fixed, so only these two get a search box.
+  // hundreds of users; a per-path ACL is often one row per user per pool).
+  // Both paginate progressively ("show more") instead of scraping a fixed
+  // max-height scroller, and the search box is always visible once a list is
+  // big enough to need it — the old >8-rows reveal hid the escape hatch
+  // until the wall was already on screen.
+  const ACCESS_PAGE = 20
   const [userQuery, setUserQuery] = useState("")
+  const [usersLimit, setUsersLimit] = useState(ACCESS_PAGE)
   const users = (usersQuery.data ?? []).filter(
     (u) => !userQuery || u.userid.toLowerCase().includes(userQuery.toLowerCase()) || u.email?.toLowerCase().includes(userQuery.toLowerCase()),
   )
   const [aclFilter, setAclFilter] = useState("")
+  const [aclLimit, setAclLimit] = useState(ACCESS_PAGE)
   const acl = (aclQuery.data ?? []).filter(
     (e) =>
       !aclFilter ||
@@ -754,8 +784,8 @@ function AccessPanel({ base, connId }: { base: string; connId: string }) {
           ) : users.length === 0 ? (
             <p className="text-sm text-[var(--text-muted)]">No users match "{userQuery}".</p>
           ) : (
-            <div className={users.length > 10 ? "max-h-96 space-y-1.5 overflow-y-auto pr-1" : "space-y-1.5"}>
-              {users.map((u) => (
+            <div className="space-y-1.5">
+              {users.slice(0, usersLimit).map((u) => (
                 <div key={u.userid} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
@@ -773,6 +803,14 @@ function AccessPanel({ base, connId }: { base: string; connId: string }) {
                   )}
                 </div>
               ))}
+              {users.length > usersLimit && (
+                <button
+                  className="w-full rounded-md py-1.5 text-center text-xs text-[var(--text-muted)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text)]"
+                  onClick={() => setUsersLimit((l) => l + 50)}
+                >
+                  Show {Math.min(50, users.length - usersLimit)} more of {users.length} users
+                </button>
+              )}
             </div>
           )}
         </CardContent>
@@ -808,8 +846,8 @@ function AccessPanel({ base, connId }: { base: string; connId: string }) {
           ) : acl.length === 0 ? (
             <p className="text-sm text-[var(--text-muted)]">No ACL entries match "{aclFilter}".</p>
           ) : (
-            <div className={acl.length > 10 ? "max-h-96 space-y-1.5 overflow-y-auto pr-1" : "space-y-1.5"}>
-              {acl.map((e, i) => (
+            <div className="space-y-1.5">
+              {acl.slice(0, aclLimit).map((e, i) => (
                 <div key={`${e.path}-${e.ugid}-${e.roleid}-${i}`} className="flex flex-wrap items-center gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm">
                   <Badge variant="outline">{e.type}</Badge>
                   <span className="font-mono text-xs">{e.ugid}</span>
@@ -819,6 +857,14 @@ function AccessPanel({ base, connId }: { base: string; connId: string }) {
                   <Badge variant="info">{e.roleid}</Badge>
                 </div>
               ))}
+              {acl.length > aclLimit && (
+                <button
+                  className="w-full rounded-md py-1.5 text-center text-xs text-[var(--text-muted)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text)]"
+                  onClick={() => setAclLimit((l) => l + 50)}
+                >
+                  Show {Math.min(50, acl.length - aclLimit)} more of {acl.length} entries
+                </button>
+              )}
             </div>
           )}
         </CardContent>

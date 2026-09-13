@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ErrorState } from "@/components/ui/error-state"
+import { FormError } from "@/components/ui/form-error"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -67,7 +68,7 @@ export function ApiKeysCard() {
       setExpiresInDays("0")
       setCreated(key)
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to create key"),
+    // Failure surfaces inline in the dialog via <FormError>, not a toast.
   })
 
   const revoke = useMutation({
@@ -92,7 +93,7 @@ export function ApiKeysCard() {
       setCopied(true)
       toast.success("Copied to clipboard")
       setTimeout(() => setCopied(false), 2000)
-    })
+    }).catch(() => toast.error("Could not copy to clipboard"))
   }
 
   const keys = query.data ?? []
@@ -135,8 +136,14 @@ export function ApiKeysCard() {
                     Created {formatRelativeTime(key.createdAt)} · Last used {key.lastUsedAt ? formatRelativeTime(key.lastUsedAt) : "never"}
                   </p>
                 </div>
-                <Button size="icon-sm" variant="ghost" onClick={() => handleRevoke(key)} aria-label={`Revoke ${key.name}`}>
-                  <Trash2 className="h-3.5 w-3.5 text-[var(--status-error)]" />
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  className="hover:bg-[color-mix(in_oklab,var(--status-error)_12%,transparent)] hover:text-[var(--status-error)]"
+                  onClick={() => handleRevoke(key)}
+                  aria-label={`Revoke ${key.name}`}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
                 </Button>
               </div>
             ))}
@@ -194,6 +201,15 @@ export function ApiKeysCard() {
                 </SelectContent>
               </Select>
             </div>
+            <FormError
+              message={
+                create.error instanceof ApiError
+                  ? create.error.message
+                  : create.error
+                    ? "Couldn't create the key — try again."
+                    : null
+              }
+            />
           </div>
           <DialogFooter>
             <Button variant="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>

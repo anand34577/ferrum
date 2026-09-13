@@ -73,11 +73,11 @@ type CreateBackupJobOptions struct {
 	Comment  string
 	Prune    int // keep-last count, 0 = unset
 
-	NotificationMode string // "notification-system" | "legacy-sendmail", "" = unset
-	MailTo           string // comma-separated emails, only used with NotificationMode "legacy-sendmail"
-	MailNotification string // "always" | "failure" (legacy option, form key stays "mailnotification")
-	BandwidthLimitKBps int  // vzdump --bwlimit in KiB/s, 0 = unset
-	Pigz             *int  // parallel gzip threads; nil = unset (0 is itself a valid "disabled" value)
+	NotificationMode   string // "notification-system" | "legacy-sendmail", "" = unset
+	MailTo             string // comma-separated emails, only used with NotificationMode "legacy-sendmail"
+	MailNotification   string // "always" | "failure" (legacy option, form key stays "mailnotification")
+	BandwidthLimitKBps int    // vzdump --bwlimit in KiB/s, 0 = unset
+	Pigz               *int   // parallel gzip threads; nil = unset (0 is itself a valid "disabled" value)
 }
 
 func backupJobForm(opts CreateBackupJobOptions) url.Values {

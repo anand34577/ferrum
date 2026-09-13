@@ -2,6 +2,7 @@ package pve
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 )
 
@@ -69,11 +70,14 @@ func (c *Client) ClusterJoinInfo(ctx context.Context) (*ClusterJoinInfo, error) 
 // JoinCluster makes this (currently standalone) node join an existing
 // cluster reachable at hostIP, authenticating with that cluster's
 // root@pam password and the fingerprint ClusterJoinInfo returned for it.
+// Runs on the stream client: the join blocks until the node has synced
+// corosync state from the existing members, which can outrun the default
+// 15s whole-request timeout.
 func (c *Client) JoinCluster(ctx context.Context, hostIP, fingerprint, password string) error {
 	form := url.Values{
 		"hostname":    {hostIP},
 		"fingerprint": {fingerprint},
 		"password":    {password},
 	}
-	return c.post(ctx, "/cluster/config/join", form, nil)
+	return c.doOn(ctx, c.streamClient, http.MethodPost, "/cluster/config/join", form, nil)
 }

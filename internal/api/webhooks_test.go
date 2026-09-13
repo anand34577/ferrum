@@ -50,7 +50,6 @@ func TestWebhookCRUDRequiresAdmin(t *testing.T) {
 		t.Fatal("expected a newly created webhook to default to active")
 	}
 
-	// Update.
 	updateBody := map[string]any{"name": "renamed", "url": "https://example.com/hook2", "eventTypes": []string{}, "active": false}
 	updRec := e.do(t, http.MethodPut, "/api/v1/settings/webhooks/"+created.ID+"/", updateBody, admin)
 	if updRec.Code != http.StatusOK {
@@ -61,7 +60,6 @@ func TestWebhookCRUDRequiresAdmin(t *testing.T) {
 		t.Fatalf("update did not apply: %+v", updated)
 	}
 
-	// Delete.
 	delRec := e.do(t, http.MethodDelete, "/api/v1/settings/webhooks/"+created.ID+"/", nil, admin)
 	if delRec.Code != http.StatusOK {
 		t.Fatalf("delete status = %d, want 200", delRec.Code)
@@ -72,7 +70,6 @@ func TestWebhookCRUDRequiresAdmin(t *testing.T) {
 		}
 	}
 
-	// Deleting again should 404.
 	if rec := e.do(t, http.MethodDelete, "/api/v1/settings/webhooks/"+created.ID+"/", nil, admin); rec.Code != http.StatusNotFound {
 		t.Fatalf("re-delete status = %d, want 404", rec.Code)
 	}
@@ -113,12 +110,23 @@ func TestTestWebhookDeliversAndLogsDelivery(t *testing.T) {
 	defer upstream.Close()
 
 	e := newTestEnv(t)
-	e.server.SetWebhookDispatcher(notify.NewWebhookDispatcher(e.db))
+	e.server.SetWebhookDispatcher(notify.NewWebhookDispatcher(e.db, e.server.secrets))
 	admin := e.loginAs(t, "admin", "admin@example.com", "correct horse battery staple", true)
 
 	createRec := e.do(t, http.MethodPost, "/api/v1/settings/webhooks/",
 		map[string]any{"name": "test", "url": upstream.URL, "eventTypes": []string{}}, admin)
 	created := decode[webhookDTO](t, createRec)
+
+	// The signing secret must be encrypted at rest, while the test delivery
+	// (below) still signs with the plaintext — and the response above is the
+	// only time the plaintext is ever returned.
+	var stored string
+	if err := e.db.QueryRow(`SELECT secret FROM webhook_subscriptions WHERE id = ?`, created.ID).Scan(&stored); err != nil {
+		t.Fatalf("reading stored secret: %v", err)
+	}
+	if stored == created.Secret {
+		t.Fatal("webhook signing secret must be encrypted at rest")
+	}
 
 	testRec := e.do(t, http.MethodPost, "/api/v1/settings/webhooks/"+created.ID+"/test", nil, admin)
 	if testRec.Code != http.StatusOK {

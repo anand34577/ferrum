@@ -9,6 +9,7 @@ import { AppearanceCard } from "@/components/settings/AppearanceCard"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { FormError } from "@/components/ui/form-error"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { PageHeader } from "@/components/ui/page-header"
@@ -35,6 +36,21 @@ const LANDING_PAGES = [
   { value: "/firewall", label: "Firewall" },
   { value: "/alerts", label: "Alerts" },
   { value: "/tasks", label: "Task Center" },
+  // Kept in sync with Settings' new-account defaults (DefaultPreferencesCard).
+  { value: "/ai-assistant", label: "AI Assistant" },
+]
+
+// Admin-only destinations — an admin who lives in the audit log or webhooks
+// couldn't previously land there. Non-admins never see these (the routes
+// themselves redirect non-admins).
+const ADMIN_LANDING_PAGES = [
+  { value: "/cluster", label: "Cluster & SDN" },
+  { value: "/connections", label: "Connections" },
+  { value: "/bulk-operations", label: "Bulk Operations" },
+  { value: "/users", label: "Users" },
+  { value: "/webhooks", label: "Webhooks" },
+  { value: "/audit", label: "Audit Log" },
+  { value: "/settings", label: "Settings" },
 ]
 
 /** Personal notification opt-in and landing page — shares the
@@ -72,7 +88,12 @@ function PersonalPreferencesForm({ initial }: { initial: PersonalPreferences }) 
 
   const save = useMutation({
     mutationFn: (next: PersonalPreferences) => api.put<PersonalPreferences>("/auth/me/preferences", next),
-    onSuccess: (data) => queryClient.setQueryData(["auth", "preferences"], (old: object | undefined) => ({ ...old, ...data })),
+    onSuccess: (data) => {
+      // Saves instantly on every toggle — say so, or the change reaching the
+      // server is invisible.
+      toast.success("Saved")
+      queryClient.setQueryData(["auth", "preferences"], (old: object | undefined) => ({ ...old, ...data }))
+    },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to save"),
   })
 
@@ -91,18 +112,21 @@ function PersonalPreferencesForm({ initial }: { initial: PersonalPreferences }) 
             Requires the admin to have SMTP enabled in Settings.
           </p>
         </div>
-        <Switch checked={form.notifyEmail} onCheckedChange={(v) => update({ ...form, notifyEmail: v })} />
+        <Switch aria-label="Email me alert notifications" checked={form.notifyEmail} onCheckedChange={(v) => update({ ...form, notifyEmail: v })} />
       </div>
       <div className="max-w-xs space-y-1.5">
         <Label>Landing page</Label>
         <Select value={form.landingPage || "/"} onValueChange={(v) => update({ ...form, landingPage: v })}>
           <SelectTrigger><SelectValue /></SelectTrigger>
           <SelectContent>
-            {LANDING_PAGES.map((p) => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}
+            {(user?.isAdmin ? [...LANDING_PAGES, ...ADMIN_LANDING_PAGES] : LANDING_PAGES).map((p) => (
+              <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
+            ))}
           </SelectContent>
         </Select>
         <p className="text-xs text-[var(--text-muted)]">Which page opens right after you sign in.</p>
       </div>
+      <p className="text-xs text-[var(--text-faint)]">Changes are saved automatically.</p>
     </div>
   )
 }
@@ -145,7 +169,8 @@ export function ProfilePage() {
       refresh()
       toast.success("Two-factor authentication enabled")
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Invalid code"),
+    // Failure surfaces inline under the code field, not a toast — the code
+    // being corrected is right there.
   })
 
   const disableMutation = useMutation({
@@ -157,12 +182,12 @@ export function ProfilePage() {
       setDisablePassword("")
       toast.success("Two-factor authentication disabled")
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to disable"),
+    // Failure surfaces inline under the password field, not a toast.
   })
 
   function copyRecoveryCodes() {
     if (!recoveryCodes) return
-    navigator.clipboard.writeText(recoveryCodes.join("\n")).then(() => toast.success("Copied to clipboard"))
+    navigator.clipboard.writeText(recoveryCodes.join("\n")).then(() => toast.success("Copied to clipboard")).catch(() => toast.error("Could not copy to clipboard"))
   }
 
   return (
@@ -216,10 +241,28 @@ export function ProfilePage() {
                 className="mx-auto h-48 w-48 rounded-md border border-[var(--border)] bg-white p-2"
               />
               <p className="text-center font-mono text-xs text-[var(--text-muted)]">{enrollment.secret}</p>
+              <FormError
+                message={
+                  confirmMutation.error instanceof ApiError
+                    ? confirmMutation.error.message
+                    : confirmMutation.error
+                      ? "That code didn't work — check your authenticator and try again."
+                      : null
+                }
+              />
               <div className="flex items-end gap-2">
                 <div className="flex-1 space-y-1.5">
                   <Label htmlFor="confirm-code">Verification code</Label>
-                  <Input id="confirm-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" autoFocus />
+                  <Input
+                    id="confirm-code"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    placeholder="123456"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    aria-invalid={!!confirmMutation.error}
+                    autoFocus
+                  />
                 </div>
                 <Button loading={confirmMutation.isPending} disabled={!code} onClick={() => confirmMutation.mutate()}>
                   Confirm
@@ -233,7 +276,12 @@ export function ProfilePage() {
                 {statusQuery.isLoading ? (
                   <Skeleton className="h-5 w-20" />
                 ) : statusQuery.isError ? (
-                  <Badge variant="warn">Status unknown</Badge>
+                  <span className="flex items-center gap-2">
+                    <Badge variant="warn">Status unknown</Badge>
+                    <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => void statusQuery.refetch()}>
+                      Retry
+                    </Button>
+                  </span>
                 ) : (
                   <Badge variant={statusQuery.data?.enabled ? "ok" : "default"}>{statusQuery.data?.enabled ? "Enabled" : "Disabled"}</Badge>
                 )}
@@ -256,14 +304,34 @@ export function ProfilePage() {
           )}
 
           {showDisable && (
-            <div className="flex items-end gap-2 border-t border-[var(--border)] pt-4">
-              <div className="flex-1 space-y-1.5">
-                <Label htmlFor="disable-password">Confirm your password to disable 2FA</Label>
-                <Input id="disable-password" type="password" value={disablePassword} onChange={(e) => setDisablePassword(e.target.value)} />
+            <div className="space-y-2 border-t border-[var(--border)] pt-4">
+              <FormError
+                message={
+                  disableMutation.error instanceof ApiError
+                    ? disableMutation.error.message
+                    : disableMutation.error
+                      ? "Couldn't disable two-factor authentication — try again."
+                      : null
+                }
+              />
+              <div className="flex items-end gap-2">
+                <div className="flex-1 space-y-1.5">
+                  <Label htmlFor="disable-password">Confirm your password to disable 2FA</Label>
+                  <Input
+                    id="disable-password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={disablePassword}
+                    onChange={(e) => setDisablePassword(e.target.value)}
+                  />
+                </div>
+                <Button variant="destructive" disabled={!disablePassword || disableMutation.isPending} loading={disableMutation.isPending} onClick={() => disableMutation.mutate()}>
+                  Disable 2FA
+                </Button>
+                <Button variant="ghost" onClick={() => setShowDisable(false)}>
+                  Cancel
+                </Button>
               </div>
-              <Button variant="destructive" disabled={!disablePassword || disableMutation.isPending} onClick={() => disableMutation.mutate()}>
-                Confirm
-              </Button>
             </div>
           )}
         </CardContent>

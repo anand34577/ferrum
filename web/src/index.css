@@ -1028,24 +1028,30 @@ body {
   }
 }
 
-/* thin, unobtrusive scrollbars for the dense inventory/log panes */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-strong) transparent;
-}
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
-  border-radius: 9999px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
+/* thin, unobtrusive scrollbars for the dense inventory/log panes. In
+   @layer base for the same reason as :focus-visible above: unlayered, this
+   `*` rule beat the `no-scrollbar` utility (utilities live in a layer, and
+   unlayered CSS wins over every layer), so the collapsed sidebar rail and
+   any other no-scrollbar element still showed a scrollbar. */
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+  }
 }
 
 /* react-grid-layout (Dashboard widget rearranging) ships its own drag

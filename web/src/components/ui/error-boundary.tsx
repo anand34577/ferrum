@@ -32,13 +32,23 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, { error: Error 
     return (
       <div className="flex flex-col items-center justify-center gap-2 p-12 text-center" role="alert">
         <p className="text-sm font-medium">Something went wrong on this page</p>
-        <p className="max-w-md text-xs text-[var(--text-muted)]">{this.state.error.message}</p>
+        <p className="max-w-md text-xs text-[var(--text-muted)]">
+          Try again, or switch to another page — the rest of Ferrum keeps working.
+        </p>
         <button
           className="mt-2 rounded-md border border-[var(--border)] px-3 py-1.5 text-xs font-medium hover:bg-[var(--bg-muted)]"
           onClick={() => this.setState({ error: null })}
         >
           Try again
         </button>
+        {/* The raw message still matters to the admin filing a bug — one
+            click away instead of the headline. */}
+        <details className="mt-3 max-w-md text-left">
+          <summary className="cursor-pointer text-[11px] text-[var(--text-faint)] hover:text-[var(--text-muted)]">Technical details</summary>
+          <pre className="mt-1.5 overflow-x-auto whitespace-pre-wrap break-words rounded-md border border-[var(--border)] bg-[var(--bg-muted)] p-2.5 font-mono text-[11px] text-[var(--text-muted)]">
+            {this.state.error.message}
+          </pre>
+        </details>
       </div>
     )
   }

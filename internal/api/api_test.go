@@ -36,7 +36,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	if err != nil {
 		t.Fatalf("secrets.New: %v", err)
 	}
-	srv := New(db, auth.NewService(db), box, ServerOptions{SecureCookies: true})
+	srv := New(db, auth.NewService(db, box), box, ServerOptions{SecureCookies: true})
 	return &testEnv{db: db, server: srv, router: srv.Router()}
 }
 
@@ -526,5 +526,60 @@ func TestLoginLimiterUnit(t *testing.T) {
 	l.RecordSuccess(key)
 	if allowed, _ := l.Allowed(key); !allowed {
 		t.Fatal("RecordSuccess should clear the lockout")
+	}
+}
+
+// --- alert silence authorization ---
+
+// seedActiveAlert inserts a live alert_instances row (plus the rule row the
+// foreign key needs) directly — the poller isn't running in these tests.
+func seedActiveAlert(t *testing.T, db *store.DB, id string) {
+	t.Helper()
+	if _, err := db.Exec(`INSERT INTO alert_rules (id, name, metric, connection_id, threshold, severity, enabled, created_at)
+		VALUES ('rule-1', 'cpu', 'guest_cpu', NULL, 80, 'warning', 1, '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("seeding alert rule: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO alert_instances (id, rule_id, connection_id, connection_name, resource_id, resource_name, metric, value, threshold, severity, status, triggered_at, updated_at)
+		VALUES (?, 'rule-1', 'conn-1', 'pve', 'conn-1|qemu/100', 'web01', 'guest_cpu', 95, 80, 'warning', 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`, id); err != nil {
+		t.Fatalf("seeding alert instance: %v", err)
+	}
+}
+
+func TestAlertSilenceRequiresAdminAndExistingAlert(t *testing.T) {
+	e := newTestEnv(t)
+	admin := e.loginAs(t, "admin", "admin@example.com", "correct horse battery", true)
+	_ = e.do(t, http.MethodPost, "/api/v1/users/", map[string]any{
+		"username": "bob", "email": "bob@example.com", "password": "bob's own password",
+	}, admin)
+	bob := e.loginAs(t, "bob", "bob@example.com", "bob's own password", false)
+
+	seedActiveAlert(t, e.db, "alert-1")
+
+	// Alerts are readable by any authenticated user...
+	if rec := e.get(t, "/api/v1/alerts/", bob); rec.Code != http.StatusOK {
+		t.Fatalf("non-admin GET alerts = %d, want 200", rec.Code)
+	}
+	// ...but silencing one is a mutation and needs admin.
+	if rec := e.do(t, http.MethodPost, "/api/v1/alerts/alert-1/silence", nil, bob); rec.Code != http.StatusForbidden {
+		t.Fatalf("non-admin silence = %d, want 403", rec.Code)
+	}
+	var status string
+	if err := e.db.QueryRow(`SELECT status FROM alert_instances WHERE id = 'alert-1'`).Scan(&status); err != nil {
+		t.Fatalf("reading alert status: %v", err)
+	}
+	if status != "active" {
+		t.Fatalf("refused silence changed the alert status to %q", status)
+	}
+
+	if rec := e.do(t, http.MethodPost, "/api/v1/alerts/alert-1/silence", nil, admin); rec.Code != http.StatusOK {
+		t.Fatalf("admin silence = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	// An unknown id is a 404, not a silent success.
+	if rec := e.do(t, http.MethodPost, "/api/v1/alerts/does-not-exist/silence", nil, admin); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown alert silence = %d, want 404", rec.Code)
+	}
+	if got := decode[map[string]string](t, e.do(t, http.MethodPost, "/api/v1/alerts/does-not-exist/silence", nil, admin))["error"]; got != "alert not found" {
+		t.Fatalf("unknown alert error message = %q, want %q", got, "alert not found")
 	}
 }

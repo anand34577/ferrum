@@ -77,6 +77,25 @@ func TestRender(t *testing.T) {
 				"Active alerts:  0 critical, 0 warning",
 			},
 		},
+		{
+			name: "pbs rows report reachability, not node counts",
+			summary: FleetSummary{
+				GeneratedAt:          generated,
+				TotalConnections:     2,
+				ReachableConnections: 2,
+				Connections: []ConnectionSummary{
+					{Name: "backup-server", Type: "pbs", Reachable: true, Datastores: 3},
+					{Name: "dead-pbs", Type: "pbs", Error: "connection refused", Reachable: false},
+				},
+			},
+			wantSubject: "Ferrum fleet digest — 2026-09-10",
+			wantBody: []string{
+				// A reachable PBS server must not render as "0/0 nodes online"
+				// — it isn't a PVE cluster, so it gets its own line.
+				"backup-server: PBS backup server reachable (3 datastores)",
+				"dead-pbs: UNREACHABLE (connection refused)",
+			},
+		},
 	}
 
 	for _, tt := range tests {

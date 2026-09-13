@@ -34,8 +34,9 @@ export function SidebarContent({
     <nav className={cn("flex-1 overflow-y-auto py-3", collapsed && "no-scrollbar")} aria-label="Main navigation">
       {groups.map((group) => (
         <div key={group.label} className={cn("mb-4 px-2.5 last:mb-0", collapsed && "px-2")}>
+          {/* Full-opacity muted text: at 70% these 10px labels fell to ~3.7:1 on the rail. */}
           {!collapsed && (
-            <div className="panel-label mb-1.5 px-2.5 text-[10px] tracking-[0.1em] text-[var(--sidebar-text-muted)] opacity-70">
+            <div className="panel-label mb-1.5 px-2.5 text-[10px] tracking-[0.1em] text-[var(--sidebar-text-muted)]">
               {group.label}
             </div>
           )}
@@ -47,7 +48,11 @@ export function SidebarContent({
               // which produced a garbage class attribute (no justify-center,
               // both style branches applied at once) and knocked the icons
               // off-center. A plain string survives the merge.
-              const active = item.end ? pathname === item.to : pathname.startsWith(item.to)
+              // Node detail pages live under /nodes but belong to Inventory —
+              // without this, no nav item is lit while on a host page.
+              const active = item.end
+                ? pathname === item.to
+                : pathname.startsWith(item.to) || (item.to === "/inventory" && pathname.startsWith("/nodes/"))
               // The active item picks up the account's accent color on its
               // icon instead of a flat highlight — the one place in the
               // chrome that visibly reflects the accent choice on every page,
