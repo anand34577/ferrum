@@ -17,7 +17,13 @@ import { api, ApiError, type ClusterResource, type Storage } from "@/lib/api"
 async function uploadFile(path: string, form: FormData): Promise<{ upid: string }> {
   const res = await fetch(`/api/v1${path}`, { method: "POST", body: form, credentials: "include" })
   const data = await res.json().catch(() => undefined)
-  if (!res.ok) throw new ApiError(res.status, data?.error ?? res.statusText, data?.code)
+  if (!res.ok) {
+    throw new ApiError(
+      res.status,
+      (typeof data?.error === "string" && data.error) || res.statusText || `Request failed (HTTP ${res.status})`,
+      data?.code,
+    )
+  }
   return data
 }
 
