@@ -228,7 +228,17 @@ func (s *Server) updateDashboard(w http.ResponseWriter, r *http.Request) {
 
 	layout := currentLayout
 	if req.Widgets != nil {
-		clean, err := parseDashboardLayout([]byte(fmt.Sprintf(`{"widgets":%s}`, req.Widgets)))
+		// Always stamps the server's current layoutVersion — updateDashboardRequest
+		// has no Version field, so a client-sent one was silently dropped by
+		// the JSON decode above, and reconstructing this object as just
+		// {"widgets": ...} left storedLayout.Version at its zero value, which
+		// `omitempty` then dropped from the saved JSON entirely. The next load
+		// read that back as version 0, which the frontend's migration check
+		// (correctly) treats as "unversioned" and re-runs the v1->v2 doubling
+		// of every widget's height/y — on every single edit, compounding
+		// forever. The server owns the schema version; it shouldn't depend on
+		// the client sending one back correctly anyway.
+		clean, err := parseDashboardLayout([]byte(fmt.Sprintf(`{"version":%d,"widgets":%s}`, layoutVersion, req.Widgets)))
 		if err != nil {
 			writeErrorMsg(w, http.StatusBadRequest, err.Error())
 			return

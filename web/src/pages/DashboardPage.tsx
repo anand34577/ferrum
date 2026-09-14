@@ -477,7 +477,23 @@ export function DashboardPage() {
           layouts={{
             // Desktop keeps the saved 12-column layout; smaller breakpoints get
             // a derived full-width stack so tablets/phones never overflow.
-            lg: widgets.map((w) => ({ i: w.id, x: w.x, y: w.y, w: w.w, h: w.h })),
+            // minW/minH keep a resize from being dragged down to an unusably
+            // tiny sliver (a real complaint on its own — nothing stops the
+            // handle from being dragged too far without a floor) and maxH
+            // caps a drag/collision cascade from running away to an
+            // absurd height. Bounds come off each widget's own catalog
+            // default (roughly its smallest still-readable size), not a
+            // single fixed number, since a full-width chart and a small KPI
+            // tile need very different floors.
+            lg: widgets.map((w) => {
+              const spec = WIDGET_CATALOG.find((c) => c.type === w.type)
+              return {
+                i: w.id, x: w.x, y: w.y, w: w.w, h: w.h,
+                minW: spec ? Math.min(spec.defaultSize.w, 3) : 2,
+                minH: spec ? Math.min(spec.defaultSize.h, 4) : 4,
+                maxH: 60,
+              }
+            }),
             sm: (() => {
               let y = 0
               return widgets.map((w) => {
