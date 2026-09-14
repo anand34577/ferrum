@@ -6,6 +6,8 @@ import { GaugeChart } from "@/components/charts/GaugeChart"
 import { ResourceAreaChart } from "@/components/charts/ResourceAreaChart"
 import { FirewallRulesPanel } from "@/components/firewall/FirewallRulesPanel"
 import { FileRestoreBrowser } from "@/components/inventory/FileRestoreBrowser"
+import { NetworkDeviceForm } from "@/components/inventory/NetworkDeviceForm"
+import { SSHShellDialog } from "@/components/inventory/SSHShellDialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useConfirm } from "@/components/ui/confirm-dialog"
@@ -116,6 +118,32 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to update configuration"),
   })
+
+  // Inline hardware-key editing (netN, nameserver, searchdomain, or any
+  // other raw PVE config key) — the Hardware tab only ever displayed these,
+  // editing them meant leaving for Proxmox's own UI. Reuses the same
+  // PUT /config endpoint as updateConfig above, via its `extra` passthrough.
+  const [editingKey, setEditingKey] = useState<string | null>(null)
+  const setExtraConfig = useMutation({
+    mutationFn: (extra: Record<string, string>) => api.put(`${base}/config`, { extra }),
+    onSuccess: () => {
+      toast.success("Configuration updated")
+      setEditingKey(null)
+      queryClient.invalidateQueries({ queryKey: ["guest-config", connId, guest?.id] })
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to update configuration"),
+  })
+
+  const [dns, setDns] = useState({ nameserver: "", searchdomain: "" })
+  useEffect(() => {
+    if (configQuery.data) {
+      setDns({
+        nameserver: (configQuery.data.raw?.nameserver as string | undefined) ?? "",
+        searchdomain: (configQuery.data.raw?.searchdomain as string | undefined) ?? "",
+      })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configQuery.data])
 
   const [resizeDisk, setResizeDisk] = useState("")
   const [resizeAmount, setResizeAmount] = useState("")
@@ -310,25 +338,24 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
     [metricAvgQuery.data, metricMaxQuery.data, metricSpecs, metricPeaks],
   )
 
+  // Ticket minting happens inside openConsolePopup, after the popup signals
+  // ready — not here in onSuccess — so PVE's tight termproxy/vncproxy ticket
+  // timeout isn't spent on the popup's own boot time. See openConsolePopup.
   const openConsole = useMutation({
-    mutationFn: async () => {
-      const res = await api.post<{ wsPath: string; password?: string }>(`${base}/console`)
-      return res
-    },
-    onSuccess: ({ wsPath, password }) => {
-      // The single-use ticket travels over postMessage, not the popup URL.
-      if (guest) openConsolePopup(buildConsoleUrl(connId, guest), "width=1024,height=768", { wsPath, password })
-    },
+    mutationFn: async () => api.post<{ wsPath: string; password?: string }>(`${base}/console`),
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to open console"),
   })
+  function handleOpenConsole() {
+    if (guest) openConsolePopup(buildConsoleUrl(connId, guest), "width=1024,height=768", () => openConsole.mutateAsync())
+  }
 
   const openShell = useMutation({
     mutationFn: async () => api.post<{ wsPath: string }>(`${base}/shell`),
-    onSuccess: ({ wsPath }) => {
-      if (guest) openConsolePopup(buildShellUrl(connId, guest.name ?? `guest #${guest.vmid}`, guest.node, guest), "width=900,height=600", { wsPath })
-    },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to open shell"),
   })
+  function handleOpenShell() {
+    if (guest) openConsolePopup(buildShellUrl(connId, guest.name ?? `guest #${guest.vmid}`, guest.node, guest), "width=900,height=600", () => openShell.mutateAsync())
+  }
 
   function invalidate() {
     queryClient.invalidateQueries({ queryKey: ["inventory"] })
@@ -633,15 +660,65 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
             <div>
               <p className="mb-1.5 text-xs font-medium text-[var(--text-muted)]">Network interfaces (configured)</p>
               <div className="space-y-1">
-                {(configQuery.data?.networkDevices ?? []).map((n) => (
-                  <div key={n.key} className="flex items-start gap-2 rounded-md border border-[var(--border)] px-3 py-1.5 text-sm">
-                    <span className="w-16 shrink-0 font-mono text-xs text-[var(--text-muted)]">{n.key}</span>
-                    <span className="break-all font-mono text-xs">{n.value}</span>
-                  </div>
-                ))}
+                {(configQuery.data?.networkDevices ?? []).map((n) =>
+                  editingKey === n.key ? (
+                    <NetworkDeviceForm
+                      key={n.key}
+                      deviceKey={n.key}
+                      value={n.value}
+                      guestType={guest.type as "qemu" | "lxc"}
+                      saving={setExtraConfig.isPending}
+                      onSave={(newValue) => setExtraConfig.mutate({ [n.key]: newValue })}
+                      onCancel={() => setEditingKey(null)}
+                    />
+                  ) : (
+                    <div key={n.key} className="group flex items-start gap-2 rounded-md border border-[var(--border)] px-3 py-1.5 text-sm">
+                      <span className="w-16 shrink-0 font-mono text-xs text-[var(--text-muted)]">{n.key}</span>
+                      <span className="min-w-0 flex-1 break-all font-mono text-xs">{n.value}</span>
+                      <button
+                        className="shrink-0 text-[var(--text-muted)] opacity-0 transition-opacity hover:text-[var(--text)] group-hover:opacity-100"
+                        aria-label={`Edit ${n.key}`}
+                        onClick={() => setEditingKey(n.key)}
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ),
+                )}
                 {(configQuery.data?.networkDevices ?? []).length === 0 && <p className="text-sm text-[var(--text-muted)]">No network devices found.</p>}
               </div>
             </div>
+
+            {guest.type === "lxc" && (
+              <div>
+                <p className="mb-1.5 text-xs font-medium text-[var(--text-muted)]">DNS</p>
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Nameserver</Label>
+                    <Input value={dns.nameserver} onChange={(e) => setDns((d) => ({ ...d, nameserver: e.target.value }))} placeholder="8.8.8.8 1.1.1.1" className="h-8 w-48 text-xs" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Search domain</Label>
+                    <Input value={dns.searchdomain} onChange={(e) => setDns((d) => ({ ...d, searchdomain: e.target.value }))} placeholder="example.com" className="h-8 w-48 text-xs" />
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    loading={setExtraConfig.isPending}
+                    disabled={!dns.nameserver && !dns.searchdomain}
+                    onClick={() => {
+                      const extra: Record<string, string> = {}
+                      if (dns.nameserver) extra.nameserver = dns.nameserver
+                      if (dns.searchdomain) extra.searchdomain = dns.searchdomain
+                      setExtraConfig.mutate(extra)
+                    }}
+                  >
+                    Save
+                  </Button>
+                </div>
+                <p className="mt-1 text-xs text-[var(--text-muted)]">Falls back to the host's own resolv.conf when unset — clearing an already-set value needs Proxmox's own UI for now.</p>
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="network" className="space-y-2">
@@ -671,10 +748,10 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
                         )}
                       </div>
                       <div className="mt-1 flex flex-wrap gap-1.5">
-                        {iface["ip-addresses"].map((ip) => (
+                        {(iface["ip-addresses"] ?? []).map((ip) => (
                           <Badge key={ip} variant="default">{ip}</Badge>
                         ))}
-                        {iface["ip-addresses"].length === 0 && <span className="text-xs text-[var(--text-muted)]">No IP reported</span>}
+                        {(iface["ip-addresses"] ?? []).length === 0 && <span className="text-xs text-[var(--text-muted)]">No IP reported</span>}
                       </div>
                     </div>
                   ))}
@@ -982,14 +1059,15 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
 
           <TabsContent value="actions" className="space-y-4">
             <div className="flex gap-2">
-              <Button size="sm" variant="secondary" loading={openConsole.isPending} onClick={() => openConsole.mutate()}>
+              <Button size="sm" variant="secondary" loading={openConsole.isPending} onClick={handleOpenConsole}>
                 {!openConsole.isPending && <SquareTerminal className="h-3.5 w-3.5" />}
                 Open console
               </Button>
-              <Button size="sm" variant="secondary" loading={openShell.isPending} onClick={() => openShell.mutate()}>
+              <Button size="sm" variant="secondary" loading={openShell.isPending} onClick={handleOpenShell}>
                 {!openShell.isPending && <SquareTerminal className="h-3.5 w-3.5" />}
                 Open shell
               </Button>
+              <SSHShellDialog connId={connId} />
             </div>
             <div className="space-y-1.5">
               <Label>Clone to new VMID</Label>

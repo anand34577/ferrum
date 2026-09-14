@@ -18,6 +18,7 @@ import { PageHeader } from "@/components/ui/page-header"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusDot } from "@/components/ui/status-dot"
+import { Textarea } from "@/components/ui/textarea"
 import { Hint } from "@/components/ui/tooltip"
 import { api, ApiError, type Connection, type ConnectionInventory } from "@/lib/api"
 
@@ -33,6 +34,12 @@ interface FormState {
   tokenSecret: string
   verifyTls: boolean
   behindReverseProxy: boolean
+  // "" means SSH access isn't configured for this connection at all.
+  sshAuthType: "" | "password" | "key"
+  sshUsername: string
+  sshPort: number
+  sshPassword: string
+  sshPrivateKey: string
 }
 
 const emptyForm: FormState = {
@@ -47,6 +54,11 @@ const emptyForm: FormState = {
   tokenSecret: "",
   verifyTls: true,
   behindReverseProxy: false,
+  sshAuthType: "",
+  sshUsername: "",
+  sshPort: 22,
+  sshPassword: "",
+  sshPrivateKey: "",
 }
 
 const DEFAULT_PORT: Record<FormState["type"], number> = { pve: 8006, pbs: 8007 }
@@ -86,6 +98,11 @@ export function ConnectionsPage() {
       tokenSecret: "",
       verifyTls: conn.verifyTls,
       behindReverseProxy: conn.behindReverseProxy,
+      sshAuthType: (conn.sshAuthType as FormState["sshAuthType"]) || "",
+      sshUsername: conn.sshUsername ?? "",
+      sshPort: conn.sshPort || 22,
+      sshPassword: "",
+      sshPrivateKey: "",
     }
     setForm(next)
     setFormInitial(next)
@@ -141,6 +158,13 @@ export function ConnectionsPage() {
       } else {
         body.username = form.username
         if (form.password) body.password = form.password
+      }
+      body.sshAuthType = form.sshAuthType
+      if (form.sshAuthType) {
+        body.sshUsername = form.sshUsername
+        body.sshPort = form.sshPort
+        if (form.sshPassword) body.sshPassword = form.sshPassword
+        if (form.sshPrivateKey) body.sshPrivateKey = form.sshPrivateKey
       }
       return api.put(`/connections/${editingId}`, body)
     },
@@ -341,6 +365,55 @@ export function ConnectionsPage() {
                 />
                 Behind reverse proxy
               </label>
+            </div>
+
+            <div className="space-y-3 rounded-md border border-[var(--border)] p-3">
+              <div className="space-y-1.5">
+                <Label>SSH access (optional)</Label>
+                <p className="text-xs text-[var(--text-muted)]">
+                  Lets "SSH Shell" in Inventory connect straight to this host without retyping a password every time.
+                </p>
+                <Select value={form.sshAuthType || "none"} onValueChange={(v) => setForm({ ...form, sshAuthType: v === "none" ? "" : (v as FormState["sshAuthType"]) })}>
+                  <SelectTrigger className="max-w-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Not configured</SelectItem>
+                    <SelectItem value="password">Username / password</SelectItem>
+                    <SelectItem value="key">Username / private key</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {form.sshAuthType && (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label>SSH username</Label>
+                    <Input placeholder="root" autoComplete="off" value={form.sshUsername} onChange={(e) => setForm({ ...form, sshUsername: e.target.value })} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>SSH port</Label>
+                    <Input type="number" min={1} max={65535} value={form.sshPort} onChange={(e) => setForm({ ...form, sshPort: Number(e.target.value) })} />
+                  </div>
+                  {form.sshAuthType === "password" ? (
+                    <div className="space-y-1.5 sm:col-span-2">
+                      <Label>{editingId ? "SSH password (leave blank to keep current)" : "SSH password"}</Label>
+                      <Input type="password" autoComplete="new-password" value={form.sshPassword} onChange={(e) => setForm({ ...form, sshPassword: e.target.value })} />
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5 sm:col-span-2">
+                      <Label>{editingId ? "SSH private key (leave blank to keep current)" : "SSH private key"}</Label>
+                      <Textarea
+                        rows={4}
+                        placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                        className="font-mono text-xs"
+                        value={form.sshPrivateKey}
+                        onChange={(e) => setForm({ ...form, sshPrivateKey: e.target.value })}
+                      />
+                      <p className="text-xs text-[var(--text-muted)]">Unencrypted (no passphrase) keys only, for now.</p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <FormError

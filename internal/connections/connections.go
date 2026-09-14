@@ -404,6 +404,36 @@ func (r *Resolver) Host(ctx context.Context, id string) (host string, port int, 
 	return
 }
 
+// SSHCredentials returns a connection's stored SSH host/port/username and
+// decrypted secret (a password or a private key PEM, per authType), for
+// minting an SSH session against this connection's own host straight from
+// Inventory without retyping credentials each time. ok is false when the
+// connection has no SSH credentials configured (ssh_auth_type is empty) —
+// not an error, since most connections simply don't have any.
+func (r *Resolver) SSHCredentials(ctx context.Context, id string) (host string, port int, username, authType, secret string, ok bool, err error) {
+	var (
+		sshPort     int
+		sshUsername string
+		sshAuthType string
+		sshSecret   string
+	)
+	err = r.db.QueryRowContext(ctx, `
+		SELECT host, COALESCE(ssh_port, 22), COALESCE(ssh_username,''), COALESCE(ssh_auth_type,''), COALESCE(ssh_secret_enc,'')
+		FROM connections WHERE id = ?`, id,
+	).Scan(&host, &sshPort, &sshUsername, &sshAuthType, &sshSecret)
+	if err != nil {
+		return "", 0, "", "", "", false, err
+	}
+	if sshAuthType == "" {
+		return "", 0, "", "", "", false, nil
+	}
+	decrypted, err := r.secrets.Decrypt(sshSecret)
+	if err != nil {
+		return "", 0, "", "", "", false, err
+	}
+	return host, sshPort, sshUsername, sshAuthType, decrypted, true, nil
+}
+
 // InvalidateAll drops every cached PVE ticket and PBS client in one go.
 func (r *Resolver) InvalidateAll() {
 	r.mu.Lock()

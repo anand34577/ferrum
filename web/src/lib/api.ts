@@ -106,6 +106,11 @@ export interface Connection {
   verifyTls: boolean
   behindReverseProxy: boolean
   createdAt: string
+  // SSH access to this connection's own host, for Inventory's SSH Shell —
+  // absent/"" sshAuthType means it isn't configured.
+  sshUsername?: string
+  sshPort?: number
+  sshAuthType?: "" | "password" | "key"
 }
 
 // Mirrors pve.ClusterResource (internal/pve/client.go).

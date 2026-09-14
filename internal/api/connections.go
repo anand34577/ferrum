@@ -28,6 +28,14 @@ type connectionDTO struct {
 	TLSFingerprint     string `json:"tlsFingerprint,omitempty"` // SHA-256 pin; empty = unset
 	BehindReverseProxy bool   `json:"behindReverseProxy"`
 	CreatedAt          string `json:"createdAt"`
+
+	// SSH credentials for this connection's own host, used by Inventory's
+	// SSH Shell to connect without retyping a password each time. Only the
+	// non-secret shape is ever returned — no password/key, same as the PVE
+	// credentials above never round-trip either.
+	SSHUsername string `json:"sshUsername,omitempty"`
+	SSHPort     int    `json:"sshPort,omitempty"`
+	SSHAuthType string `json:"sshAuthType,omitempty"` // "" | "password" | "key"
 }
 
 type createConnectionRequest struct {
@@ -43,11 +51,21 @@ type createConnectionRequest struct {
 	VerifyTLS          bool   `json:"verifyTls"`
 	TLSFingerprint     string `json:"tlsFingerprint,omitempty"`
 	BehindReverseProxy bool   `json:"behindReverseProxy"`
+
+	// SSH credentials, all optional — omit sshAuthType (or leave it "") for
+	// no SSH access configured. "key" expects an unencrypted PEM private
+	// key in SSHPrivateKey (passphrase-protected keys aren't supported yet).
+	SSHUsername   string `json:"sshUsername,omitempty"`
+	SSHPort       int    `json:"sshPort,omitempty"`
+	SSHAuthType   string `json:"sshAuthType,omitempty"` // "" | "password" | "key"
+	SSHPassword   string `json:"sshPassword,omitempty"`
+	SSHPrivateKey string `json:"sshPrivateKey,omitempty"`
 }
 
 func (s *Server) listConnections(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.QueryContext(r.Context(), `
-		SELECT id, name, type, host, port, auth_type, COALESCE(username,''), COALESCE(token_id,''), verify_tls, COALESCE(tls_fingerprint,''), behind_reverse_proxy, created_at
+		SELECT id, name, type, host, port, auth_type, COALESCE(username,''), COALESCE(token_id,''), verify_tls, COALESCE(tls_fingerprint,''), behind_reverse_proxy, created_at,
+			COALESCE(ssh_username,''), COALESCE(ssh_port,22), COALESCE(ssh_auth_type,'')
 		FROM connections ORDER BY name`)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
@@ -59,7 +77,8 @@ func (s *Server) listConnections(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var c connectionDTO
 		var verify, reverse int
-		if err := rows.Scan(&c.ID, &c.Name, &c.Type, &c.Host, &c.Port, &c.AuthType, &c.Username, &c.TokenID, &verify, &c.TLSFingerprint, &reverse, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Type, &c.Host, &c.Port, &c.AuthType, &c.Username, &c.TokenID, &verify, &c.TLSFingerprint, &reverse, &c.CreatedAt,
+			&c.SSHUsername, &c.SSHPort, &c.SSHAuthType); err != nil {
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -102,13 +121,33 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var sshSecretEnc string
+	if req.SSHAuthType != "" {
+		if err := validateSSHFields(req.SSHAuthType, req.SSHUsername, req.SSHPassword, req.SSHPrivateKey); err != nil {
+			writeErrorMsg(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		secret := req.SSHPassword
+		if req.SSHAuthType == "key" {
+			secret = req.SSHPrivateKey
+		}
+		if sshSecretEnc, err = s.secrets.Encrypt(secret); err != nil {
+			s.writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if req.SSHPort == 0 {
+			req.SSHPort = 22
+		}
+	}
+
 	id := uuid.NewString()
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err = s.db.ExecContext(r.Context(), `
-		INSERT INTO connections (id, name, type, host, port, auth_type, token_id, token_secret_enc, username, password_enc, verify_tls, tls_fingerprint, behind_reverse_proxy, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO connections (id, name, type, host, port, auth_type, token_id, token_secret_enc, username, password_enc, verify_tls, tls_fingerprint, behind_reverse_proxy, created_at, updated_at, ssh_username, ssh_port, ssh_auth_type, ssh_secret_enc)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, req.Name, req.Type, req.Host, req.Port, req.AuthType, req.TokenID, tokenSecretEnc, req.Username, passwordEnc,
 		boolToInt(req.VerifyTLS), req.TLSFingerprint, boolToInt(req.BehindReverseProxy), now, now,
+		req.SSHUsername, req.SSHPort, req.SSHAuthType, sshSecretEnc,
 	)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
@@ -147,6 +186,14 @@ type updateConnectionRequest struct {
 	// pin), mirroring how tags/notes clearing works on guest config.
 	TLSFingerprint     *string `json:"tlsFingerprint,omitempty"`
 	BehindReverseProxy *bool   `json:"behindReverseProxy,omitempty"`
+
+	// SSHAuthType "" (explicitly sent empty, not omitted) clears SSH access
+	// entirely — same "pointer means touched" shape as the fields above.
+	SSHUsername   *string `json:"sshUsername,omitempty"`
+	SSHPort       *int    `json:"sshPort,omitempty"`
+	SSHAuthType   *string `json:"sshAuthType,omitempty"`
+	SSHPassword   *string `json:"sshPassword,omitempty"`
+	SSHPrivateKey *string `json:"sshPrivateKey,omitempty"`
 }
 
 func (s *Server) updateConnection(w http.ResponseWriter, r *http.Request) {
@@ -222,6 +269,40 @@ func (s *Server) updateConnection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		set("token_secret_enc", enc)
+	}
+	if req.SSHUsername != nil {
+		set("ssh_username", *req.SSHUsername)
+	}
+	if req.SSHPort != nil {
+		set("ssh_port", *req.SSHPort)
+	}
+	if req.SSHAuthType != nil {
+		if *req.SSHAuthType != "" && *req.SSHAuthType != "password" && *req.SSHAuthType != "key" {
+			writeErrorMsg(w, http.StatusBadRequest, `sshAuthType must be "", "password", or "key"`)
+			return
+		}
+		set("ssh_auth_type", *req.SSHAuthType)
+		if *req.SSHAuthType == "" {
+			// Clearing SSH access entirely — drop the stored secret too,
+			// not just the type flag.
+			set("ssh_secret_enc", "")
+		}
+	}
+	if req.SSHPassword != nil && *req.SSHPassword != "" {
+		enc, err := s.secrets.Encrypt(*req.SSHPassword)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		set("ssh_secret_enc", enc)
+	}
+	if req.SSHPrivateKey != nil && *req.SSHPrivateKey != "" {
+		enc, err := s.secrets.Encrypt(*req.SSHPrivateKey)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		set("ssh_secret_enc", enc)
 	}
 	if len(sets) == 0 {
 		writeErrorMsg(w, http.StatusBadRequest, "no fields to update")
@@ -344,6 +425,25 @@ func validateConnectionRequest(req *createConnectionRequest) error {
 	}
 	if req.AuthType == "password" && req.Username == "" {
 		return fmt.Errorf("username is required for password auth")
+	}
+	return nil
+}
+
+// validateSSHFields enforces the SSH credential shape when sshAuthType is
+// set at all — mirrors validateConnectionRequest's auth-type branching for
+// the Proxmox credentials, one level down.
+func validateSSHFields(authType, username, password, privateKey string) error {
+	if authType != "password" && authType != "key" {
+		return fmt.Errorf(`sshAuthType must be "password" or "key"`)
+	}
+	if username == "" {
+		return fmt.Errorf("sshUsername is required when SSH access is configured")
+	}
+	if authType == "password" && password == "" {
+		return fmt.Errorf("sshPassword is required for SSH password auth")
+	}
+	if authType == "key" && privateKey == "" {
+		return fmt.Errorf("sshPrivateKey is required for SSH key auth")
 	}
 	return nil
 }

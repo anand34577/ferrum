@@ -153,6 +153,42 @@ export function parseExtraLines(text: string): Record<string, string> | undefine
   return Object.keys(extra).length > 0 ? extra : undefined
 }
 
+/** Parses one PVE "property string" value — the comma-separated key=value
+ * format PVE itself uses for a single hardware line: netN
+ * ("name=eth0,bridge=vmbr0,ip=10.0.0.5/24,firewall=1"), diskN
+ * ("local-lvm:vm-100-disk-0,size=32G,ssd=1"), and others. Unlike
+ * parseExtraLines (one key=value per whole *line*, for the multi-key
+ * "extra options" escape hatch), this is one key=value per comma *within* a
+ * single line's value — the shared building block for turning any one of
+ * those raw strings into editable fields instead of one text blob, the way
+ * Proxmox's own UI does. A bare flag with no "=" is kept as an empty-value
+ * key (PVE uses this for a disk's leading "storage:volume" segment) rather
+ * than dropped, so round-tripping through stringifyPropertyString doesn't
+ * silently lose it. */
+export function parsePropertyString(value: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (!value) return out
+  for (const part of value.split(",")) {
+    const eq = part.indexOf("=")
+    if (eq === -1) {
+      if (part.trim()) out[part.trim()] = ""
+      continue
+    }
+    out[part.slice(0, eq).trim()] = part.slice(eq + 1).trim()
+  }
+  return out
+}
+
+/** Inverse of parsePropertyString. Keys with an empty value round-trip as a
+ * bare flag (no "="); drop a key entirely by deleting it from the object
+ * before calling this, not by setting it to "". */
+export function stringifyPropertyString(fields: Record<string, string>): string {
+  return Object.entries(fields)
+    .filter(([, v]) => v !== undefined)
+    .map(([k, v]) => (v === "" ? k : `${k}=${v}`))
+    .join(",")
+}
+
 /** Config keys that hand the guest/host arbitrary code execution or bypass
  * normal isolation if set via the free-text "extra options" escape hatch —
  * `args`/`hookscript` run on the Proxmox host itself, the rest weaken the

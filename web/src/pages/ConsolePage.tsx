@@ -32,6 +32,12 @@ async function loadRFB(): Promise<RFBConstructor> {
   return candidate as RFBConstructor
 }
 
+function missingSessionMessage(kind: string): string {
+  if (kind === "ssh") return "Missing SSH session — open this from the SSH Shell dialog."
+  if (kind === "shell") return "Missing shell session — open this from a Shell button."
+  return "Missing console session — open this from a guest's console button."
+}
+
 // Mints a fresh session for whichever console kind this page is showing —
 // each backend session token is single-use, so reconnecting needs a new one.
 async function openSession(kind: string, connId: string, guestType: string | null, node: string, vmid: string | null) {
@@ -54,7 +60,10 @@ export function ConsolePage() {
   const guestType = params.get("type")
   const node = params.get("node")
   const vmid = params.get("vmid")
-  const canReconnect = kind === "shell" ? Boolean(connId && node) : Boolean(connId && guestType && node && vmid)
+  // SSH sessions never reconnect silently — there is no stored Proxmox
+  // connection to remint a ticket from, and the password isn't kept around
+  // after the initial handoff. Reconnecting means reopening the SSH dialog.
+  const canReconnect = kind === "ssh" ? false : kind === "shell" ? Boolean(connId && node) : Boolean(connId && guestType && node && vmid)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const rfbRef = useRef<import("@novnc/novnc/lib/rfb.js").default | null>(null)
@@ -76,13 +85,7 @@ export function ConsolePage() {
     if (hadOpener) return "connecting"
     return canReconnect ? "disconnected" : "error"
   })
-  const [errorMsg, setErrorMsg] = useState(() =>
-    !hadOpener && !canReconnect
-      ? kind === "shell"
-        ? "Missing shell session — open this from a Shell button."
-        : "Missing console session — open this from a guest's console button."
-      : "",
-  )
+  const [errorMsg, setErrorMsg] = useState(() => (!hadOpener && !canReconnect ? missingSessionMessage(kind) : ""))
   const [attempt, setAttempt] = useState(0)
   const handoffWsPath = handoff?.wsPath ?? null
   // The first attempt's ticket situation: "handoff-waiting" while the
@@ -126,11 +129,7 @@ export function ConsolePage() {
         setState("disconnected")
       } else {
         setState("error")
-        setErrorMsg(
-          kind === "shell"
-            ? "Missing shell session — open this from a Shell button."
-            : "Missing console session — open this from a guest's console button.",
-        )
+        setErrorMsg(missingSessionMessage(kind))
       }
     }, HANDOFF_TIMEOUT_MS)
     return () => {
@@ -256,11 +255,12 @@ export function ConsolePage() {
       </div>
 
       <div className="relative min-h-0 flex-1">
-        {kind === "shell" ? (
+        {kind === "shell" || kind === "ssh" ? (
           <ShellTerminal
             initialWsPath={attempt === 0 ? handoffWsPath : null}
             reconnectKey={attempt}
-            mintSession={canReconnect ? () => openSession(kind, connId!, guestType, node!, vmid) : null}
+            mintSession={kind === "shell" && canReconnect ? () => openSession(kind, connId!, guestType, node!, vmid) : null}
+            missingMessage={missingSessionMessage(kind)}
             onState={setState}
             onError={setErrorMsg}
           />
@@ -303,12 +303,14 @@ function ShellTerminal({
   initialWsPath,
   reconnectKey,
   mintSession,
+  missingMessage,
   onState,
   onError,
 }: {
   initialWsPath: string | null
   reconnectKey: number
   mintSession: (() => Promise<{ wsPath: string }>) | null
+  missingMessage: string
   onState: (s: ConnectionState) => void
   onError: (msg: string) => void
 }) {
@@ -338,7 +340,7 @@ function ShellTerminal({
         if (!mintSession) {
           if (!cancelled) {
             onState("error")
-            onError("Missing shell session — open this from a Shell button.")
+            onError(missingMessage)
           }
           return
         }

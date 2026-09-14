@@ -3,12 +3,12 @@ package api
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -85,10 +85,7 @@ func (s *Server) openGuestConsole(w http.ResponseWriter, r *http.Request) {
 		// Per-user action failure, not a system fault: say why (PVE's own
 		// message when it has one) instead of a sanitized 500-style body.
 		slog.Warn("console proxy request failed", "connectionId", connID, "guestType", guestType, "node", node, "vmid", vmid, "error", err)
-		msg := strings.TrimSpace(err.Error())
-		if strings.HasSuffix(msg, "{\"data\":null}") {
-			msg = fmt.Sprintf("Proxmox refused to open a VNC console for this %s — try the Shell console instead (containers in TTY console mode need it).", guestType)
-		}
+		msg := proxyErrorMessage(err, fmt.Sprintf("Proxmox refused to open a VNC console for this %s — try the Shell console instead (containers in TTY console mode need it).", guestType))
 		writeErrorMsg(w, http.StatusBadGateway, msg)
 		return
 	}
@@ -124,7 +121,8 @@ func (s *Server) openGuestShell(w http.ResponseWriter, r *http.Request) {
 	proxy, err := client.GuestTermProxy(r.Context(), guestType, node, vmid)
 	if err != nil {
 		slog.Warn("shell proxy request failed", "connectionId", connID, "guestType", guestType, "node", node, "vmid", vmid, "error", err)
-		writeErrorMsg(w, http.StatusBadGateway, strings.TrimSpace(err.Error()))
+		msg := proxyErrorMessage(err, fmt.Sprintf("Proxmox refused to open a shell for this %s — check that Sys.Console permission is granted for this connection on %s, and that the guest is running.", guestType, node))
+		writeErrorMsg(w, http.StatusBadGateway, msg)
 		return
 	}
 
@@ -147,13 +145,33 @@ func (s *Server) openNodeShell(w http.ResponseWriter, r *http.Request) {
 	proxy, err := client.NodeTermProxy(r.Context(), node)
 	if err != nil {
 		slog.Warn("node shell proxy request failed", "connectionId", connID, "node", node, "error", err)
-		writeErrorMsg(w, http.StatusBadGateway, strings.TrimSpace(err.Error()))
+		msg := proxyErrorMessage(err, fmt.Sprintf("Proxmox refused to open a shell on %s — check that Sys.Console permission is granted for this connection on that node, and that the node is online.", node))
+		writeErrorMsg(w, http.StatusBadGateway, msg)
 		return
 	}
 
 	sessionID := newConsoleSession(connID, "", node, 0, proxy.Port, proxy.Ticket)
 	s.audit(r, "node.shell", "node", node)
 	writeJSON(w, http.StatusOK, map[string]string{"sessionId": sessionID, "wsPath": "/ws/console/" + sessionID})
+}
+
+// proxyErrorMessage turns a failed VNC/shell proxy request into a clean,
+// user-facing message instead of the raw "pve POST /nodes/x/y failed
+// (500): ..." transport string. Only a genuine PVE 4xx gets its own message
+// surfaced — same policy as writeError/writeUpstreamError elsewhere: a 5xx
+// body isn't necessarily the clean, actionable kind of text a 4xx carries
+// (PVE answers both "permission denied" and "nothing to open here" with a
+// bare 500 {"data":null}, no hint at all, but it could just as easily be a
+// raw backend stack trace), so anything else — including a transport-level
+// error with no HTTP status at all — falls back to the caller's own hint.
+func proxyErrorMessage(err error, fallback string) string {
+	var pveErr *pve.StatusError
+	if errors.As(err, &pveErr) && pveErr.StatusCode >= 400 && pveErr.StatusCode < 500 {
+		if msg := pveErr.Message(); msg != "" && msg != `{"data":null}` {
+			return msg
+		}
+	}
+	return fallback
 }
 
 // newConsoleSession records a short-lived hand-off entry and returns its id —
