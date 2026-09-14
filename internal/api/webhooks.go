@@ -86,6 +86,12 @@ func (s *Server) listWebhooks(w http.ResponseWriter, r *http.Request) {
 func decodeEventTypes(raw string) []string {
 	var types []string
 	_ = json.Unmarshal([]byte(raw), &types) // malformed row → treat as "no filter" for display purposes
+	// Unmarshal sets types to nil for a malformed/"null" row same as a
+	// legitimate empty JSON array would leave it — webhookDTO.EventTypes has
+	// no `omitempty`, so nil here would serialize as `null` instead of `[]`.
+	if types == nil {
+		types = []string{}
+	}
 	return types
 }
 
@@ -96,7 +102,15 @@ type webhookRequest struct {
 	Active     *bool    `json:"active,omitempty"` // nil on create means true
 }
 
-func (req webhookRequest) validate() (string, bool) {
+// validate also normalizes EventTypes to a non-nil slice — a request that
+// omits the field entirely decodes it to nil, and it flows straight into
+// this handler's own webhookDTO response (EventTypes has no `omitempty`),
+// so left alone it would answer the create/update call with `"eventTypes":
+// null` instead of `[]`.
+func (req *webhookRequest) validate() (string, bool) {
+	if req.EventTypes == nil {
+		req.EventTypes = []string{}
+	}
 	if strings.TrimSpace(req.Name) == "" {
 		return "name is required", false
 	}

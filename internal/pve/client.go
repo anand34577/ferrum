@@ -481,8 +481,14 @@ func (c *Client) post(ctx context.Context, path string, form url.Values, out any
 func (c *Client) put(ctx context.Context, path string, form url.Values, out any) error {
 	return c.do(ctx, http.MethodPut, path, form, out)
 }
+// delete issues a DELETE. Proxmox's API rejects any request body on DELETE
+// ("Unexpected content for method 'DELETE'"), unlike POST/PUT, so params go
+// on the query string instead of through do()'s form-body encoding.
 func (c *Client) delete(ctx context.Context, path string, form url.Values, out any) error {
-	return c.do(ctx, http.MethodDelete, path, form, out)
+	if len(form) > 0 {
+		path += "?" + form.Encode()
+	}
+	return c.do(ctx, http.MethodDelete, path, nil, out)
 }
 
 // --- Version & cluster-wide endpoints ---

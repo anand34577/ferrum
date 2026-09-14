@@ -116,6 +116,13 @@ type NetDevice struct {
 var diskKeyPrefixes = []string{"scsi", "virtio", "ide", "sata", "mp"}
 
 func parseHardware(raw map[string]any) (disks []DiskDevice, nets []NetDevice) {
+	// GuestConfig.Disks/NetworkDevices have no `omitempty` — a guest with
+	// literally no matching hardware keys (rare, but a bare freshly-created
+	// LXC before rootfs/net0 land can hit it) would otherwise leave these
+	// nil and serialize as JSON `null` instead of `[]`, same class of bug
+	// LXCInterfaces had for ip-addresses.
+	disks = []DiskDevice{}
+	nets = []NetDevice{}
 	for key, v := range raw {
 		s, ok := v.(string)
 		if !ok {
@@ -805,7 +812,12 @@ func (c *Client) LXCInterfaces(ctx context.Context, node string, vmid int) ([]Ag
 	}
 	interfaces := make([]AgentNetworkInterface, 0, len(out.Data))
 	for _, r := range out.Data {
-		var ips []string
+		// A nil slice (the zero value if neither append below ever fires —
+		// an interface with no address configured, e.g. a down link) has no
+		// `omitempty` on IPAddresses to hide behind: it marshals as JSON
+		// `null`, not `[]`, and the frontend's `.map()` over it throws.
+		// make(..., 0, 2) keeps it a real, JSON-`[]` empty slice either way.
+		ips := make([]string, 0, 2)
 		if ip := stripCIDR(r.Inet); ip != "" {
 			ips = append(ips, ip)
 		}

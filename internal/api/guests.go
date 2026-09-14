@@ -47,6 +47,14 @@ type updateGuestConfigRequest struct {
 	// delete=<key>.
 	Tags  *string `json:"tags,omitempty"`
 	Notes *string `json:"notes,omitempty"`
+
+	// Extra sets arbitrary raw config keys as-is — netN (IP/gateway/bridge),
+	// nameserver/searchdomain (LXC DNS), or any other PVE config key this
+	// struct doesn't name a field for. Same escape hatch CreateVM/CreateLXC
+	// already give guest creation; editing an existing guest had no
+	// equivalent, so hardware/network fields beyond the ones above were
+	// only ever editable from Proxmox's own UI.
+	Extra map[string]string `json:"extra,omitempty"`
 }
 
 func (s *Server) updateGuestConfig(w http.ResponseWriter, r *http.Request) {
@@ -87,6 +95,9 @@ func (s *Server) updateGuestConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(deletes) > 0 {
 		form.Set("delete", strings.Join(deletes, ","))
+	}
+	for k, v := range req.Extra {
+		form.Set(k, v)
 	}
 	if len(form) == 0 {
 		writeErrorMsg(w, http.StatusBadRequest, "no fields to update")
@@ -1196,7 +1207,10 @@ func (s *Server) guestBackups(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	var all []pve.StorageContentItem
+	// guestBackupsResponse.Backups has no `omitempty` — a guest with zero
+	// backups (the common case for one never backed up) must still answer
+	// `[]`, not JSON `null`.
+	all := []pve.StorageContentItem{}
 	var warnings []string // per-storage failures, surfaced instead of silently dropped
 	for _, st := range storages {
 		if !strings.Contains(st.Content, "backup") {

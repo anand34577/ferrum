@@ -271,17 +271,17 @@ export function InventoryPage() {
     bulkMigrateAction.mutate(migrateTarget)
   }
 
+  // Ticket minting happens inside openConsolePopup, after the popup signals
+  // ready — not here in onSuccess — so PVE's tight termproxy/vncproxy ticket
+  // timeout isn't spent on the popup's own boot time. See openConsolePopup.
   const openConsole = useMutation({
-    mutationFn: async ({ connId, guest }: { connId: string; guest: ClusterResource }) => {
-      const res = await api.post<{ wsPath: string; password?: string }>(`/connections/${connId}/guests/${guest.type}/${guest.node}/${guest.vmid}/console`)
-      return { connId, guest, wsPath: res.wsPath, password: res.password }
-    },
-    onSuccess: ({ connId, guest, wsPath, password }) => {
-      // The single-use ticket travels over postMessage, not the popup URL.
-      openConsolePopup(buildConsoleUrl(connId, guest), "width=1024,height=768", { wsPath, password })
-    },
+    mutationFn: async ({ connId, guest }: { connId: string; guest: ClusterResource }) =>
+      api.post<{ wsPath: string; password?: string }>(`/connections/${connId}/guests/${guest.type}/${guest.node}/${guest.vmid}/console`),
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to open console"),
   })
+  function handleOpenConsole(connId: string, guest: ClusterResource) {
+    openConsolePopup(buildConsoleUrl(connId, guest), "width=1024,height=768", () => openConsole.mutateAsync({ connId, guest }))
+  }
 
   function toggle(key: string) {
     setExpanded((prev) => {
@@ -685,7 +685,7 @@ export function InventoryPage() {
                                         variant="ghost"
                                         aria-label={`Open console for ${guest.name}`}
                                         disabled={openConsole.isPending}
-                                        onClick={() => openConsole.mutate({ connId: conn.connectionId, guest })}
+                                        onClick={() => handleOpenConsole(conn.connectionId, guest)}
                                       >
                                         <SquareTerminal className="h-3.5 w-3.5" />
                                       </Button>
@@ -713,7 +713,7 @@ export function InventoryPage() {
                                         </DropdownMenuItem>
                                       ) : (
                                         <>
-                                          <DropdownMenuItem onSelect={() => openConsole.mutate({ connId: conn.connectionId, guest })}>
+                                          <DropdownMenuItem onSelect={() => handleOpenConsole(conn.connectionId, guest)}>
                                             <SquareTerminal className="h-3.5 w-3.5 text-[var(--text-muted)]" /> Console
                                           </DropdownMenuItem>
                                           <DropdownMenuSeparator />

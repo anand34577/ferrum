@@ -170,6 +170,15 @@ function useActiveSection(ids: string[]): string {
     const root = document.getElementById("main-content")
     if (!root) return
     const update = () => {
+      // Scrolled to (or past) the bottom: the last section's own top can be
+      // short enough, this late in the page, that it never crosses the 30%
+      // line above — the loop below would then keep reporting the section
+      // before it as "active" even with the last one fully in view and
+      // nothing left to scroll to. Bottom-of-scroll always means "last".
+      if (root.scrollTop + root.clientHeight >= root.scrollHeight - 2) {
+        setActive(ids[ids.length - 1])
+        return
+      }
       const line = root.getBoundingClientRect().top + root.clientHeight * 0.3
       let current = ids[0]
       for (const id of ids) {

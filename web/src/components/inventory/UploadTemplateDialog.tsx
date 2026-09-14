@@ -108,64 +108,66 @@ export function UploadTemplateDialog({ connId, nodes, content }: UploadTemplateD
           <DialogDescription>Upload a file, or have the node fetch it directly from a URL.</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-1.5">
-          <Label>Node</Label>
-          <Select value={node} onValueChange={(v) => { setNode(v); setStorage("") }}>
-            <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
-            <SelectContent>
-              {nodes.map((n) => <SelectItem key={n.node} value={n.node!}>{n.node}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1.5">
-          <Label>Storage</Label>
-          <Select value={storage} onValueChange={setStorage} disabled={!node}>
-            <SelectTrigger><SelectValue placeholder={node ? "Select..." : "Choose a node first"} /></SelectTrigger>
-            <SelectContent>
-              {eligibleStorages.map((s) => <SelectItem key={s.storage} value={s.storage}>{s.storage}</SelectItem>)}
-              {node && eligibleStorages.length === 0 && !storagesQuery.isLoading && (
-                <SelectItem value="__none__" disabled>No storage on this node accepts {label}s</SelectItem>
-              )}
-            </SelectContent>
-          </Select>
-        </div>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>Node</Label>
+            <Select value={node} onValueChange={(v) => { setNode(v); setStorage("") }}>
+              <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+              <SelectContent>
+                {nodes.map((n) => <SelectItem key={n.node} value={n.node!}>{n.node}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Storage</Label>
+            <Select value={storage} onValueChange={setStorage} disabled={!node}>
+              <SelectTrigger><SelectValue placeholder={node ? "Select..." : "Choose a node first"} /></SelectTrigger>
+              <SelectContent>
+                {eligibleStorages.map((s) => <SelectItem key={s.storage} value={s.storage}>{s.storage}</SelectItem>)}
+                {node && eligibleStorages.length === 0 && !storagesQuery.isLoading && (
+                  <SelectItem value="__none__" disabled>No storage on this node accepts {label}s</SelectItem>
+                )}
+              </SelectContent>
+            </Select>
+          </div>
 
-        <Tabs defaultValue="upload">
-          <TabsList>
-            <TabsTrigger value="upload">Upload file</TabsTrigger>
-            <TabsTrigger value="url">Download by URL</TabsTrigger>
-          </TabsList>
-          <TabsContent value="upload" className="space-y-3">
-            <div className="space-y-1.5">
-              <Label>File</Label>
-              <Input type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-            </div>
-            <FormError message={uploadMutation.error instanceof ApiError ? uploadMutation.error.message : uploadMutation.error ? "Upload failed" : undefined} />
-            <DialogFooter>
-              <Button disabled={!node || !storage || !file} loading={uploadMutation.isPending} onClick={() => uploadMutation.mutate()}>
-                {!uploadMutation.isPending && <Upload className="h-3.5 w-3.5" />}
-                Upload
-              </Button>
-            </DialogFooter>
-          </TabsContent>
-          <TabsContent value="url" className="space-y-3">
-            <div className="space-y-1.5">
-              <Label>URL</Label>
-              <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/image.iso" />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Filename</Label>
-              <Input value={filename} onChange={(e) => setFilename(e.target.value)} placeholder="image.iso" />
-            </div>
-            <FormError message={downloadMutation.error instanceof ApiError ? downloadMutation.error.message : downloadMutation.error ? "Download failed" : undefined} />
-            <DialogFooter>
-              <Button disabled={!node || !storage || !url || !filename} loading={downloadMutation.isPending} onClick={() => downloadMutation.mutate()}>
-                {!downloadMutation.isPending && <Upload className="h-3.5 w-3.5" />}
-                Fetch
-              </Button>
-            </DialogFooter>
-          </TabsContent>
-        </Tabs>
+          <Tabs defaultValue="upload">
+            <TabsList>
+              <TabsTrigger value="upload">Upload file</TabsTrigger>
+              <TabsTrigger value="url">Download by URL</TabsTrigger>
+            </TabsList>
+            <TabsContent value="upload" className="space-y-3">
+              <div className="space-y-1.5">
+                <Label>File</Label>
+                <Input type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+              </div>
+              <FormError message={uploadMutation.error instanceof ApiError ? uploadMutation.error.message : uploadMutation.error ? "Upload failed" : undefined} />
+              <DialogFooter>
+                <Button disabled={!node || !storage || !file} loading={uploadMutation.isPending} onClick={() => uploadMutation.mutate()}>
+                  {!uploadMutation.isPending && <Upload className="h-3.5 w-3.5" />}
+                  Upload
+                </Button>
+              </DialogFooter>
+            </TabsContent>
+            <TabsContent value="url" className="space-y-3">
+              <div className="space-y-1.5">
+                <Label>URL</Label>
+                <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/image.iso" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Filename</Label>
+                <Input value={filename} onChange={(e) => setFilename(e.target.value)} placeholder="image.iso" />
+              </div>
+              <FormError message={downloadMutation.error instanceof ApiError ? downloadMutation.error.message : downloadMutation.error ? "Download failed" : undefined} />
+              <DialogFooter>
+                <Button disabled={!node || !storage || !url || !filename} loading={downloadMutation.isPending} onClick={() => downloadMutation.mutate()}>
+                  {!downloadMutation.isPending && <Upload className="h-3.5 w-3.5" />}
+                  Fetch
+                </Button>
+              </DialogFooter>
+            </TabsContent>
+          </Tabs>
+        </div>
       </DialogContent>
     </Dialog>
   )

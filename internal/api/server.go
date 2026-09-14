@@ -336,6 +336,7 @@ func (s *Server) Router() http.Handler {
 						r.Get("/tasks/{upid}/log", s.pbsTaskLog)
 					})
 					r.With(s.requireAdmin).Get("/certificates", s.connectionCertificates)
+					r.With(s.requireAdmin).Post("/ssh-session", s.openConnectionSSHShell)
 
 					r.Route("/export", func(r chi.Router) {
 						// Exporting the full live inventory as IaC is
@@ -734,6 +735,16 @@ func (s *Server) Router() http.Handler {
 			})
 			r.Get("/connection-health", s.connectionHealth)
 
+			// Direct SSH shell — not scoped to any /connections/{id}, since
+			// the target host/credentials are supplied by the caller, not
+			// looked up from a stored Proxmox connection. Same admin gate as
+			// the Proxmox console/shell routes above (arbitrary shell access
+			// either way).
+			r.Route("/ssh", func(r chi.Router) {
+				r.Use(s.requireAdmin)
+				r.Post("/sessions", s.openSSHShell)
+			})
+
 			// Server-Sent Events stream of bus activity (alert
 			// triggers/resolutions, connection health, ...) — see
 			// internal/api/events.go. The handler blocks on r.Context().Done()
@@ -770,6 +781,7 @@ func (s *Server) Router() http.Handler {
 
 	// WebSocket console proxy — auth is validated via the console session ticket, not the cookie.
 	r.Get("/ws/console/{sessionId}", s.consoleWebSocket)
+	r.Get("/ws/ssh/{sessionId}", s.sshWebSocket)
 
 	// MCP (Model Context Protocol) endpoint for external tools like Claude —
 	// these clients carry an API key, never a browser cookie, so this route
@@ -1147,7 +1159,10 @@ func (s *Server) writeError(w http.ResponseWriter, status int, err error) {
 
 // writeUpstreamError responds for an upstream Proxmox StatusError: 4xx gets
 // the upstream status and message (except 401, which must not surface as a
-// dashboard-session 401 — see writeError), everything else stays sanitized.
+// dashboard-session 401 — see writeError), everything else stays sanitized —
+// a 5xx body can be a proxy error page or a raw backend stack trace/panic,
+// not necessarily the clean "guest is locked" kind of message a 4xx carries,
+// so it's logged server-side instead of shown to the user.
 func (s *Server) writeUpstreamError(w http.ResponseWriter, status, upstreamStatus int, upstreamMsg string, err error) {
 	if upstreamStatus < 400 || upstreamStatus >= 500 {
 		slog.Error("request failed", "status", status, "error", err)

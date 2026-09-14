@@ -42,6 +42,7 @@ import {
   type Storage,
 } from "@/lib/api"
 import { buildShellUrl, openConsolePopup } from "@/lib/console"
+import { SSHShellDialog } from "@/components/inventory/SSHShellDialog"
 import { FORMATTERS, NODE_SERIES, buildRRDRows, hasAnySeries, rowNum, type ChartRow, type SeriesSpec } from "@/lib/metrics"
 import { cn, formatBytes, formatPercentFine, formatRate, formatUptime } from "@/lib/utils"
 
@@ -149,11 +150,16 @@ export function NodeDetailPage() {
     onSuccess: () => toast.success("Stopping all guests on this node"),
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Bulk stop failed"),
   })
+  // Ticket minting happens inside openConsolePopup, after the popup signals
+  // ready — not here in onSuccess — so PVE's tight termproxy ticket timeout
+  // isn't spent on the popup's own boot time. See openConsolePopup.
   const openShellMutation = useMutation({
     mutationFn: () => api.post<{ wsPath: string }>(`${base}/shell`),
-    onSuccess: ({ wsPath }) => openConsolePopup(buildShellUrl(connId, node, node), "width=900,height=600", { wsPath }),
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to open shell"),
   })
+  function handleOpenShell() {
+    openConsolePopup(buildShellUrl(connId, node, node), "width=900,height=600", () => openShellMutation.mutateAsync())
+  }
 
   const powerPending =
     wakeOnLanMutation.isPending || startAllMutation.isPending || stopAllMutation.isPending || rebootMutation.isPending || shutdownMutation.isPending
@@ -266,9 +272,10 @@ export function NodeDetailPage() {
         refreshing={isRefetching}
         actions={
           <>
-            <Button variant="secondary" size="sm" onClick={() => openShellMutation.mutate()} loading={openShellMutation.isPending}>
+            <Button variant="secondary" size="sm" onClick={handleOpenShell} loading={openShellMutation.isPending}>
               {!openShellMutation.isPending && <SquareTerminal className="h-3.5 w-3.5" />} Shell
             </Button>
+            <SSHShellDialog defaultHost={node} connId={connId} />
             {/* Guest and host power actions live behind one menu: six
                 side-by-side buttons made a solid-red Shutdown the loudest
                 thing on the page. Reboot/Shutdown still confirm before
