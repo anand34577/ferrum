@@ -22,6 +22,14 @@ export type WidgetType =
   | "uptime-leaderboard"
   | "capacity-forecast"
   | "health-score"
+  | "ha-status"
+  | "tag-breakdown"
+  | "cluster-activity"
+  | "node-versions"
+  | "server-roster"
+  | "pool-usage"
+  | "pbs-datastores"
+  | "replication-status"
 
 /** A widget's own configuration — e.g. which metric a bar chart ranks by,
  * or how many rows a list shows. Lives inside the same WidgetSpec that's
@@ -319,6 +327,14 @@ export const WIDGET_CATALOG: {
     ],
   },
   { type: "health-score", label: "Fleet Health Score", defaultSize: { w: 4, h: 8 }, settingsFields: [CONNECTION_FIELD] },
+  { type: "ha-status", label: "HA & Cluster Quorum", defaultSize: { w: 6, h: 8 } },
+  { type: "tag-breakdown", label: "Guest Tags Breakdown", defaultSize: { w: 6, h: 8 }, settingsFields: [CONNECTION_FIELD] },
+  { type: "cluster-activity", label: "Cluster Activity Log", defaultSize: { w: 6, h: 8 }, settingsFields: [CONNECTION_FIELD] },
+  { type: "node-versions", label: "Node Versions & Drift", defaultSize: { w: 6, h: 8 }, settingsFields: [CONNECTION_FIELD] },
+  { type: "server-roster", label: "Server Roster", defaultSize: { w: 6, h: 10 } },
+  { type: "pool-usage", label: "Resource Pools", defaultSize: { w: 6, h: 8 }, settingsFields: [CONNECTION_FIELD] },
+  { type: "pbs-datastores", label: "PBS Datastores", defaultSize: { w: 6, h: 8 }, settingsFields: [CONNECTION_FIELD] },
+  { type: "replication-status", label: "Replication Health", defaultSize: { w: 6, h: 8 }, settingsFields: [CONNECTION_FIELD] },
 ]
 
 export function widgetLabel(type: WidgetType): string {
