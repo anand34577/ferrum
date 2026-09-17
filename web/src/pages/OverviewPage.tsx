@@ -319,7 +319,61 @@ export function OverviewPage() {
                 }
               />
             ) : (
-            <div className="overflow-x-auto">
+            <>
+            {/* Below sm, a 9-column table only scrolls sideways with no way
+                to see a row's numbers without dragging it into view — a
+                stacked card per connection instead, matching the same
+                data the table shows. */}
+            <div className="space-y-2 p-3 sm:hidden">
+              {sorted.map((c) => (
+                <div key={c.connectionId} className="rounded-lg border border-[var(--border)] p-3 text-sm">
+                  <div className="flex items-center gap-2">
+                    <StatusDot status={c.online ? "ok" : "error"} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-medium">{c.name}</p>
+                      <p className="truncate font-mono text-[10px] text-[var(--text-muted)]">
+                        {c.online
+                          ? c.cluster
+                            ? `${c.cluster.name}${c.cluster.quorate ? " · quorate" : " · NO QUORUM"}`
+                            : "standalone"
+                          : c.error ?? "offline"}
+                      </p>
+                    </div>
+                    {c.online && (
+                      <Link to={`/inventory?conn=${encodeURIComponent(c.connectionId)}`} aria-label={`Inventory for ${c.name}`} className="shrink-0 text-[var(--text-muted)] hover:text-[var(--text)]">
+                        <ChevronRight className="h-4 w-4" />
+                      </Link>
+                    )}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--text-muted)]">
+                    <span>
+                      <span className={c.nodes.online < c.nodes.total ? "text-[var(--status-warn)]" : undefined}>{c.nodes.online}</span>
+                      /{c.nodes.total} nodes
+                    </span>
+                    <span>{c.vms.total} VMs</span>
+                    <span>{c.lxcs.total} CTs</span>
+                    <span>
+                      {c.alerts.critical > 0 ? (
+                        <span className="font-medium text-[var(--status-error)]">{c.alerts.critical} critical</span>
+                      ) : c.alerts.warning > 0 ? (
+                        <span className="text-[var(--status-warn)]">{c.alerts.warning} warning</span>
+                      ) : (
+                        "0 alerts"
+                      )}
+                    </span>
+                    {c.online && c.latencyMs !== undefined && <span className={toneClass[latencyTone(c.latencyMs)]}>{c.latencyMs} ms</span>}
+                  </div>
+                  {c.online && (
+                    <div className="mt-2 space-y-1.5">
+                      <Meter value={c.cpu.pct} size="md" showLabel label="CPU" />
+                      <Meter value={c.memory.pct} size="md" showLabel label="Memory" />
+                      <Meter value={c.storage.pct} size="md" showLabel label="Storage" />
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="hidden overflow-x-auto sm:block">
               {/* min-w keeps the nine columns readable — below it the table
                   would crush its bar cells instead of scrolling. */}
               <table className="w-full min-w-[880px] text-sm">
@@ -393,6 +447,7 @@ export function OverviewPage() {
                 </tbody>
               </table>
             </div>
+            </>
             )}
           </div>
 

@@ -1,3 +1,4 @@
+import { toast } from "sonner"
 import type { ClusterResource } from "@/lib/api"
 
 // Builds the URL for the fullscreen console viewer. Deliberately carries only
@@ -101,7 +102,10 @@ export function isConsoleReadyMessage(data: unknown): boolean {
  */
 export function openConsolePopup(url: string, features: string, mintTicket: () => Promise<ConsoleHandoff>): void {
   const popup = window.open(url, "_blank", features)
-  if (!popup) return // popup blocked — there is nothing to hand a ticket to
+  if (!popup) {
+    toast.error("Popup blocked — allow popups for this site to open the console/shell.")
+    return
+  }
   const onMessage = (evt: MessageEvent) => {
     if (evt.source !== popup || evt.origin !== window.location.origin) return
     if (!isConsoleReadyMessage(evt.data)) return

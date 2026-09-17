@@ -141,7 +141,7 @@ func (d *WebhookDispatcher) Run(ctx context.Context, bus *events.Bus) {
 			// off the receive loop so one slow/unreachable webhook can't
 			// delay delivery to the rest, or cause this subscriber's bus
 			// buffer to fill and start dropping events.
-			go d.deliverToAll(context.Background(), evt)
+			go d.deliverToAll(ctx, evt)
 		}
 	}
 }

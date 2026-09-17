@@ -594,6 +594,11 @@ func (s *Server) Router() http.Handler {
 					})
 
 					r.Route("/access", func(r chi.Router) {
+						// Proxmox's own user/role/ACL data — not gated by
+						// requireAdminForMutations (GET) like the rest of
+						// this group, since it's read visibility into the
+						// upstream cluster's identity system, not app data.
+						r.Use(s.requireAdmin)
 						r.Get("/users", s.pveAccessUsers)
 						r.Get("/roles", s.pveAccessRoles)
 						r.Get("/acl", s.pveAccessACL)

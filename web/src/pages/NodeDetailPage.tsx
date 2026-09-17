@@ -43,6 +43,7 @@ import {
 } from "@/lib/api"
 import { buildShellUrl, openConsolePopup } from "@/lib/console"
 import { SSHShellDialog } from "@/components/inventory/SSHShellDialog"
+import { useConnections } from "@/lib/fleet"
 import { FORMATTERS, NODE_SERIES, buildRRDRows, hasAnySeries, rowNum, type ChartRow, type SeriesSpec } from "@/lib/metrics"
 import { cn, formatBytes, formatPercentFine, formatRate, formatUptime } from "@/lib/utils"
 
@@ -68,6 +69,12 @@ export function NodeDetailPage() {
   const base = `/connections/${connId}/nodes/${node}`
   const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>("hour")
   const [peaks, setPeaks] = useState(true)
+
+  // Reuses the Connections page's own cached list — just for the connection
+  // name in the breadcrumb, so someone who deep-linked here (Overview,
+  // alerts, command palette) can see which cluster they landed in.
+  const { data: connections } = useConnections()
+  const connName = connections?.find((c) => c.id === connId)?.name
 
   const statusQuery = useQuery({ queryKey: ["node-status", connId, node], queryFn: () => api.get<NodeStatus>(`${base}/status`), refetchInterval: 15_000 })
   const isRefetching = statusQuery.isRefetching
@@ -267,7 +274,7 @@ export function NodeDetailPage() {
         title={node}
         description={status ? `${status.pveversion ?? "Proxmox VE"} · up ${formatUptime(status.uptime)}` : undefined}
         icon={Server}
-        back={{ to: "/inventory", label: "Inventory" }}
+        back={{ to: "/inventory", label: connName ? `Inventory · ${connName}` : "Inventory" }}
         onRefresh={() => void queryClient.invalidateQueries()}
         refreshing={isRefetching}
         actions={

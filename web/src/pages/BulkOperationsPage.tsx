@@ -91,12 +91,14 @@ export function BulkOperationsPage() {
 
   const runMutation = useMutation({
     mutationFn: async () => {
-      const targets: BulkTarget[] = selectedRows.map((r) => ({
-        connId: r.connId,
-        type: r.guest.type as "qemu" | "lxc",
-        node: r.guest.node,
-        vmid: r.guest.vmid!,
-      }))
+      const targets: BulkTarget[] = selectedRows
+        .filter((r) => r.guest.vmid !== undefined)
+        .map((r) => ({
+          connId: r.connId,
+          type: r.guest.type as "qemu" | "lxc",
+          node: r.guest.node,
+          vmid: r.guest.vmid!,
+        }))
       return api.post<BulkActionResult[]>("/bulk/guests/action", {
         targets,
         action,

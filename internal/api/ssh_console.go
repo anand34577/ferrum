@@ -1,7 +1,10 @@
 package api
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -58,6 +61,31 @@ var (
 // SSH server just waits for a TCP connection and an auth attempt.
 const sshSessionTTL = 60 * time.Second
 
+// verifySSHHostKey implements trust-on-first-use host-key pinning against
+// the ssh_known_hosts table: the first key seen for a host:port is stored
+// and accepted, and every later connection must present that exact key.
+func (s *Server) verifySSHHostKey(ctx context.Context, host string, port int) ssh.HostKeyCallback {
+	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
+		got := ssh.FingerprintSHA256(key)
+		var pinned string
+		err := s.db.QueryRowContext(ctx, `SELECT fingerprint FROM ssh_known_hosts WHERE host = ? AND port = ?`, host, port).Scan(&pinned)
+		if errors.Is(err, sql.ErrNoRows) {
+			if _, insErr := s.db.ExecContext(ctx, `INSERT INTO ssh_known_hosts (host, port, fingerprint, created_at) VALUES (?, ?, ?, ?)`,
+				host, port, got, time.Now().UTC().Format(time.RFC3339)); insErr != nil {
+				slog.Warn("ssh host key pin failed", "host", host, "port", port, "error", insErr)
+			}
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("checking pinned host key: %w", err)
+		}
+		if pinned != got {
+			return fmt.Errorf("host key for %s:%d changed (expected %s, got %s) — possible MITM, or the host was reinstalled/rekeyed", host, port, pinned, got)
+		}
+		return nil
+	}
+}
+
 func sweepSSHSessionsLocked(now time.Time) {
 	for id, sess := range sshSessions {
 		if now.After(sess.expires.Add(consoleSessionSweepAfter)) {
@@ -71,6 +99,10 @@ type openSSHShellRequest struct {
 	Port     int    `json:"port"`
 	Username string `json:"username"`
 	Password string `json:"password"`
+	// AuthType is "password" (default, when Password is set) or "key"; Key
+	// holds the unencrypted PEM private key when AuthType is "key".
+	AuthType string `json:"authType"`
+	Key      string `json:"key"`
 	Cols     int    `json:"cols"`
 	Rows     int    `json:"rows"`
 }
@@ -89,12 +121,18 @@ func (s *Server) openSSHShell(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Host = strings.TrimSpace(req.Host)
 	req.Username = strings.TrimSpace(req.Username)
-	if req.Host == "" || req.Username == "" || req.Password == "" {
-		writeErrorMsg(w, http.StatusBadRequest, "host, username, and password are required")
+	authType := "password"
+	secret := req.Password
+	if req.AuthType == "key" {
+		authType = "key"
+		secret = req.Key
+	}
+	if req.Host == "" || req.Username == "" || secret == "" {
+		writeErrorMsg(w, http.StatusBadRequest, "host, username, and password or key are required")
 		return
 	}
 
-	sessionID := newSSHSession(req.Host, req.Port, req.Username, "password", req.Password, req.Cols, req.Rows)
+	sessionID := newSSHSession(req.Host, req.Port, req.Username, authType, secret, req.Cols, req.Rows)
 	s.audit(r, "ssh.shell", "ssh", fmt.Sprintf("%s@%s:%d", req.Username, req.Host, req.Port))
 	writeJSON(w, http.StatusOK, map[string]string{"sessionId": sessionID, "wsPath": "/ws/ssh/" + sessionID})
 }
@@ -189,12 +227,13 @@ func (s *Server) sshWebSocket(w http.ResponseWriter, r *http.Request) {
 		User:    sess.username,
 		Auth:    []ssh.AuthMethod{auth},
 		Timeout: 10 * time.Second,
-		// ponytail: no host-key pinning UI yet, so the first connection to a
-		// host can't be verified — same trust model as the password itself
-		// travelling over this app's own TLS instead of end-to-end verified.
-		// Upgrade path: store/prompt on host-key change (classic known_hosts
-		// TOFU) once this sees real use beyond trusted internal networks.
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // see comment above
+		// Trust-on-first-use: the first connection to a host:port pins its
+		// key fingerprint (ssh_known_hosts table); every later connection is
+		// checked against that pin, so a MITM after the first connection is
+		// rejected instead of silently trusted. The first connection itself
+		// is unverifiable without an out-of-band fingerprint — same as any
+		// classic known_hosts flow the first time you connect to a host.
+		HostKeyCallback: s.verifySSHHostKey(r.Context(), sess.host, sess.port),
 	}
 	sshConn, err := ssh.Dial("tcp", addr, config)
 	if err != nil {

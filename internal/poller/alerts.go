@@ -46,10 +46,16 @@ type AlertEvaluator struct {
 	// checkCertificateExpiry in certificates.go.
 	certCheckMu   sync.Mutex
 	lastCertCheck time.Time
+
+	// notifySem bounds concurrent notification deliveries (SMTP/Gotify)
+	// spawned from alert/connection-health events — without it, a large
+	// fleet outage tripping many rules in the same tick fires unbounded
+	// goroutines, unlike the capped fetch semaphore in Run below.
+	notifySem chan struct{}
 }
 
 func NewAlertEvaluator(db *store.DB, conns *connections.Resolver) *AlertEvaluator {
-	return &AlertEvaluator{db: db, conns: conns}
+	return &AlertEvaluator{db: db, conns: conns, notifySem: make(chan struct{}, 8)}
 }
 
 // SetNotifier attaches the Gotify/SMTP dispatcher — mirrors Server.SetOIDC:
@@ -450,6 +456,8 @@ func (e *AlertEvaluator) upsertActive(ctx context.Context, ru rule, conn connect
 			// to this poll tick and may already be near its deadline by the
 			// time an SMTP round trip would need it.
 			go func() {
+				e.notifySem <- struct{}{}
+				defer func() { <-e.notifySem }()
 				for _, err := range e.notifier.Notify(context.Background(), title, message, emails...) {
 					slog.Error("alert notification failed", "error", err)
 				}
@@ -570,6 +578,8 @@ func (e *AlertEvaluator) recordConnectionHealth(ctx context.Context, conn connec
 	}
 	emails := e.optedInEmails(context.Background())
 	go func() {
+		e.notifySem <- struct{}{}
+		defer func() { <-e.notifySem }()
 		for _, err := range e.notifier.Notify(context.Background(), title, message, emails...) {
 			slog.Error("connection health notification failed", "error", err)
 		}
