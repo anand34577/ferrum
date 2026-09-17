@@ -235,6 +235,10 @@ export function ProfilePage() {
           ) : enrollment ? (
             <div className="space-y-3">
               <p className="text-sm text-[var(--text-muted)]">Scan this QR code with your authenticator app, then enter the 6-digit code it generates.</p>
+              {/* bg-white is deliberate, not a missed theme token: the PNG
+                  has no transparency, and a QR scanner needs real light
+                  quiet-zone contrast — var(--bg-surface) would break
+                  scannability in dark mode. */}
               <img
                 src={`data:image/png;base64,${enrollment.qrCodePng}`}
                 alt="TOTP QR code"

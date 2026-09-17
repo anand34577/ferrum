@@ -498,6 +498,24 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
     onOpenChange(next)
   }
 
+  // The parent can swap `guest` while the dialog stays mounted (clicking a
+  // different row without closing this one first) — every per-guest form
+  // field and the exec-status poll target must reset then too, not just on
+  // close, or a value/pid typed for the previous guest gets submitted or
+  // polled against this one.
+  useEffect(() => {
+    setExecPid(null)
+    setResizeDisk("")
+    setResizeAmount("")
+    setMoveDisk("")
+    setMoveTargetStorage("")
+    setMoveDeleteSource(false)
+    setSnapName("")
+    setCloneNewId("")
+    setMigrateTarget("")
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [guest?.id])
+
   if (!guest) return null
 
   return (

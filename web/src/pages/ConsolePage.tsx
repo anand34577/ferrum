@@ -230,8 +230,8 @@ export function ConsolePage() {
     <div className="flex h-screen w-screen flex-col bg-black">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-white/10 bg-[#111] px-3 text-sm text-white/80">
         {state === "connecting" && <Loader2 className="h-3.5 w-3.5 animate-spin text-brand-400" />}
-        {state === "connected" && <Wifi className="h-3.5 w-3.5 text-green-500" />}
-        {(state === "disconnected" || state === "error") && <WifiOff className="h-3.5 w-3.5 text-red-500" />}
+        {state === "connected" && <Wifi className="h-3.5 w-3.5 text-[var(--status-ok)]" />}
+        {(state === "disconnected" || state === "error") && <WifiOff className="h-3.5 w-3.5 text-[var(--status-error)]" />}
         <span className="font-medium">{name}</span>
         <span className="text-xs text-white/40">
           {state === "connecting" && "Connecting..."}
@@ -270,7 +270,7 @@ export function ConsolePage() {
 
         {state === "error" && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black text-center text-white">
-            <AlertTriangle className="h-8 w-8 text-red-500" />
+            <AlertTriangle className="h-8 w-8 text-[var(--status-error)]" />
             <p className="max-w-sm text-sm text-white/70">{errorMsg}</p>
             {canReconnect && (
               <Button size="sm" variant="secondary" onClick={reconnect}>

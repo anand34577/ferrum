@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Textarea } from "@/components/ui/textarea"
 import { api, ApiError, type Connection } from "@/lib/api"
 import { buildSSHUrl, openConsolePopup } from "@/lib/console"
 
@@ -27,7 +29,9 @@ export function SSHShellDialog({ defaultHost = "", connId }: SSHShellDialogProps
   const [host, setHost] = useState(defaultHost)
   const [port, setPort] = useState("22")
   const [username, setUsername] = useState("")
+  const [authType, setAuthType] = useState<"password" | "key">("password")
   const [password, setPassword] = useState("")
+  const [privateKey, setPrivateKey] = useState("")
 
   // Reuses the Connections page's own query cache (same key) — no extra
   // request when that page has already been visited this session.
@@ -38,9 +42,18 @@ export function SSHShellDialog({ defaultHost = "", connId }: SSHShellDialogProps
   })
   const savedConn = connections?.find((c) => c.id === connId && c.sshAuthType)
 
+  const secret = authType === "key" ? privateKey : password
   const connectMutation = useMutation({
     mutationFn: () =>
-      api.post<{ wsPath: string }>("/ssh/sessions", { host, port: Number(port) || 22, username, password, cols: 80, rows: 24 }),
+      api.post<{ wsPath: string }>("/ssh/sessions", {
+        host,
+        port: Number(port) || 22,
+        username,
+        authType,
+        ...(authType === "key" ? { key: privateKey } : { password }),
+        cols: 80,
+        rows: 24,
+      }),
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "SSH connection failed"),
   })
   const connectWithSavedMutation = useMutation({
@@ -52,6 +65,7 @@ export function SSHShellDialog({ defaultHost = "", connId }: SSHShellDialogProps
     openConsolePopup(buildSSHUrl(`${username || "ssh"}@${host}`), "width=900,height=600", () => connectMutation.mutateAsync())
     setOpen(false)
     setPassword("") // never held longer than the click that sends it
+    setPrivateKey("")
   }
 
   function connectWithSaved() {
@@ -61,7 +75,7 @@ export function SSHShellDialog({ defaultHost = "", connId }: SSHShellDialogProps
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) setPassword("") }}>
+    <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setPassword(""); setPrivateKey("") } }}>
       <DialogTrigger asChild>
         <Button size="sm" variant="secondary">
           <Terminal className="h-3.5 w-3.5" /> SSH Shell
@@ -99,17 +113,43 @@ export function SSHShellDialog({ defaultHost = "", connId }: SSHShellDialogProps
             <Input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="root" />
           </div>
           <div className="space-y-1.5">
-            <Label>Password</Label>
-            <Input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && host && username && password) connect() }}
-            />
+            <Label>Authenticate with</Label>
+            <Select value={authType} onValueChange={(v) => setAuthType(v as "password" | "key")}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="password">Password</SelectItem>
+                <SelectItem value="key">Private key</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
+          {authType === "password" ? (
+            <div className="space-y-1.5">
+              <Label>Password</Label>
+              <Input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && host && username && secret) connect() }}
+              />
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              <Label>Private key</Label>
+              <Textarea
+                rows={4}
+                placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                className="font-mono text-xs"
+                value={privateKey}
+                onChange={(e) => setPrivateKey(e.target.value)}
+              />
+              <p className="text-xs text-[var(--text-muted)]">Unencrypted (no passphrase) keys only, for now.</p>
+            </div>
+          )}
         </div>
         <DialogFooter>
-          <Button size="sm" variant="secondary" disabled={!host || !username || !password} onClick={connect}>
+          <Button size="sm" variant="secondary" disabled={!host || !username || !secret} onClick={connect}>
             <Terminal className="h-3.5 w-3.5" /> Connect
           </Button>
         </DialogFooter>

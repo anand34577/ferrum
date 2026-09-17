@@ -136,8 +136,15 @@ export function useAIConversations(defaultModelId: string) {
 
   const deleteConversation = useCallback(
     (id: string) => {
-      setConversations((prev) => prev.filter((c) => c.id !== id))
-      setActiveId((cur) => (cur === id ? null : cur))
+      setConversations((prev) => {
+        const remaining = prev.filter((c) => c.id !== id)
+        // Falling back to the next most-recent chat (list is sorted that
+        // way) matches every mainstream chat UI — dropping to a blank
+        // "no conversation selected" screen when others still exist is
+        // just extra clicks for no reason.
+        setActiveId((cur) => (cur === id ? (remaining[0]?.id ?? null) : cur))
+        return remaining
+      })
     },
     [],
   )
@@ -147,8 +154,11 @@ export function useAIConversations(defaultModelId: string) {
    * clicking the trash icon once per conversation. */
   const deleteConversations = useCallback((ids: string[]) => {
     const doomed = new Set(ids)
-    setConversations((prev) => prev.filter((c) => !doomed.has(c.id)))
-    setActiveId((cur) => (cur && doomed.has(cur) ? null : cur))
+    setConversations((prev) => {
+      const remaining = prev.filter((c) => !doomed.has(c.id))
+      setActiveId((cur) => (cur && doomed.has(cur) ? (remaining[0]?.id ?? null) : cur))
+      return remaining
+    })
   }, [])
 
   const updateConversation = useCallback((id: string, patch: Partial<Pick<Conversation, "title" | "modelId" | "reasoningEffort" | "messages">>) => {

@@ -188,7 +188,10 @@ export function DashboardPage() {
     if (!targetId) return
     dirty.current = false
     api.put(`/dashboards/${targetId}`, { version: LAYOUT_VERSION, widgets: next }).catch((err: unknown) => {
-      toast.error(err instanceof ApiError ? err.message : "Failed to save dashboard layout")
+      // Save failed — the edit is still only local, so put the dirty flag
+      // back or it's lost for good on next unload/switch with no retry.
+      dirty.current = true
+      toast.error(err instanceof ApiError ? err.message : "Failed to save dashboard layout — your changes are not saved yet.")
     })
   }
 
@@ -267,7 +270,8 @@ export function DashboardPage() {
 
   function addWidget(type: WidgetType, connection?: string) {
     if (!widgets) return
-    const spec = WIDGET_CATALOG.find((w) => w.type === type)!
+    const spec = WIDGET_CATALOG.find((w) => w.type === type)
+    if (!spec) return
     const maxY = widgets.reduce((m, w) => Math.max(m, w.y + w.h), 0)
     const settings = { ...widgetDefaultSettings(type) }
     if (connection) settings.connection = connection

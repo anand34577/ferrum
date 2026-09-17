@@ -78,6 +78,10 @@ function AliasesAndIPSets({ connId }: { connId: string }) {
 
   const [aliasForm, setAliasForm] = useState({ name: "", cidr: "", comment: "" })
   const [showAliasForm, setShowAliasForm] = useState(false)
+  // A malformed CIDR (bad prefix length, non-numeric octet, etc.) otherwise
+  // only surfaces after the API round-trip rejects it — this catches the
+  // common typo cases locally so the field shows why, not just a toast.
+  const cidrInvalid = aliasForm.cidr.trim() !== "" && !/^(\d{1,3}\.){3}\d{1,3}(\/(\d|[12]\d|3[0-2]))?$/.test(aliasForm.cidr.trim())
   const addAlias = useMutation({
     mutationFn: () => api.post(`${base}/aliases`, aliasForm),
     onSuccess: () => {
@@ -156,9 +160,10 @@ function AliasesAndIPSets({ connId }: { connId: string }) {
             <div className="space-y-1.5">
               <Label htmlFor="alias-cidr">CIDR or IP</Label>
               <Input id="alias-cidr" placeholder="10.0.0.0/24" value={aliasForm.cidr} onChange={(e) => setAliasForm({ ...aliasForm, cidr: e.target.value })} />
+              {cidrInvalid && <p className="text-xs text-[var(--status-error)]">Enter an IPv4 address, optionally with a /0–/32 prefix.</p>}
             </div>
             <div className="flex items-end">
-              <Button size="sm" disabled={!aliasForm.name || !aliasForm.cidr || addAlias.isPending} loading={addAlias.isPending} onClick={() => addAlias.mutate()}>
+              <Button size="sm" disabled={!aliasForm.name || !aliasForm.cidr || cidrInvalid || addAlias.isPending} loading={addAlias.isPending} onClick={() => addAlias.mutate()}>
                 Add alias
               </Button>
             </div>

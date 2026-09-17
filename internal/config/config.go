@@ -118,6 +118,14 @@ func Load(path string) (Config, error) {
 	if (cfg.Server.TLSCertFile == "") != (cfg.Server.TLSKeyFile == "") {
 		return cfg, fmt.Errorf("server.tlsCertFile and server.tlsKeyFile must both be set, or both left empty")
 	}
+	// Serving TLS directly with the session cookie missing Secure would let
+	// it also ride along any accidental plaintext listener/redirect — force
+	// it on rather than silently leaving a self-terminated HTTPS deployment
+	// less protected than the BehindProxy path, which sets this per-request.
+	if cfg.Server.TLSCertFile != "" && !cfg.Server.SecureCookies {
+		slog.Warn("server.tlsCertFile is set without server.secureCookies — enabling secureCookies automatically")
+		cfg.Server.SecureCookies = true
+	}
 
 	return cfg, nil
 }

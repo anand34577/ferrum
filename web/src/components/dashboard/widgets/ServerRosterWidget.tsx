@@ -30,6 +30,7 @@ export function ServerRosterWidget({ settings: _settings }: { settings: WidgetSe
           <div key={c.id} className="flex items-center justify-between gap-2 rounded-sm px-1.5 py-1.5 text-xs hover:bg-[var(--bg-muted)]">
             <span className="flex min-w-0 items-center gap-2">
               <StatusDot status={online ? "ok" : "error"} />
+              <span className="sr-only">{online ? "Online" : "Offline"}</span>
               <span className="truncate font-medium text-[var(--text)]">{c.name}</span>
               <Badge variant="outline" className="shrink-0 text-[10px]">{c.type === "pbs" ? "PBS" : "PVE"}</Badge>
             </span>
