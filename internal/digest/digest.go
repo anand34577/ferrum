@@ -128,7 +128,7 @@ func Build(ctx context.Context, db *store.DB, conns *connections.Resolver) (Flee
 		summary.RunningGuests += cs.RunningGuests
 		summary.BackupTotal += cs.BackupTotal
 		summary.BackupOK += cs.BackupOK
-		if cs.Nodes > 0 {
+		if cs.OnlineNodes > 0 {
 			cpuSum += cs.CPUPct
 			memSum += cs.MemPct
 			cpuN++

@@ -146,8 +146,16 @@ func (d *WebhookDispatcher) Run(ctx context.Context, bus *events.Bus) {
 	}
 }
 
+// deliverToAll is called from Run's receive loop with that loop's own
+// (cancellable-on-shutdown) ctx, but only passes it to dispatchOutboxRow's
+// actual network delivery — a shutdown racing an incoming event must still
+// be able to cut short a slow/retrying HTTP call. Loading subscriptions and
+// enqueueing the outbox row use context.Background() instead: those are the
+// durability-critical steps this dispatcher's whole design depends on (see
+// Run's doc comment) — canceling either mid-shutdown would drop the event
+// before the sweep ever gets a chance to pick it back up on restart.
 func (d *WebhookDispatcher) deliverToAll(ctx context.Context, evt events.Event) {
-	subs, err := d.matchingSubscriptions(ctx, evt.Type)
+	subs, err := d.matchingSubscriptions(context.Background(), evt.Type)
 	if err != nil {
 		slog.Error("webhook dispatcher: loading subscriptions failed", "error", err)
 		return
@@ -161,7 +169,7 @@ func (d *WebhookDispatcher) deliverToAll(ctx context.Context, evt events.Event) 
 		// Durable queue first: until this row exists the event isn't
 		// promised to the subscription, and once it does a crash (or an
 		// exhausted receiver) can't lose it — the sweep keeps trying.
-		if err := d.enqueueOutbox(ctx, sub.ID, evt, body); err != nil {
+		if err := d.enqueueOutbox(context.Background(), sub.ID, evt, body); err != nil {
 			slog.Error("webhook dispatcher: queueing event failed", "subscriptionId", sub.ID, "eventId", evt.ID, "error", err)
 			continue
 		}

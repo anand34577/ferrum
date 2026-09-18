@@ -1,7 +1,7 @@
 import { useQueries } from "@tanstack/react-query"
 import { StatusDot } from "@/components/ui/status-dot"
 import { Timestamp } from "@/components/ui/timestamp"
-import { api, type ClusterLogEntry } from "@/lib/api"
+import { api, ApiError, type ClusterLogEntry } from "@/lib/api"
 import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { scopedConnection, useConnections } from "@/lib/fleet"
 import { WidgetError } from "@/components/dashboard/WidgetChrome"
@@ -30,7 +30,15 @@ export function ClusterActivityWidget({ settings }: { settings: WidgetSettings }
   })
 
   if (connError) return <WidgetError />
-  if (targets.length > 0 && logQueries.every((q) => q.isError)) return <WidgetError />
+  if (targets.length > 0 && logQueries.every((q) => q.isError)) {
+    // The generic "check your connection" copy is actively misleading here:
+    // every one of these connections is reachable (Cluster Comparison shows
+    // them online) — this endpoint specifically fails when the API
+    // token/user lacks Sys.Audit on "/", a distinct, fixable cause worth
+    // surfacing instead of hiding behind a vague network-sounding message.
+    const firstErr = logQueries.map((q) => q.error).find((e) => e instanceof ApiError) as ApiError | undefined
+    return <WidgetError message={firstErr ? `Couldn't load cluster log: ${firstErr.message}` : undefined} />
+  }
 
   const entries: FleetLogEntry[] = targets
     .flatMap((c, i) => (logQueries[i].data ?? []).map((e) => ({ ...e, connName: c.name })))

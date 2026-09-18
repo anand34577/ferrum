@@ -80,6 +80,9 @@ export function BackupsPage() {
   }
   const [scheduleForm, setScheduleForm] = useState(emptyScheduleForm)
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const pruneInvalid = scheduleForm.prune !== "" && !Number.isFinite(Number(scheduleForm.prune))
+  const bwlimitInvalid = scheduleForm.bwlimit !== "" && !Number.isFinite(Number(scheduleForm.bwlimit))
+  const pigzInvalid = scheduleForm.pigz !== "" && !Number.isFinite(Number(scheduleForm.pigz))
   const createJob = useMutation({
     mutationFn: () =>
       api.post(`/connections/${scheduleConnId}/cluster/backup-jobs`, {
@@ -274,7 +277,9 @@ export function BackupsPage() {
                     value={scheduleForm.prune}
                     onChange={(e) => setScheduleForm({ ...scheduleForm, prune: e.target.value })}
                     placeholder="7"
+                    aria-invalid={pruneInvalid}
                   />
+                  {pruneInvalid && <p className="text-xs text-[var(--status-error)]">Must be a number</p>}
                 </div>
               </div>
 
@@ -334,7 +339,9 @@ export function BackupsPage() {
                       value={scheduleForm.bwlimit}
                       onChange={(e) => setScheduleForm({ ...scheduleForm, bwlimit: e.target.value })}
                       placeholder="unlimited"
+                      aria-invalid={bwlimitInvalid}
                     />
+                    {bwlimitInvalid && <p className="text-xs text-[var(--status-error)]">Must be a number</p>}
                   </div>
                   <div className="space-y-1.5">
                     <Label>Pigz threads (optional)</Label>
@@ -344,7 +351,9 @@ export function BackupsPage() {
                       value={scheduleForm.pigz}
                       onChange={(e) => setScheduleForm({ ...scheduleForm, pigz: e.target.value })}
                       placeholder="off"
+                      aria-invalid={pigzInvalid}
                     />
+                    {pigzInvalid && <p className="text-xs text-[var(--status-error)]">Must be a number</p>}
                   </div>
                 </div>
               )}
@@ -353,7 +362,7 @@ export function BackupsPage() {
                 className="mt-3"
                 size="sm"
                 loading={createJob.isPending}
-                disabled={!scheduleConnId || !scheduleForm.storage || scheduleLooksInvalid(scheduleForm.schedule)}
+                disabled={!scheduleConnId || !scheduleForm.storage || scheduleLooksInvalid(scheduleForm.schedule) || pruneInvalid || bwlimitInvalid || pigzInvalid}
                 onClick={() => createJob.mutate()}
               >
                 {!createJob.isPending && <Plus className="h-3.5 w-3.5" />} Schedule job

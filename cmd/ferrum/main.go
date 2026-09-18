@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -187,16 +188,29 @@ func runServer(ctx context.Context, cfg config.Config) {
 	// stops — rather than polling through — the graceful-shutdown window.
 	pollerCtx, stopPoller := context.WithCancel(ctx)
 	defer stopPoller()
-	go evaluator.Run(pollerCtx, srv.AlertPollInterval(ctx))
-	go webhookDispatcher.Run(pollerCtx, eventBus)
+	// wg tracks these four background loops so shutdown can wait for them to
+	// actually return before the deferred db.Close()/srv.Close() run —
+	// canceling pollerCtx only asks them to stop; without this wait, a poll
+	// tick still in flight when shutdown proceeds keeps issuing queries
+	// against a database (and server resources) that are already closing.
+	var wg sync.WaitGroup
+	runLoop := func(fn func(context.Context)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			fn(pollerCtx)
+		}()
+	}
+	runLoop(func(ctx context.Context) { evaluator.Run(ctx, srv.AlertPollInterval(ctx)) })
+	runLoop(func(ctx context.Context) { webhookDispatcher.Run(ctx, eventBus) })
 
 	// Snapshot retention sweep + orphaned-disk check — read-heavy and slower
 	// moving than the metric alert evaluator, so it runs on its own longer
 	// interval rather than sharing AlertPollInterval.
 	lifecycleEvaluator := poller.NewLifecycleEvaluator(db, connections.New(db, secretBox))
-	go lifecycleEvaluator.Run(pollerCtx, lifecycleSweepInterval)
+	runLoop(func(ctx context.Context) { lifecycleEvaluator.Run(ctx, lifecycleSweepInterval) })
 
-	go digestScheduler.Run(pollerCtx)
+	runLoop(digestScheduler.Run)
 
 	distFS, err := web.DistFS()
 	if err != nil {
@@ -236,6 +250,26 @@ func runServer(ctx context.Context, cfg config.Config) {
 	defer cancel()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		slog.Error("graceful shutdown failed", "error", err)
+	}
+
+	// Stop the background loops and wait for their current iteration to
+	// actually return before this function's own defers (db.Close,
+	// srv.Close) run — see the wg comment above for why.
+	stopPoller()
+	// 5s on top of httpServer.Shutdown's own 10s budget above — kept under
+	// 15s total so this always finishes within the Windows service wrapper's
+	// own 15s stop deadline (service_windows.go).
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelWait()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-waitCtx.Done():
+		slog.Warn("background loops did not stop within the shutdown deadline")
 	}
 }
 

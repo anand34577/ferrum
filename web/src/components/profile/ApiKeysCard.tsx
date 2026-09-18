@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { api, ApiError, type ApiKey, type CreatedApiKey } from "@/lib/api"
+import { useCopiedFlag } from "@/lib/useCopiedFlag"
 import { formatRelativeTime } from "@/lib/utils"
 
 const EXPIRY_OPTIONS = [
@@ -39,7 +40,7 @@ export function ApiKeysCard() {
   const [scope, setScope] = useState<"api" | "mcp">("api")
   const [expiresInDays, setExpiresInDays] = useState("0")
   const [created, setCreated] = useState<CreatedApiKey | null>(null)
-  const [copied, setCopied] = useState(false)
+  const [copied, flashCopied] = useCopiedFlag(2000)
   const confirm = useConfirm()
 
   const query = useQuery({
@@ -90,9 +91,8 @@ export function ApiKeysCard() {
   function copyKey() {
     if (!created) return
     navigator.clipboard.writeText(created.key).then(() => {
-      setCopied(true)
+      flashCopied()
       toast.success("Copied to clipboard")
-      setTimeout(() => setCopied(false), 2000)
     }).catch(() => toast.error("Could not copy to clipboard"))
   }
 

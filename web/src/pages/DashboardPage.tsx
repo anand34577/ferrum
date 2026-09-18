@@ -188,10 +188,17 @@ export function DashboardPage() {
     if (!targetId) return
     dirty.current = false
     api.put(`/dashboards/${targetId}`, { version: LAYOUT_VERSION, widgets: next }).catch((err: unknown) => {
-      // Save failed — the edit is still only local, so put the dirty flag
-      // back or it's lost for good on next unload/switch with no retry.
-      dirty.current = true
-      toast.error(err instanceof ApiError ? err.message : "Failed to save dashboard layout — your changes are not saved yet.")
+      // Only re-arm the dirty flag if targetId is still the dashboard on
+      // screen — switchDashboard's flush-on-leave calls this for the
+      // dashboard being LEFT, and by the time a failure lands here
+      // activeId may already point at a freshly-loaded, genuinely-clean
+      // dashboard; marking that one dirty would trigger a false "unsaved
+      // changes" warning while doing nothing for the edit that actually
+      // failed (which has no retry path once its own widgets are gone
+      // from state — the toast is the only signal left for that case).
+      if (targetId === activeId) dirty.current = true
+      const msg = err instanceof ApiError ? err.message : "Failed to save dashboard layout"
+      toast.error(targetId === activeId ? `${msg} — your changes are not saved yet.` : `${msg} — changes to the dashboard you left were not saved.`)
     })
   }
 
@@ -406,7 +413,15 @@ export function DashboardPage() {
                 {/* Menu scrolls instead of overflowing the viewport when the
                     widget list is taller than the screen. */}
                 <DropdownMenuContent align="end" className="max-h-[var(--radix-dropdown-menu-content-available-height,18rem)] w-64 overflow-y-auto">
-                  <DropdownMenuLabel className="sticky top-0 bg-[var(--bg-elevated)]">Available widgets</DropdownMenuLabel>
+                  {/* DropdownMenuContent has its own p-1 padding, so a plain
+                      "sticky top-0" label sits inset from the real top edge —
+                      scrolled items show through that inset strip. Pull the
+                      label out to the container's true edges with negative
+                      margins and re-add the padding itself, plus a border to
+                      seal the boundary against the list scrolling under it. */}
+                  <DropdownMenuLabel className="sticky -top-1 z-10 -mx-1 -mt-1 border-b border-[var(--border)] bg-[var(--bg-elevated)] px-3.5 pt-2.5">
+                    Available widgets
+                  </DropdownMenuLabel>
                   {addableTypes.map((a) =>
                     a.fleetFree ? (
                       <DropdownMenuItem key={a.type} onSelect={() => addWidget(a.type)}>

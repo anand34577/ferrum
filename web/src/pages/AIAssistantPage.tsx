@@ -42,6 +42,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { api, notifyUnauthorized, type ToolCallRecord, type UsableAIProvider } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
 import { type Conversation, type DisplayMessage, type MessageUsage, type ReasoningEffort, type ToolCallEntry, useAIConversations } from "@/lib/useAIConversations"
+import { useCopiedFlag } from "@/lib/useCopiedFlag"
 import { cn, formatRelativeTime } from "@/lib/utils"
 
 function newId() {
@@ -49,6 +50,10 @@ function newId() {
 }
 
 interface ToolActivity {
+  // The provider's tool_call_id when the SSE envelope carried one — undefined
+  // for a provider/runtime that doesn't echo it back, in which case matching
+  // falls back to name+status the way it always has.
+  id?: string
   name: string
   status: "running" | "ok" | "error"
   args?: unknown
@@ -89,8 +94,8 @@ function formatJSON(raw: string): string {
 function parseSSELine(line: string): {
   delta?: string
   reasoning?: string
-  toolCall?: { name: string; args?: unknown }
-  toolResult?: { name: string; ok: boolean; result?: string }
+  toolCall?: { id?: string; name: string; args?: unknown }
+  toolResult?: { id?: string; name: string; ok: boolean; result?: string }
   usage?: MessageUsage
   error?: string
   done?: boolean
@@ -102,9 +107,9 @@ function parseSSELine(line: string): {
     const parsed = JSON.parse(payload)
     if (parsed.ferrum_error) return { error: parsed.ferrum_error }
     if (typeof parsed.ferrum_reasoning === "string") return { reasoning: parsed.ferrum_reasoning }
-    if (parsed.ferrum_tool_call) return { toolCall: { name: parsed.ferrum_tool_call.name, args: parsed.ferrum_tool_call.args } }
+    if (parsed.ferrum_tool_call) return { toolCall: { id: parsed.ferrum_tool_call.id, name: parsed.ferrum_tool_call.name, args: parsed.ferrum_tool_call.args } }
     if (parsed.ferrum_tool_result)
-      return { toolResult: { name: parsed.ferrum_tool_result.name, ok: !!parsed.ferrum_tool_result.ok, result: parsed.ferrum_tool_result.result } }
+      return { toolResult: { id: parsed.ferrum_tool_result.id, name: parsed.ferrum_tool_result.name, ok: !!parsed.ferrum_tool_result.ok, result: parsed.ferrum_tool_result.result } }
     if (parsed.ferrum_usage) return { usage: parsed.ferrum_usage }
     return { delta: parsed.choices?.[0]?.delta?.content ?? undefined }
   } catch {
@@ -206,6 +211,12 @@ export function AIAssistantPage() {
   const [streamingReasoning, setStreamingReasoning] = useState<string | null>(null)
   const [toolActivity, setToolActivity] = useState<ToolActivity[]>([])
   const [streaming, setStreaming] = useState(false)
+  // Which conversation the in-flight completion belongs to — only one
+  // completion can run at a time app-wide (see send/regenerate's `streaming`
+  // guard), but switching conversations mid-stream must not let the live
+  // bubble (or its tokens, once they land) render under whatever
+  // conversation happens to be active when they arrive.
+  const [streamingConvId, setStreamingConvId] = useState<string | null>(null)
   const [slashIndex, setSlashIndex] = useState(0)
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -262,7 +273,11 @@ export function AIAssistantPage() {
   const reasoningEffort: ReasoningEffort = active?.reasoningEffort ?? pendingReasoningEffort
   const selectedModel = flatModels.find((m) => m.modelRowId === modelId)
   const committedMessages = active?.messages ?? []
-  const displayMessages: (DisplayMessage & { streaming?: boolean })[] = streaming
+  // Gated on streamingConvId matching activeId, not just `streaming` — the
+  // completion itself is global (only one runs at a time), but its live
+  // bubble must only appear in the transcript it actually belongs to.
+  const isStreamingHere = streaming && streamingConvId === activeId
+  const displayMessages: (DisplayMessage & { streaming?: boolean })[] = isStreamingHere
     ? [...committedMessages, { id: "__streaming__", role: "assistant", content: streamingText ?? "", reasoning: streamingReasoning ?? undefined, streaming: true }]
     : committedMessages
 
@@ -337,6 +352,7 @@ export function AIAssistantPage() {
 
   async function runCompletion(convId: string, history: DisplayMessage[], useModelId: string, useReasoningEffort: ReasoningEffort) {
     setStreaming(true)
+    setStreamingConvId(convId)
     setStreamingText("")
     setStreamingReasoning(null)
     setToolActivity([])
@@ -402,23 +418,32 @@ export function AIAssistantPage() {
             reasoningText += evt.reasoning
             scheduleFlush()
           } else if (evt.toolCall) {
-            const { name, args } = evt.toolCall
-            setToolActivity((prev) => [...prev, { name, args, status: "running" }])
-            toolLog.push({ name, args, ok: true })
+            const { id, name, args } = evt.toolCall
+            setToolActivity((prev) => [...prev, { id, name, args, status: "running" }])
+            toolLog.push({ id, name, args, ok: true })
           } else if (evt.toolResult) {
-            const { name, ok, result } = evt.toolResult
+            const { id, name, ok, result } = evt.toolResult
+            // Prefer matching by the provider's own tool_call_id — falling
+            // back to "most recent running call with this name" only when
+            // the provider didn't echo one back. Name-only matching can
+            // attach a result to the wrong pill when the model calls the
+            // same tool twice in parallel before either result arrives.
             setToolActivity((prev) => {
-              const idx = [...prev].reverse().findIndex((t) => t.name === name && t.status === "running")
+              const idx = id
+                ? prev.findIndex((t) => t.id === id)
+                : [...prev].reverse().findIndex((t) => t.name === name && t.status === "running")
               if (idx === -1) return prev
-              const realIdx = prev.length - 1 - idx
               const next = [...prev]
-              next[realIdx] = { ...next[realIdx], status: ok ? "ok" : "error", result }
+              next[idx] = { ...next[idx], status: ok ? "ok" : "error", result }
               return next
             })
-            const logIdx = [...toolLog].reverse().findIndex((t) => t.name === name && t.result === undefined)
+            let logIdx = id ? toolLog.findIndex((t) => t.id === id) : -1
+            if (logIdx === -1 && !id) {
+              const fromEnd = [...toolLog].reverse().findIndex((t) => t.name === name && t.result === undefined)
+              logIdx = fromEnd === -1 ? -1 : toolLog.length - 1 - fromEnd
+            }
             if (logIdx !== -1) {
-              const realIdx = toolLog.length - 1 - logIdx
-              toolLog[realIdx] = { ...toolLog[realIdx], ok, result }
+              toolLog[logIdx] = { ...toolLog[logIdx], ok, result }
             }
           } else if (evt.usage) {
             usage = evt.usage
@@ -445,6 +470,7 @@ export function AIAssistantPage() {
         flushRafRef.current = null
       }
       setStreaming(false)
+      setStreamingConvId(null)
       setStreamingText(null)
       setStreamingReasoning(null)
       setToolActivity([])
@@ -1215,7 +1241,7 @@ function ThinkingDots() {
 }
 
 function CopyMessageButton({ content, onCopy }: { content: string; onCopy: (content: string) => void }) {
-  const [copied, setCopied] = useState(false)
+  const [copied, flashCopied] = useCopiedFlag()
   return (
     <Button
       size="sm"
@@ -1223,8 +1249,7 @@ function CopyMessageButton({ content, onCopy }: { content: string; onCopy: (cont
       className="h-6 px-2 text-xs"
       onClick={() => {
         onCopy(content)
-        setCopied(true)
-        setTimeout(() => setCopied(false), 1500)
+        flashCopied()
       }}
     >
       {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />} {copied ? "Copied" : "Copy"}

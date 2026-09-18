@@ -131,6 +131,11 @@ type toolResultEnvelope struct {
 	ToolResult *toolActivity `json:"ferrum_tool_result,omitempty"`
 }
 type toolActivity struct {
+	// ID is the provider's own tool_call_id — present so the client can
+	// correlate a result back to its call even when the same tool name is
+	// invoked twice in the same round (parallel tool calls), instead of
+	// guessing via "most recent call with this name still running".
+	ID     string `json:"id,omitempty"`
 	Name   string `json:"name"`
 	Args   any    `json:"args,omitempty"`
 	OK     bool   `json:"ok,omitempty"`
@@ -561,10 +566,10 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 			_ = json.Unmarshal([]byte(argsStr), &argsParsed)
 			// The live envelope gets the same redaction recordToolCall applies
 			// to the persisted copy — args often carry credentials.
-			writeSSEJSON(w, flusher, toolCallEnvelope{ToolCall: &toolActivity{Name: name, Args: redactSensitive(argsParsed)}})
+			writeSSEJSON(w, flusher, toolCallEnvelope{ToolCall: &toolActivity{ID: id, Name: name, Args: redactSensitive(argsParsed)}})
 
 			resultText, isErr := s.mcp.CallTool(ctx, user, "chat", name, json.RawMessage(argsStr))
-			writeSSEJSON(w, flusher, toolResultEnvelope{ToolResult: &toolActivity{Name: name, OK: !isErr, Result: truncateForDisplay(resultText)}})
+			writeSSEJSON(w, flusher, toolResultEnvelope{ToolResult: &toolActivity{ID: id, Name: name, OK: !isErr, Result: truncateForDisplay(resultText)}})
 			lastToolRound = append(lastToolRound, toolRoundResult{name: name, result: resultText, isErr: isErr})
 
 			messages = append(messages, map[string]any{"role": "tool", "tool_call_id": id, "content": resultText})

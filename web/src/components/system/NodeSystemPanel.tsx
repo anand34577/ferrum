@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Play, RotateCw, ShieldCheck, Square, Trash2, Upload } from "lucide-react"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -29,13 +29,25 @@ export function NodeSystemPanel({ connId, node }: NodeSystemPanelProps) {
   const base = `/connections/${connId}/nodes/${node}`
   const queryClient = useQueryClient()
   const confirm = useConfirm()
+  // Every query below polls/refetches-on-focus by default (main.tsx's
+  // global QueryClient config), and syncing form state from query data on
+  // every render of that data would silently overwrite whatever an admin is
+  // actively typing into these fields. Each form syncs from the server only
+  // once per node (tracked by this key) — an initial load, or switching to
+  // a different node — never again just because a background refetch
+  // returned a new object reference for the same node.
+  const nodeKey = `${connId}/${node}`
 
   // --- DNS ---
   const dnsQuery = useQuery({ queryKey: ["node-dns", connId, node], queryFn: () => api.get<NodeDNSConfig>(`${base}/dns`) })
   const [dnsForm, setDnsForm] = useState<NodeDNSConfig>({})
+  const dnsSyncedFor = useRef<string | null>(null)
   useEffect(() => {
-    if (dnsQuery.data) setDnsForm(dnsQuery.data)
-  }, [dnsQuery.data])
+    if (dnsQuery.data && dnsSyncedFor.current !== nodeKey) {
+      setDnsForm(dnsQuery.data)
+      dnsSyncedFor.current = nodeKey
+    }
+  }, [dnsQuery.data, nodeKey])
   const saveDns = useMutation({
     mutationFn: () => api.put(`${base}/dns`, dnsForm),
     onSuccess: () => {
@@ -48,9 +60,13 @@ export function NodeSystemPanel({ connId, node }: NodeSystemPanelProps) {
   // --- Time ---
   const timeQuery = useQuery({ queryKey: ["node-time", connId, node], queryFn: () => api.get<NodeTimeInfo>(`${base}/time`) })
   const [timezone, setTimezone] = useState("")
+  const timeSyncedFor = useRef<string | null>(null)
   useEffect(() => {
-    if (timeQuery.data) setTimezone(timeQuery.data.timezone)
-  }, [timeQuery.data])
+    if (timeQuery.data && timeSyncedFor.current !== nodeKey) {
+      setTimezone(timeQuery.data.timezone)
+      timeSyncedFor.current = nodeKey
+    }
+  }, [timeQuery.data, nodeKey])
   const saveTimezone = useMutation({
     mutationFn: () => api.put(`${base}/time`, { timezone }),
     onSuccess: () => {
@@ -63,9 +79,13 @@ export function NodeSystemPanel({ connId, node }: NodeSystemPanelProps) {
   // --- Hosts ---
   const hostsQuery = useQuery({ queryKey: ["node-hosts", connId, node], queryFn: () => api.get<NodeHosts>(`${base}/hosts`) })
   const [hostsData, setHostsData] = useState("")
+  const hostsSyncedFor = useRef<string | null>(null)
   useEffect(() => {
-    if (hostsQuery.data) setHostsData(hostsQuery.data.data)
-  }, [hostsQuery.data])
+    if (hostsQuery.data && hostsSyncedFor.current !== nodeKey) {
+      setHostsData(hostsQuery.data.data)
+      hostsSyncedFor.current = nodeKey
+    }
+  }, [hostsQuery.data, nodeKey])
   const saveHosts = useMutation({
     mutationFn: () => api.put(`${base}/hosts`, { data: hostsData, digest: hostsQuery.data?.digest }),
     onSuccess: () => {

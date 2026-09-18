@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Camera, Copy, HardDrive, Loader2, Lock, Network, Pencil, Snowflake, SquareTerminal, Sun, Terminal, Trash2, Workflow, X } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import { GaugeChart } from "@/components/charts/GaugeChart"
 import { ResourceAreaChart } from "@/components/charts/ResourceAreaChart"
@@ -186,9 +186,18 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
     enabled: open && execPid !== null,
     refetchInterval: (query) => (query.state.data?.exited ? false : 1000),
   })
+  // Always the guest currently shown, read (not closed over) inside
+  // onSuccess below — an exec started for guest A that's still in flight
+  // when the dialog switches to guest B must not let its result land in
+  // execPid after the switch, or the dialog starts polling B's agent for a
+  // pid that belongs to A's process table.
+  const currentGuestIdRef = useRef(guest?.id)
+  currentGuestIdRef.current = guest?.id
   const execMutation = useMutation({
-    mutationFn: () => api.post<GuestAgentExecResult>(`${base}/agent/exec`, { command: ["/bin/sh", "-c", execCommand] }),
-    onSuccess: (res) => setExecPid(res.pid),
+    mutationFn: (forGuestId: string | undefined) => api.post<GuestAgentExecResult>(`${base}/agent/exec`, { command: ["/bin/sh", "-c", execCommand] }).then((res) => ({ res, forGuestId })),
+    onSuccess: ({ res, forGuestId }) => {
+      if (forGuestId === currentGuestIdRef.current) setExecPid(res.pid)
+    },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Exec failed — is the guest agent running?"),
   })
 
@@ -1024,7 +1033,7 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
                         onChange={(e) => setExecCommand(e.target.value)}
                         className="font-mono text-xs"
                       />
-                      <Button size="sm" disabled={!execCommand || execMutation.isPending} onClick={() => execMutation.mutate()}>
+                      <Button size="sm" disabled={!execCommand || execMutation.isPending} onClick={() => execMutation.mutate(guest?.id)}>
                         <Terminal className="h-3.5 w-3.5" /> Run
                       </Button>
                     </div>

@@ -2,9 +2,7 @@ package api
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -64,19 +62,33 @@ const sshSessionTTL = 60 * time.Second
 // verifySSHHostKey implements trust-on-first-use host-key pinning against
 // the ssh_known_hosts table: the first key seen for a host:port is stored
 // and accepted, and every later connection must present that exact key.
-func (s *Server) verifySSHHostKey(ctx context.Context, host string, port int) ssh.HostKeyCallback {
+func (s *Server) verifySSHHostKey(host string, port int) ssh.HostKeyCallback {
 	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
 		got := ssh.FingerprintSHA256(key)
-		var pinned string
-		err := s.db.QueryRowContext(ctx, `SELECT fingerprint FROM ssh_known_hosts WHERE host = ? AND port = ?`, host, port).Scan(&pinned)
-		if errors.Is(err, sql.ErrNoRows) {
-			if _, insErr := s.db.ExecContext(ctx, `INSERT INTO ssh_known_hosts (host, port, fingerprint, created_at) VALUES (?, ?, ?, ?)`,
-				host, port, got, time.Now().UTC().Format(time.RFC3339)); insErr != nil {
-				slog.Warn("ssh host key pin failed", "host", host, "port", port, "error", insErr)
-			}
-			return nil
+		// A background context, not the dial's request context: this pin
+		// check/write is a durability concern independent of the request
+		// lifecycle — a browser tab closing mid-handshake must not turn
+		// into a bogus "checking pinned host key" failure via a context
+		// that was canceled for an unrelated reason.
+		ctx := context.Background()
+
+		// Atomic claim-then-read: INSERT ... ON CONFLICT DO NOTHING lets at
+		// most one of two concurrent first-connections to the same
+		// host:port actually write the pin, and the SELECT right after
+		// always reads back whichever fingerprint won — so both goroutines
+		// compare against the same authoritative row instead of each one
+		// silently trusting whatever key it happened to see first.
+		if _, err := s.db.ExecContext(ctx, `
+			INSERT INTO ssh_known_hosts (host, port, fingerprint, created_at) VALUES (?, ?, ?, ?)
+			ON CONFLICT (host, port) DO NOTHING`,
+			host, port, got, time.Now().UTC().Format(time.RFC3339)); err != nil {
+			// Fail closed: a security pin we couldn't durably record must
+			// not silently degrade back to "accept anything" — that defeats
+			// the whole point of this check.
+			return fmt.Errorf("pinning host key: %w", err)
 		}
-		if err != nil {
+		var pinned string
+		if err := s.db.QueryRowContext(ctx, `SELECT fingerprint FROM ssh_known_hosts WHERE host = ? AND port = ?`, host, port).Scan(&pinned); err != nil {
 			return fmt.Errorf("checking pinned host key: %w", err)
 		}
 		if pinned != got {
@@ -210,6 +222,12 @@ func (s *Server) sshWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	release, ok := acquireSessionSlot(w)
+	if !ok {
+		return
+	}
+	defer release()
+
 	clientConn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -233,7 +251,7 @@ func (s *Server) sshWebSocket(w http.ResponseWriter, r *http.Request) {
 		// rejected instead of silently trusted. The first connection itself
 		// is unverifiable without an out-of-band fingerprint — same as any
 		// classic known_hosts flow the first time you connect to a host.
-		HostKeyCallback: s.verifySSHHostKey(r.Context(), sess.host, sess.port),
+		HostKeyCallback: s.verifySSHHostKey(sess.host, sess.port),
 	}
 	sshConn, err := ssh.Dial("tcp", addr, config)
 	if err != nil {

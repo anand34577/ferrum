@@ -22,6 +22,11 @@ permissions:
 jobs:
   docker:
     runs-on: ubuntu-latest
+    # A stuck build (e.g. a target-platform stage running under QEMU
+    # emulation instead of natively — see the Dockerfile's --platform=
+    # $BUILDPLATFORM comment) would otherwise silently run for GitHub's
+    # 360-minute hard cap before getting cancelled. Fail fast instead.
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write # to push to ghcr.io
