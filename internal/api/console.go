@@ -188,6 +188,27 @@ func newConsoleSession(connID, guestType, node string, vmid int, port, ticket st
 	return sessionID
 }
 
+// openSessionsSem caps concurrently open console/shell WebSocket sessions —
+// shared by consoleWebSocket (VNC/termproxy) and sshWebSocket (direct SSH,
+// in ssh_console.go) since both live in this package and mint one goroutine
+// pair plus an upstream dial per session. Without this, a user (or a script)
+// opening many sessions at once accumulates unbounded goroutines/dials.
+var openSessionsSem = make(chan struct{}, 50)
+
+// acquireSessionSlot tries to claim a slot in openSessionsSem without
+// blocking. On success the caller must release it (e.g. via defer) once the
+// session ends; on failure it has already written a 503 response and the
+// caller must not upgrade the connection.
+func acquireSessionSlot(w http.ResponseWriter) (release func(), ok bool) {
+	select {
+	case openSessionsSem <- struct{}{}:
+		return func() { <-openSessionsSem }, true
+	default:
+		http.Error(w, "too many open console sessions, try again shortly", http.StatusServiceUnavailable)
+		return nil, false
+	}
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  8192,
 	WriteBufferSize: 8192,
@@ -226,6 +247,12 @@ func (s *Server) consoleWebSocket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "console session expired", http.StatusGone)
 		return
 	}
+
+	release, ok := acquireSessionSlot(w)
+	if !ok {
+		return
+	}
+	defer release()
 
 	host, port, verifyTLS, err := s.connectionHost(r.Context(), sess.connectionID)
 	if err != nil {

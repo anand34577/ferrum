@@ -1,13 +1,23 @@
 # syntax=docker/dockerfile:1
 
-FROM node:22-alpine AS web-build
+## --platform=$BUILDPLATFORM pins these two stages to the runner's own
+# architecture (amd64) instead of the target platform buildx is building for.
+# Neither stage needs to run target-arch code — the web build only produces
+# static JS/CSS, and Go cross-compiles (GOOS/GOARCH below) without ever
+# executing arm64 instructions. Without this pin, buildx runs BOTH stages
+# under QEMU user-mode emulation for a linux/arm64 build: npm/Node under
+# QEMU is known to hang outright rather than just run slow, which is what
+# turned a normal few-minute image build into a 360-minute (GitHub's hard
+# cap) stuck job. Only the final base image below stays platform-matched —
+# that's just filesystem layers, nothing to execute.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web-build
 WORKDIR /web
 COPY web/package.json web/package-lock.json* ./
 RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.26-alpine AS go-build
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS go-build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

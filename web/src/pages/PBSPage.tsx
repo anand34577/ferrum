@@ -150,6 +150,13 @@ function DatastoreCard({ connId, ds, isAdmin }: { connId: string; ds: PBSDatasto
   const used = ds.used ?? 0
   const totals = countTotals(ds.counts)
 
+  // Lifted out of MaintenanceTab: Radix TabsContent unmounts inactive panels
+  // by default, so state local to that component would lose a running GC
+  // job's UPID whenever the user switched away from Maintenance and back.
+  // DatastoreCard stays mounted for as long as the tabs it hosts do.
+  const [gcUpid, setGcUpid] = useState<string | null>(null)
+  const [logUpid, setLogUpid] = useState<string | null>(null)
+
   return (
     <Card>
       <CardHeader>
@@ -192,7 +199,16 @@ function DatastoreCard({ connId, ds, isAdmin }: { connId: string; ds: PBSDatasto
             <ContentTab connId={connId} store={store} isAdmin={isAdmin} />
           </TabsContent>
           <TabsContent value="maintenance">
-            <MaintenanceTab connId={connId} store={store} gcStatus={ds["gc-status"]} isAdmin={isAdmin} />
+            <MaintenanceTab
+              connId={connId}
+              store={store}
+              gcStatus={ds["gc-status"]}
+              isAdmin={isAdmin}
+              gcUpid={gcUpid}
+              setGcUpid={setGcUpid}
+              logUpid={logUpid}
+              setLogUpid={setLogUpid}
+            />
           </TabsContent>
           <TabsContent value="jobs">
             <JobsTab connId={connId} store={store} isAdmin={isAdmin} />
@@ -377,12 +393,29 @@ function GCStat({ label, value }: { label: string; value: string }) {
   )
 }
 
-function MaintenanceTab({ connId, store, gcStatus, isAdmin }: { connId: string; store: string; gcStatus?: PBSGCStatus; isAdmin: boolean }) {
-  const queryClient = useQueryClient()
+function MaintenanceTab({
+  connId,
+  store,
+  gcStatus,
+  isAdmin,
+  gcUpid,
+  setGcUpid,
+  logUpid,
+  setLogUpid,
+}: {
+  connId: string
+  store: string
+  gcStatus?: PBSGCStatus
+  isAdmin: boolean
   // The UPID returned by the GC start call — while set, its task status is
   // polled every 3s, but only for as long as the task reports "running".
-  const [gcUpid, setGcUpid] = useState<string | null>(null)
-  const [logUpid, setLogUpid] = useState<string | null>(null)
+  // Lifted into DatastoreCard so it survives this tab unmounting/remounting.
+  gcUpid: string | null
+  setGcUpid: (upid: string | null) => void
+  logUpid: string | null
+  setLogUpid: (upid: string | null) => void
+}) {
+  const queryClient = useQueryClient()
 
   const taskQuery = useQuery({
     queryKey: ["pbs-task", connId, gcUpid],

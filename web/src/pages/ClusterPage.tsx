@@ -58,7 +58,11 @@ export function ClusterPage() {
   })
   const connections = inventory ?? []
   const [connId, setConnId] = useState("")
-  const activeConnId = connId || connections[0]?.connectionId || ""
+  // Fall back to the first connection when connId points at one that's no
+  // longer in the list (deleted elsewhere, dropped from inventory) — same
+  // fallback as the no-selection case, so panels below don't keep querying
+  // a connection that no longer exists.
+  const activeConnId = (connId && connections.some((c) => c.connectionId === connId) ? connId : connections[0]?.connectionId) || ""
   const base = activeConnId ? `/connections/${activeConnId}` : ""
 
   return (
@@ -157,6 +161,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
   })
 
   const [vnetForm, setVnetForm] = useState({ vnet: "", zone: "", tag: "" })
+  const vnetTagInvalid = vnetForm.tag !== "" && !Number.isFinite(Number(vnetForm.tag))
   const createVnet = useMutation({
     mutationFn: () => api.post(`${base}/cluster/sdn/vnets`, { vnet: vnetForm.vnet, zone: vnetForm.zone, tag: vnetForm.tag ? Number(vnetForm.tag) : undefined }),
     onSuccess: () => {
@@ -168,8 +173,12 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
   })
   const deleteVnet = useMutation({
     mutationFn: (vnet: string) => api.delete(`${base}/cluster/sdn/vnets/${encodeURIComponent(vnet)}`),
-    onSuccess: () => {
+    onSuccess: (_data, vnet) => {
       toast.success("Vnet deleted")
+      // The deleted vnet may have been the one selected for the Subnets
+      // card below — clear it so that card closes instead of continuing to
+      // query subnets for a vnet that no longer exists.
+      if (vnet === selectedVnet) setSelectedVnet(null)
       invalidate()
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to delete vnet"),
@@ -397,9 +406,10 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
             </div>
             <div className="space-y-1.5">
               <Label>VLAN tag</Label>
-              <Input type="number" placeholder="optional" value={vnetForm.tag} onChange={(e) => setVnetForm((f) => ({ ...f, tag: e.target.value }))} className="w-24" />
+              <Input type="number" placeholder="optional" value={vnetForm.tag} onChange={(e) => setVnetForm((f) => ({ ...f, tag: e.target.value }))} className="w-24" aria-invalid={vnetTagInvalid} />
+              {vnetTagInvalid && <p className="text-xs text-[var(--status-error)]">Must be a number</p>}
             </div>
-            <Button loading={createVnet.isPending} disabled={!vnetForm.vnet || !vnetForm.zone} onClick={() => createVnet.mutate()}>
+            <Button loading={createVnet.isPending} disabled={!vnetForm.vnet || !vnetForm.zone || vnetTagInvalid} onClick={() => createVnet.mutate()}>
               <Plus className="h-3.5 w-3.5" /> Add vnet
             </Button>
           </div>

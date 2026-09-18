@@ -35,3 +35,15 @@ func TestTxRebindMatchesDBRebind(t *testing.T) {
 		t.Fatalf("Tx.rebind(postgres) = %q, want %q", got, want)
 	}
 }
+
+// A literal "?" inside a quoted string (a LIKE pattern, or Postgres's JSONB
+// "?"/"?|"/"?&" operators) must not be treated as a placeholder — only the
+// real one outside the string should be renumbered.
+func TestRebindIgnoresPlaceholdersInsideStringLiterals(t *testing.T) {
+	db := &DB{driver: "postgres"}
+	got := db.rebind(`SELECT * FROM t WHERE name LIKE '%?%' AND id = ?`)
+	want := `SELECT * FROM t WHERE name LIKE '%?%' AND id = $1`
+	if got != want {
+		t.Fatalf("rebind(postgres) = %q, want %q", got, want)
+	}
+}

@@ -7,6 +7,9 @@ import type { AIChatMessage } from "@/lib/api"
  * survives after streaming ends — not just visible transiently while the
  * response is still typing out. */
 export interface ToolCallEntry {
+  // The provider's tool_call_id, when the SSE stream carried one — used to
+  // correlate a result back to its call without guessing by name+order.
+  id?: string
   name: string
   ok: boolean
   args?: unknown

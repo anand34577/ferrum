@@ -24,16 +24,34 @@ func (d *DB) rebind(query string) string {
 	if d.driver != "postgres" {
 		return query
 	}
+	return rebindPostgres(query)
+}
+
+// rebindPostgres rewrites "?" placeholders to Postgres's "$1, $2, ..." style,
+// skipping any "?" inside a single-quoted SQL string literal (tracking ''
+// as an escaped quote, not a close) so a query with a literal "?" in a LIKE
+// pattern or a Postgres JSONB "?"/"?|"/"?&" operator isn't corrupted into a
+// bogus positional parameter — every query in this codebase currently only
+// uses "?" as a placeholder, but this makes that an enforced invariant
+// instead of a silent assumption the moment one doesn't.
+func rebindPostgres(query string) string {
 	var b strings.Builder
 	n := 0
-	for _, r := range query {
-		if r == '?' {
+	inString := false
+	runes := []rune(query)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		switch {
+		case r == '\'':
+			inString = !inString
+			b.WriteRune(r)
+		case r == '?' && !inString:
 			n++
 			b.WriteByte('$')
 			b.WriteString(strconv.Itoa(n))
-			continue
+		default:
+			b.WriteRune(r)
 		}
-		b.WriteRune(r)
 	}
 	return b.String()
 }
@@ -80,18 +98,7 @@ func (t *Tx) rebind(query string) string {
 	if t.driver != "postgres" {
 		return query
 	}
-	var b strings.Builder
-	n := 0
-	for _, r := range query {
-		if r == '?' {
-			n++
-			b.WriteByte('$')
-			b.WriteString(strconv.Itoa(n))
-			continue
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
+	return rebindPostgres(query)
 }
 
 func (t *Tx) Exec(query string, args ...any) (sql.Result, error) {

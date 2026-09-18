@@ -29,6 +29,21 @@ const maxResponseBytes = 32 << 20 // 32 MiB
 // errors.Is(err, ErrUnauthorized).
 var ErrUnauthorized = errors.New("pbs: unauthorized")
 
+// PBSResponseTooLargeError reports an upstream response body that exceeded
+// maxResponseBytes. The body is deliberately truncated at the limit instead
+// of exhausting memory, but surfaced as this explicit error so callers never
+// see the confusing "unexpected end of JSON input" that json.Unmarshal
+// produces on a half-read body. Same rationale as pve.ResponseTooLargeError.
+type PBSResponseTooLargeError struct {
+	Method string
+	Path   string
+	Limit  int
+}
+
+func (e *PBSResponseTooLargeError) Error() string {
+	return fmt.Sprintf("pbs %s %s response exceeded %d MiB limit", e.Method, e.Path, e.Limit>>20)
+}
+
 // StatusError is a non-2xx upstream PBS response.
 type StatusError struct {
 	Method     string
@@ -352,9 +367,12 @@ func (c *Client) doOn(ctx context.Context, hc *http.Client, method, path string,
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return err
+	}
+	if len(raw) > maxResponseBytes {
+		return &PBSResponseTooLargeError{Method: method, Path: path, Limit: maxResponseBytes}
 	}
 	if resp.StatusCode >= 300 {
 		err := &StatusError{Method: method, Path: path, StatusCode: resp.StatusCode, Body: string(raw)}
