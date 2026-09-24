@@ -83,6 +83,10 @@ type WebhookDispatcher struct {
 
 	mu       sync.Mutex
 	inFlight map[string]bool // outbox keys ("eventId|subscriptionId") currently being delivered — see dispatchOutboxRow
+
+	// running tracks every goroutine Run spawns so Run returns only once
+	// they're done — shutdown then closes the DB after, not during, a write.
+	running sync.WaitGroup
 }
 
 func NewWebhookDispatcher(db *store.DB, box *secrets.Box) *WebhookDispatcher {
@@ -110,10 +114,13 @@ type outboxRow struct {
 // Intended to be started once at boot in its own goroutine, same as
 // poller.AlertEvaluator.Run.
 func (d *WebhookDispatcher) Run(ctx context.Context, bus *events.Bus) {
+	defer d.running.Wait()
 	// Queue sweeper: drains anything the previous run left behind, then
 	// keeps re-attempting due rows. Runs on its own goroutine so a slow
 	// receiver's retry sleeps never delay live event delivery.
+	d.running.Add(1)
 	go func() {
+		defer d.running.Done()
 		d.sweep(ctx)
 		ticker := time.NewTicker(webhookSweepInterval)
 		defer ticker.Stop()
@@ -141,7 +148,11 @@ func (d *WebhookDispatcher) Run(ctx context.Context, bus *events.Bus) {
 			// off the receive loop so one slow/unreachable webhook can't
 			// delay delivery to the rest, or cause this subscriber's bus
 			// buffer to fill and start dropping events.
-			go d.deliverToAll(ctx, evt)
+			d.running.Add(1)
+			go func() {
+				defer d.running.Done()
+				d.deliverToAll(ctx, evt)
+			}()
 		}
 	}
 }
@@ -174,7 +185,11 @@ func (d *WebhookDispatcher) deliverToAll(ctx context.Context, evt events.Event) 
 			continue
 		}
 		row := outboxRow{EventID: evt.ID, SubscriptionID: sub.ID, EventType: string(evt.Type), Payload: string(body)}
-		go d.dispatchOutboxRow(ctx, row, sub)
+		d.running.Add(1)
+		go func() {
+			defer d.running.Done()
+			d.dispatchOutboxRow(ctx, row, sub)
+		}()
 	}
 }
 

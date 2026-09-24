@@ -40,6 +40,7 @@ jobs:
         id: vars
         run: |
           echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           # ghcr.io requires a lowercase image name; github.repository is
           # already lowercase for this repo, but this keeps the workflow
           # correct if it's ever forked under a mixed-case owner/name.
@@ -64,6 +65,10 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          build-args: |
+            VERSION=${{ steps.vars.outputs.tag }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ steps.vars.outputs.date }}
           tags: |
             ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.tag }}
             ${{ steps.vars.outputs.image }}:latest

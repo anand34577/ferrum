@@ -373,7 +373,7 @@ func (s *Server) testConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Type == "pbs" {
-		client := pbs.New(req.Host, req.Port, pbs.WithInsecureSkipVerify(!req.VerifyTLS))
+		client := pbs.New(req.Host, req.Port, pbs.WithInsecureSkipVerify(!req.VerifyTLS), pbs.WithFingerprint(req.TLSFingerprint))
 		if req.AuthType == "token" {
 			client.WithAPIToken(req.TokenID, req.TokenSecret)
 		} else if err := client.Login(r.Context(), req.Username, req.Password); err != nil {
@@ -389,7 +389,7 @@ func (s *Server) testConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := pve.New(req.Host, req.Port, pve.WithInsecureSkipVerify(!req.VerifyTLS))
+	client := pve.New(req.Host, req.Port, pve.WithInsecureSkipVerify(!req.VerifyTLS), pve.WithFingerprint(req.TLSFingerprint))
 	if req.AuthType == "token" {
 		client.WithAPIToken(req.TokenID, req.TokenSecret)
 	} else if err := client.Login(r.Context(), req.Username, req.Password); err != nil {

@@ -29,11 +29,10 @@ func (d *DB) rebind(query string) string {
 
 // rebindPostgres rewrites "?" placeholders to Postgres's "$1, $2, ..." style,
 // skipping any "?" inside a single-quoted SQL string literal (tracking ''
-// as an escaped quote, not a close) so a query with a literal "?" in a LIKE
-// pattern or a Postgres JSONB "?"/"?|"/"?&" operator isn't corrupted into a
-// bogus positional parameter — every query in this codebase currently only
-// uses "?" as a placeholder, but this makes that an enforced invariant
-// instead of a silent assumption the moment one doesn't.
+// as an escaped quote, not a close) so a literal "?" in a LIKE pattern
+// survives. It does NOT protect a bare JSONB "?"/"?|"/"?&" operator (those
+// sit outside quotes and get renumbered) and doesn't understand "--"
+// comments, so neither may appear in a query.
 func rebindPostgres(query string) string {
 	var b strings.Builder
 	n := 0

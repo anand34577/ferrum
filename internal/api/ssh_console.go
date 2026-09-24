@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -96,6 +97,28 @@ func (s *Server) verifySSHHostKey(host string, port int) ssh.HostKeyCallback {
 		}
 		return nil
 	}
+}
+
+// forgetSSHHostKey is DELETE /ssh/known-hosts?host=&port= — drops a pinned
+// host key so a reinstalled/rekeyed host can be re-pinned on next connect.
+func (s *Server) forgetSSHHostKey(w http.ResponseWriter, r *http.Request) {
+	host := r.URL.Query().Get("host")
+	port, err := strconv.Atoi(r.URL.Query().Get("port"))
+	if host == "" || err != nil {
+		writeErrorMsg(w, http.StatusBadRequest, "host and numeric port query parameters are required")
+		return
+	}
+	res, err := s.db.ExecContext(r.Context(), `DELETE FROM ssh_known_hosts WHERE host = ? AND port = ?`, host, port)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeErrorMsg(w, http.StatusNotFound, "no pinned host key for that host and port")
+		return
+	}
+	s.audit(r, "ssh.forget_host_key", "ssh", fmt.Sprintf("%s:%d", host, port))
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func sweepSSHSessionsLocked(now time.Time) {
@@ -210,6 +233,13 @@ func newSSHSession(host string, port int, username, authType, secret string, col
 func (s *Server) sshWebSocket(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionId")
 
+	// Slot first: a 503 at the cap must not burn the single-use session.
+	release, ok := acquireSessionSlot(w)
+	if !ok {
+		return
+	}
+	defer release()
+
 	sshSessionsMu.Lock()
 	sess, ok := sshSessions[sessionID]
 	if ok {
@@ -221,12 +251,6 @@ func (s *Server) sshWebSocket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ssh session expired", http.StatusGone)
 		return
 	}
-
-	release, ok := acquireSessionSlot(w)
-	if !ok {
-		return
-	}
-	defer release()
 
 	clientConn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -303,6 +327,7 @@ func (s *Server) sshWebSocket(w http.ResponseWriter, r *http.Request) {
 		for {
 			n, err := stdout.Read(buf)
 			if n > 0 {
+				_ = clientConn.SetWriteDeadline(time.Now().Add(consoleWriteWait))
 				if werr := clientConn.WriteMessage(websocket.BinaryMessage, buf[:n]); werr != nil {
 					errc <- werr
 					return
@@ -311,6 +336,27 @@ func (s *Server) sshWebSocket(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				errc <- err
 				return
+			}
+		}
+	}()
+
+	// Keep-alive: same ping/read-deadline reaping as pipeWebsockets, so a
+	// browser that vanished (laptop sleep, NAT drop) ends the session.
+	_ = clientConn.SetReadDeadline(time.Now().Add(consolePongWait))
+	clientConn.SetPongHandler(func(string) error {
+		return clientConn.SetReadDeadline(time.Now().Add(consolePongWait))
+	})
+	stopPing := make(chan struct{})
+	defer close(stopPing)
+	go func() {
+		ticker := time.NewTicker(consolePingPeriod)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopPing:
+				return
+			case <-ticker.C:
+				_ = clientConn.WriteControl(websocket.PingMessage, nil, time.Now().Add(consoleWriteWait))
 			}
 		}
 	}()
@@ -331,6 +377,10 @@ func (s *Server) sshWebSocket(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	<-errc
+	// Close before Wait: an interactive shell with stdin open never exits
+	// on its own, so Wait alone would pin this goroutine and its slot forever.
+	_ = session.Close()
+	_ = sshConn.Close()
 	_ = session.Wait()
 	slog.Info("ssh session closed", "host", sess.host, "port", sess.port)
 }

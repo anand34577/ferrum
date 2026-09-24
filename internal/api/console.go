@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -236,6 +235,14 @@ var upgrader = websocket.Upgrader{
 func (s *Server) consoleWebSocket(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionId")
 
+	// Claim a slot before consuming the single-use session, so a 503 at the
+	// cap leaves the session intact and "try again shortly" actually works.
+	release, ok := acquireSessionSlot(w)
+	if !ok {
+		return
+	}
+	defer release()
+
 	consoleSessionsMu.Lock()
 	sess, ok := consoleSessions[sessionID]
 	if ok {
@@ -248,13 +255,7 @@ func (s *Server) consoleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	release, ok := acquireSessionSlot(w)
-	if !ok {
-		return
-	}
-	defer release()
-
-	host, port, verifyTLS, err := s.connectionHost(r.Context(), sess.connectionID)
+	host, port, _, err := s.connectionHost(r.Context(), sess.connectionID)
 	if err != nil {
 		http.Error(w, "connection lookup failed", http.StatusBadGateway)
 		return
@@ -286,7 +287,7 @@ func (s *Server) consoleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dialer := websocket.Dialer{
-		TLSClientConfig:  &tls.Config{InsecureSkipVerify: !verifyTLS}, //nolint:gosec // per-connection trust setting, mirrors REST client
+		TLSClientConfig:  client.WSTLSConfig(), // same trust (incl. fingerprint pin) as the REST client
 		HandshakeTimeout: consoleDialTimeout,
 		ReadBufferSize:   8192,
 		WriteBufferSize:  8192,

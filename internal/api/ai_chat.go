@@ -358,29 +358,12 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// A local model — or several tool round-trips against it — can easily
-	// exceed the 30s global request timeout applied in Router(). Detach from
-	// that inherited deadline (keeping request-scoped values like the
-	// authenticated user) and apply a generous one of our own: this is a
-	// long-poll-shaped endpoint by nature, not a typical CRUD call.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 4*time.Minute)
+	// exceed 30s, so Router() exempts this route from the global timeout and
+	// we apply a generous bound of our own. r.Context() stays the parent, so
+	// a client disconnect (Stop) cancels the tool loop at any point.
+	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Minute)
 	defer cancel()
 	user := userFromContext(r)
-
-	// context.WithoutCancel above deliberately rides out the global 30s
-	// timeout, but that also threw away real client-disconnect detection —
-	// hitting Stop in the browser aborted the fetch, yet the tool-calling
-	// loop and any in-flight upstream call kept running on the server to
-	// completion. Watch the ORIGINAL request context ourselves and forward
-	// only a genuine disconnect to our own cancel: net/http cancels a
-	// request's context with context.Canceled when the client goes away,
-	// versus context.DeadlineExceeded when it's merely the 30s middleware
-	// timeout firing — exactly the signal we're intentionally ignoring.
-	go func() {
-		<-r.Context().Done()
-		if errors.Is(r.Context().Err(), context.Canceled) {
-			cancel()
-		}
-	}()
 
 	clearWriteDeadline(w)
 	w.Header().Set("Content-Type", "text/event-stream")

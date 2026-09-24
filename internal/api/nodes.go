@@ -569,6 +569,9 @@ func (s *Server) fileRestoreDownload(w http.ResponseWriter, r *http.Request) {
 		filename = "restore"
 	}
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	// Lift the server's 60s WriteTimeout, or a large file is silently
+	// truncated after the 200 has already gone out.
+	clearWriteDeadline(w)
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, resp.Body)
 }
@@ -887,6 +890,12 @@ func (s *Server) nodeServiceAction(w http.ResponseWriter, r *http.Request) {
 const uploadStorageContentLimit = 8 << 30 // 8 GiB
 
 func (s *Server) uploadStorageContent(w http.ResponseWriter, r *http.Request) {
+	// A multi-GB body outlasts the server's 60s Read/WriteTimeout (see
+	// cmd/ferrum/main.go); lift both for this request or the upload dies
+	// mid-stream with "i/o timeout".
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Time{})
+	_ = rc.SetWriteDeadline(time.Time{})
 	r.Body = http.MaxBytesReader(w, r.Body, uploadStorageContentLimit)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		writeErrorMsg(w, http.StatusBadRequest, "invalid upload: "+err.Error())

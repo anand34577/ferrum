@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { DatabaseBackup, Play, ScrollText } from "lucide-react"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { type RefObject, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -134,7 +134,7 @@ export function PBSPage() {
           ) : (
             <div className="space-y-3">
               {(storesQuery.data ?? []).map((ds) => (
-                <DatastoreCard key={ds.store} connId={activeConnId} ds={ds} isAdmin={isAdmin} />
+                <DatastoreCard key={`${activeConnId}/${ds.store}`} connId={activeConnId} ds={ds} isAdmin={isAdmin} />
               ))}
             </div>
           )}
@@ -156,6 +156,9 @@ function DatastoreCard({ connId, ds, isAdmin }: { connId: string; ds: PBSDatasto
   // DatastoreCard stays mounted for as long as the tabs it hosts do.
   const [gcUpid, setGcUpid] = useState<string | null>(null)
   const [logUpid, setLogUpid] = useState<string | null>(null)
+  // Also lifted: the last UPID whose finish was announced, so remounting the
+  // Maintenance tab doesn't re-toast (and re-invalidate) a finished GC.
+  const gcSettledRef = useRef<string | null>(null)
 
   return (
     <Card>
@@ -206,6 +209,7 @@ function DatastoreCard({ connId, ds, isAdmin }: { connId: string; ds: PBSDatasto
               isAdmin={isAdmin}
               gcUpid={gcUpid}
               setGcUpid={setGcUpid}
+              settledRef={gcSettledRef}
               logUpid={logUpid}
               setLogUpid={setLogUpid}
             />
@@ -400,6 +404,7 @@ function MaintenanceTab({
   isAdmin,
   gcUpid,
   setGcUpid,
+  settledRef,
   logUpid,
   setLogUpid,
 }: {
@@ -412,6 +417,7 @@ function MaintenanceTab({
   // Lifted into DatastoreCard so it survives this tab unmounting/remounting.
   gcUpid: string | null
   setGcUpid: (upid: string | null) => void
+  settledRef: RefObject<string | null>
   logUpid: string | null
   setLogUpid: (upid: string | null) => void
 }) {
@@ -428,7 +434,6 @@ function MaintenanceTab({
   // The task status carries no end-time, so "finished" is exactly the first
   // stopped poll — toast it once per UPID, then refresh the listing so the
   // new removed/pending figures actually show up.
-  const settledRef = useRef<string | null>(null)
   useEffect(() => {
     const t = taskQuery.data
     if (!t || t.status !== "stopped" || settledRef.current === t.upid) return
@@ -436,7 +441,7 @@ function MaintenanceTab({
     if (t.exitstatus && t.exitstatus !== "OK") toast.error(`Garbage collection on ${store} failed: ${t.exitstatus}`)
     else toast.success(`Garbage collection on ${store} finished`)
     queryClient.invalidateQueries({ queryKey: ["pbs-datastores", connId] })
-  }, [taskQuery.data, connId, store, queryClient])
+  }, [taskQuery.data, connId, store, queryClient, settledRef])
 
   const startGc = useMutation({
     mutationFn: () => api.post<{ upid: string }>(`/connections/${connId}/pbs/datastores/${encodeURIComponent(store)}/gc`),

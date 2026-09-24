@@ -207,6 +207,19 @@ func (c *Client) applyTransport() {
 	}
 }
 
+// WSTLSConfig returns the TLS config a raw WebSocket dial to this host must
+// use — the same trust decision as the REST transport (pin, skip-verify, or
+// system CA), so the console proxy can't bypass a configured pin.
+func (c *Client) WSTLSConfig() *tls.Config {
+	switch {
+	case c.fingerprint != "":
+		return &tls.Config{InsecureSkipVerify: true, VerifyPeerCertificate: c.verifyFingerprint} //nolint:gosec // pin replaces CA validation
+	case c.skipVerify:
+		return &tls.Config{InsecureSkipVerify: true} //nolint:gosec // per-connection trust setting
+	}
+	return &tls.Config{}
+}
+
 // verifyFingerprint is the VerifyPeerCertificate hook for pinned clients:
 // it compares the SHA-256 of the leaf certificate's DER (rawCerts[0]) against
 // the configured fingerprint (see fingerprintMatches). certFingerprintSHA256
