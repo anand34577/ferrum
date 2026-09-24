@@ -79,17 +79,23 @@ export function NodeSystemPanel({ connId, node }: NodeSystemPanelProps) {
   // --- Hosts ---
   const hostsQuery = useQuery({ queryKey: ["node-hosts", connId, node], queryFn: () => api.get<NodeHosts>(`${base}/hosts`) })
   const [hostsData, setHostsData] = useState("")
+  // The digest the form's text was loaded with — sending the latest polled
+  // one instead would defeat PVE's conflict check and overwrite another
+  // admin's edit with our stale text.
+  const [hostsDigest, setHostsDigest] = useState<string | undefined>()
   const hostsSyncedFor = useRef<string | null>(null)
   useEffect(() => {
     if (hostsQuery.data && hostsSyncedFor.current !== nodeKey) {
       setHostsData(hostsQuery.data.data)
+      setHostsDigest(hostsQuery.data.digest)
       hostsSyncedFor.current = nodeKey
     }
   }, [hostsQuery.data, nodeKey])
   const saveHosts = useMutation({
-    mutationFn: () => api.put(`${base}/hosts`, { data: hostsData, digest: hostsQuery.data?.digest }),
+    mutationFn: () => api.put(`${base}/hosts`, { data: hostsData, digest: hostsDigest }),
     onSuccess: () => {
       toast.success("/etc/hosts updated")
+      hostsSyncedFor.current = null // re-sync text + digest from the refetch below
       queryClient.invalidateQueries({ queryKey: ["node-hosts", connId, node] })
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to update hosts file"),

@@ -158,6 +158,11 @@ export function DashboardPage() {
     queryKey: ["dashboard", activeId],
     queryFn: () => (activeId ? api.get<DashboardFull>(`/dashboards/${activeId}`) : Promise.resolve(null)),
     enabled: Boolean(activeId),
+    // This page is the only writer of the layout, and the render-time sync
+    // below replaces local state on every new fetch — a background refetch
+    // would snap an unsaved drag back to the server copy.
+    refetchInterval: false,
+    refetchOnWindowFocus: false,
   })
 
   // Synchronize local editable layout with loaded dashboard when activeId or query changes
@@ -184,6 +189,13 @@ export function DashboardPage() {
     return () => window.removeEventListener("beforeunload", onBeforeUnload)
   }, [])
 
+  // The catch below runs after a later render; it must compare against the
+  // dashboard on screen THEN, not the activeId captured when the save began.
+  const activeIdRef = useRef(activeId)
+  useEffect(() => {
+    activeIdRef.current = activeId
+  }, [activeId])
+
   function saveLayout(next: WidgetSpec[], targetId = activeId) {
     if (!targetId) return
     dirty.current = false
@@ -196,9 +208,10 @@ export function DashboardPage() {
       // changes" warning while doing nothing for the edit that actually
       // failed (which has no retry path once its own widgets are gone
       // from state — the toast is the only signal left for that case).
-      if (targetId === activeId) dirty.current = true
+      const stillOnScreen = targetId === activeIdRef.current
+      if (stillOnScreen) dirty.current = true
       const msg = err instanceof ApiError ? err.message : "Failed to save dashboard layout"
-      toast.error(targetId === activeId ? `${msg} — your changes are not saved yet.` : `${msg} — changes to the dashboard you left were not saved.`)
+      toast.error(stillOnScreen ? `${msg} — your changes are not saved yet.` : `${msg} — changes to the dashboard you left were not saved.`)
     })
   }
 

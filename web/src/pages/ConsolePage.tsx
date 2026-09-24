@@ -369,8 +369,9 @@ function ShellTerminal({
         }
       })
       socket.addEventListener("message", (ev) => {
-        const data = ev.data instanceof ArrayBuffer ? new TextDecoder().decode(ev.data) : String(ev.data)
-        term.write(data)
+        // Raw bytes, not a per-frame TextDecoder: xterm keeps its own UTF-8
+        // decoder state, so a multi-byte char split across frames stays intact.
+        term.write(ev.data instanceof ArrayBuffer ? new Uint8Array(ev.data) : String(ev.data))
       })
       term.onData((data) => {
         if (socket?.readyState === WebSocket.OPEN) socket.send(data)

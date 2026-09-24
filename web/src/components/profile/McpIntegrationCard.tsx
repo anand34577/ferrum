@@ -1,19 +1,18 @@
 import { useQuery } from "@tanstack/react-query"
 import { Check, Copy, Plug, ShieldOff } from "lucide-react"
-import { useState } from "react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { api } from "@/lib/api"
+import { useCopiedFlag } from "@/lib/useCopiedFlag"
 
 function CopyBlock({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
+  const [copied, flashCopied] = useCopiedFlag(2000)
   function copy() {
     navigator.clipboard.writeText(text).then(() => {
-      setCopied(true)
+      flashCopied()
       toast.success("Copied to clipboard")
-      setTimeout(() => setCopied(false), 2000)
     }).catch(() => toast.error("Could not copy to clipboard"))
   }
   return (

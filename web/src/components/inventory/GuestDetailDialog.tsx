@@ -57,6 +57,8 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
   const queryClient = useQueryClient()
   const confirm = useConfirm()
   const base = guest ? `/connections/${connId}/guests/${guest.type}/${guest.node}/${guest.vmid}` : ""
+  // guest.id ("qemu/100") repeats across connections — per-guest state keys on both.
+  const guestKey = guest ? `${connId}/${guest.id}` : undefined
 
   const configQuery = useQuery({
     queryKey: ["guest-config", connId, guest?.id],
@@ -90,8 +92,10 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
   const [editingConfig, setEditingConfig] = useState(false)
   const [configForm, setConfigForm] = useState({ cores: "", memory: "", tags: "", notes: "" })
 
+  // Not while editing: a refetch (another tab's save, a DNS/hardware save
+  // here) would otherwise wipe fields the user is halfway through typing.
   useEffect(() => {
-    if (configQuery.data) {
+    if (configQuery.data && !editingConfig) {
       setConfigForm({
         cores: configQuery.data.cores?.toString() ?? "",
         memory: configQuery.data.memory?.toString() ?? "",
@@ -100,7 +104,7 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
       })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [configQuery.data])
+  }, [configQuery.data, editingConfig])
 
   const updateConfig = useMutation({
     mutationFn: () =>
@@ -129,21 +133,26 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
     onSuccess: () => {
       toast.success("Configuration updated")
       setEditingKey(null)
+      dnsSyncedFor.current = undefined // pick up the saved values from the refetch
       queryClient.invalidateQueries({ queryKey: ["guest-config", connId, guest?.id] })
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to update configuration"),
   })
 
   const [dns, setDns] = useState({ nameserver: "", searchdomain: "" })
+  // Sync once per guest (and after a save), not on every refetch — same
+  // reason as NodeSystemPanel: a background refetch mustn't clobber typing.
+  const dnsSyncedFor = useRef<string | undefined>(undefined)
   useEffect(() => {
-    if (configQuery.data) {
+    if (configQuery.data && dnsSyncedFor.current !== guestKey) {
+      dnsSyncedFor.current = guestKey
       setDns({
         nameserver: (configQuery.data.raw?.nameserver as string | undefined) ?? "",
         searchdomain: (configQuery.data.raw?.searchdomain as string | undefined) ?? "",
       })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [configQuery.data])
+  }, [configQuery.data, guestKey])
 
   const [resizeDisk, setResizeDisk] = useState("")
   const [resizeAmount, setResizeAmount] = useState("")
@@ -191,12 +200,12 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
   // when the dialog switches to guest B must not let its result land in
   // execPid after the switch, or the dialog starts polling B's agent for a
   // pid that belongs to A's process table.
-  const currentGuestIdRef = useRef(guest?.id)
-  currentGuestIdRef.current = guest?.id
+  const currentGuestKeyRef = useRef(guestKey)
+  currentGuestKeyRef.current = guestKey
   const execMutation = useMutation({
     mutationFn: (forGuestId: string | undefined) => api.post<GuestAgentExecResult>(`${base}/agent/exec`, { command: ["/bin/sh", "-c", execCommand] }).then((res) => ({ res, forGuestId })),
     onSuccess: ({ res, forGuestId }) => {
-      if (forGuestId === currentGuestIdRef.current) setExecPid(res.pid)
+      if (forGuestId === currentGuestKeyRef.current) setExecPid(res.pid)
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Exec failed — is the guest agent running?"),
   })
@@ -330,7 +339,7 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
     refetchInterval: 5_000,
   })
   const liveStatus = liveStatusQuery.data
-  const liveRates = useLiveRates(liveStatus)
+  const liveRates = useLiveRates(liveStatus, guestKey)
   const paused = liveStatus?.qmpstatus === "paused"
 
   const metricSpecs: SeriesSpec[] = useMemo(
@@ -522,8 +531,10 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
     setSnapName("")
     setCloneNewId("")
     setMigrateTarget("")
+    setEditingConfig(false)
+    setEditingKey(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [guest?.id])
+  }, [guestKey])
 
   if (!guest) return null
 
@@ -1033,7 +1044,7 @@ export function GuestDetailDialog({ connId, guest, onOpenChange }: GuestDetailDi
                         onChange={(e) => setExecCommand(e.target.value)}
                         className="font-mono text-xs"
                       />
-                      <Button size="sm" disabled={!execCommand || execMutation.isPending} onClick={() => execMutation.mutate(guest?.id)}>
+                      <Button size="sm" disabled={!execCommand || execMutation.isPending} onClick={() => execMutation.mutate(guestKey)}>
                         <Terminal className="h-3.5 w-3.5" /> Run
                       </Button>
                     </div>

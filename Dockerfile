@@ -25,7 +25,11 @@ COPY . .
 COPY --from=web-build /web/dist ./web/dist
 ARG TARGETOS
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH     go build -trimpath -ldflags="-s -w" -o /out/ferrum ./cmd/ferrum
+# Same -X stamps as scripts/build.sh; CI passes them as build args.
+ARG VERSION=dev
+ARG COMMIT=none
+ARG DATE=unknown
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH     go build -trimpath -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" -o /out/ferrum ./cmd/ferrum
 
 # "base" (not "static"): Ferrum's own binary is CGO_ENABLED=0/static and
 # would run fine on "static", but the bundled Needle 2 CLI (internal/needle)

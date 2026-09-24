@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -219,14 +220,21 @@ func runServer(ctx context.Context, cfg config.Config) {
 	}
 	srv.SetWebFS(distFS)
 
+	// Shutdown doesn't cancel in-flight request contexts, so an open SSE
+	// stream or AI chat would hold it for its full budget. Cancel a shared
+	// base context the moment Shutdown starts so those handlers return.
+	baseCtx, cancelBase := context.WithCancel(context.Background())
+	defer cancelBase()
 	httpServer := &http.Server{
 		Addr:              cfg.Server.Addr,
 		Handler:           srv.Router(),
+		BaseContext:       func(net.Listener) context.Context { return baseCtx },
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+	httpServer.RegisterOnShutdown(cancelBase)
 
 	go func() {
 		var err error
@@ -250,6 +258,7 @@ func runServer(ctx context.Context, cfg config.Config) {
 	defer cancel()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		slog.Error("graceful shutdown failed", "error", err)
+		_ = httpServer.Close()
 	}
 
 	// Stop the background loops and wait for their current iteration to

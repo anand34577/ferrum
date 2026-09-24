@@ -326,8 +326,10 @@ export function AIAssistantPage() {
     if (!el) return
     if (stickToBottomRef.current) el.scrollTop = el.scrollHeight
     else setNewBelow(true)
+    // Live-stream deps only count when the stream belongs to this transcript;
+    // another conversation's tokens must not raise "new messages below" here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [displayMessages.length, streamingText, streamingReasoning, toolActivity.length])
+  }, [displayMessages.length, isStreamingHere && streamingText, isStreamingHere && streamingReasoning, isStreamingHere && toolActivity.length])
 
   // Leaving the page mid-stream must abort the in-flight chat request — the
   // SSE reader would otherwise keep pulling tokens for a page that no longer
@@ -431,7 +433,11 @@ export function AIAssistantPage() {
             setToolActivity((prev) => {
               const idx = id
                 ? prev.findIndex((t) => t.id === id)
-                : [...prev].reverse().findIndex((t) => t.name === name && t.status === "running")
+                : (() => {
+                  // Search newest-first, then map back to a real index.
+                  const fromEnd = [...prev].reverse().findIndex((t) => t.name === name && t.status === "running")
+                  return fromEnd === -1 ? -1 : prev.length - 1 - fromEnd
+                })()
               if (idx === -1) return prev
               const next = [...prev]
               next[idx] = { ...next[idx], status: ok ? "ok" : "error", result }
@@ -762,7 +768,7 @@ export function AIAssistantPage() {
               happening" cue than the per-message ThinkingDots/spinners alone,
               visible even while scrolled away from the bottom of a long reply. */}
           <div className="relative h-0.5 shrink-0 overflow-hidden bg-transparent">
-            {streaming && (
+            {isStreamingHere && (
               <div className="absolute inset-0 bg-[var(--bg-muted)]">
                 <div className="absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-brand-500 to-transparent" />
               </div>
@@ -978,12 +984,19 @@ export function AIAssistantPage() {
                 rows={1}
                 className="max-h-32 flex-1 resize-none bg-transparent py-1.5 text-sm outline-none"
               />
-              {streaming ? (
+              {isStreamingHere ? (
                 <Button variant="secondary" className="shrink-0" size="icon" onClick={stop} title="Stop generating" aria-label="Stop generating">
                   <Square className="h-3.5 w-3.5" />
                 </Button>
               ) : (
-                <Button className="shrink-0" size="icon" onClick={() => send()} disabled={!input.trim()} title="Send" aria-label="Send message">
+                <Button
+                  className="shrink-0"
+                  size="icon"
+                  onClick={() => send()}
+                  disabled={!input.trim() || streaming}
+                  title={streaming ? "Another conversation is still answering" : "Send"}
+                  aria-label="Send message"
+                >
                   <Send className="h-3.5 w-3.5" />
                 </Button>
               )}

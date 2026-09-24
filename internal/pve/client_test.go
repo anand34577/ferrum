@@ -121,4 +121,16 @@ func TestFingerprintPinning(t *testing.T) {
 	if _, err := none.Version(context.Background()); err == nil {
 		t.Fatal("expected self-signed cert to fail verification when no pin and no skip-verify")
 	}
+
+	// The console's raw WebSocket dial must enforce the same pin.
+	raw := srv.Certificate().Raw
+	if err := c.WSTLSConfig().VerifyPeerCertificate([][]byte{raw}, nil); err != nil {
+		t.Errorf("WSTLSConfig rejected the pinned cert: %v", err)
+	}
+	if err := wrong.WSTLSConfig().VerifyPeerCertificate([][]byte{raw}, nil); err == nil {
+		t.Error("WSTLSConfig accepted a cert that doesn't match the pin")
+	}
+	if cfg := none.WSTLSConfig(); cfg.InsecureSkipVerify {
+		t.Error("WSTLSConfig skips verification with no pin and no skip-verify")
+	}
 }

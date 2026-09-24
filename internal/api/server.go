@@ -228,7 +228,22 @@ func (s *Server) Router() http.Handler {
 	r.Use(s.requestLogger)
 	r.Use(s.cors)
 	r.Use(s.securityHeaders)
-	r.Use(middleware.Timeout(30 * time.Second))
+	// Long-lived streams are exempt. /ai/chat sets its own 4-minute bound,
+	// and under this timeout its context would be canceled at 30s, hiding a
+	// later client disconnect (Stop). /events would be cut every 30s,
+	// dropping any event published during the reconnect gap. Both end on
+	// client disconnect or server shutdown (BaseContext, cmd/ferrum/main.go).
+	timeout := middleware.Timeout(30 * time.Second)
+	r.Use(func(next http.Handler) http.Handler {
+		withTimeout := timeout(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/ai/chat" || r.URL.Path == "/api/v1/events" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			withTimeout.ServeHTTP(w, r)
+		})
+	})
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Cross-origin request check — see originCheck. Mounted on the whole
@@ -748,13 +763,13 @@ func (s *Server) Router() http.Handler {
 			r.Route("/ssh", func(r chi.Router) {
 				r.Use(s.requireAdmin)
 				r.Post("/sessions", s.openSSHShell)
+				r.Delete("/known-hosts", s.forgetSSHHostKey)
 			})
 
 			// Server-Sent Events stream of bus activity (alert
 			// triggers/resolutions, connection health, ...) — see
 			// internal/api/events.go. The handler blocks on r.Context().Done()
-			// for its lifetime; the router-wide middleware.Timeout above only
-			// cancels that context, it doesn't itself cut the connection.
+			// for its lifetime; it's exempt from the router-wide timeout.
 			r.Get("/events", s.streamEvents)
 
 			r.Route("/settings/webhooks", func(r chi.Router) {

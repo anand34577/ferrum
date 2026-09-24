@@ -102,13 +102,14 @@ export function ClusterPage() {
                 <TabsTrigger value="access">Access</TabsTrigger>
               </TabsList>
               <TabsContent value="sdn">
-                <SDNPanel base={base} connId={activeConnId} />
+                {/* Keyed per connection so selections/forms never carry over to another cluster. */}
+                <SDNPanel key={activeConnId} base={base} connId={activeConnId} />
               </TabsContent>
               <TabsContent value="nodes">
-                <ClusterNodesPanel base={base} connId={activeConnId} />
+                <ClusterNodesPanel key={activeConnId} base={base} connId={activeConnId} />
               </TabsContent>
               <TabsContent value="access">
-                <AccessPanel base={base} connId={activeConnId} />
+                <AccessPanel key={activeConnId} base={base} connId={activeConnId} />
               </TabsContent>
             </Tabs>
           )}
@@ -128,7 +129,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
   const [selectedVnet, setSelectedVnet] = useState<string | null>(null)
   const subnetsQuery = useQuery({
     queryKey: ["sdn-subnets", connId, selectedVnet],
-    queryFn: () => api.get<SDNSubnet[]>(`${base}/cluster/sdn/vnets/${selectedVnet}/subnets`),
+    queryFn: () => api.get<SDNSubnet[]>(`${base}/cluster/sdn/vnets/${encodeURIComponent(selectedVnet!)}/subnets`),
     enabled: !!selectedVnet,
   })
 
@@ -186,7 +187,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
 
   const [subnetForm, setSubnetForm] = useState({ cidr: "", gateway: "" })
   const createSubnet = useMutation({
-    mutationFn: () => api.post(`${base}/cluster/sdn/vnets/${selectedVnet}/subnets`, { cidr: subnetForm.cidr, gateway: subnetForm.gateway || undefined }),
+    mutationFn: () => api.post(`${base}/cluster/sdn/vnets/${encodeURIComponent(selectedVnet!)}/subnets`, { cidr: subnetForm.cidr, gateway: subnetForm.gateway || undefined }),
     onSuccess: () => {
       toast.success("Subnet created — Apply to activate it")
       setSubnetForm({ cidr: "", gateway: "" })
@@ -195,7 +196,7 @@ function SDNPanel({ base, connId }: { base: string; connId: string }) {
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to create subnet"),
   })
   const deleteSubnet = useMutation({
-    mutationFn: (subnet: string) => api.delete(`${base}/cluster/sdn/vnets/${selectedVnet}/subnets?subnet=${encodeURIComponent(subnet)}`),
+    mutationFn: (subnet: string) => api.delete(`${base}/cluster/sdn/vnets/${encodeURIComponent(selectedVnet!)}/subnets?subnet=${encodeURIComponent(subnet)}`),
     onSuccess: () => {
       toast.success("Subnet deleted")
       queryClient.invalidateQueries({ queryKey: ["sdn-subnets", connId, selectedVnet] })
