@@ -1,5 +1,7 @@
 # Ferrum
 
+<p align="center"><img src="docs/screenshots/hero.png" alt="Ferrum — one dashboard for every Proxmox host you run"></p>
+
 Fleet control for Proxmox VE — a single dashboard for every cluster and standalone node you run, with live inventory, dashboards, backups, HA, firewall, alerting, and more.
 
 - **Repository:** https://github.com/anand34577/ferrum
@@ -22,55 +24,67 @@ Fleet control for Proxmox VE — a single dashboard for every cluster and standa
 
 A populated fleet — 3 connections, 6 nodes, 26 VMs/LXCs across two clusters and a standalone host, with Ceph and NFS storage. Click any thumbnail for the full-size image.
 
+<p align="center"><a href="docs/screenshots/dark-light.png"><img src="docs/screenshots/dark-light.png" alt="Fleet overview in dark and light mode"></a><br><sub><b>Dark &amp; light</b> — every look ships both, with your choice of accent color</sub></p>
+
 <table>
 <tr>
 <td width="50%">
-<a href="docs/screenshots/dashboard.png"><img src="docs/screenshots/dashboard.png" alt="Fleet overview dashboard"></a>
+<a href="docs/screenshots/dashboard.png"><img src="docs/screenshots/dashboard.png" alt="Fleet overview"></a>
 <p align="center"><sub><b>Fleet overview</b></sub></p>
 </td>
 <td width="50%">
-<a href="docs/screenshots/inventory.png"><img src="docs/screenshots/inventory.png" alt="Inventory — nodes and guests"></a>
-<p align="center"><sub><b>Inventory</b></sub></p>
+<a href="docs/screenshots/custom-dashboard.png"><img src="docs/screenshots/custom-dashboard.png" alt="Custom dashboards — drag-and-drop widgets"></a>
+<p align="center"><sub><b>Custom dashboards — drag-and-drop widgets</b></sub></p>
 </td>
 </tr>
 <tr>
 <td width="50%">
-<a href="docs/screenshots/topology.png"><img src="docs/screenshots/topology.png" alt="Topology graph"></a>
-<p align="center"><sub><b>Topology</b></sub></p>
+<a href="docs/screenshots/inventory.png"><img src="docs/screenshots/inventory.png" alt="Inventory — nodes, VMs & LXCs"></a>
+<p align="center"><sub><b>Inventory — nodes, VMs & LXCs</b></sub></p>
 </td>
 <td width="50%">
-<a href="docs/screenshots/storage.png"><img src="docs/screenshots/storage.png" alt="Storage pools and Ceph health"></a>
-<p align="center"><sub><b>Storage</b></sub></p>
+<a href="docs/screenshots/topology.png"><img src="docs/screenshots/topology.png" alt="Topology map"></a>
+<p align="center"><sub><b>Topology map</b></sub></p>
 </td>
 </tr>
 <tr>
 <td width="50%">
-<a href="docs/screenshots/backups.png"><img src="docs/screenshots/backups.png" alt="Backup jobs and replication"></a>
+<a href="docs/screenshots/ai-assistant.png"><img src="docs/screenshots/ai-assistant.png" alt="AI Assistant — any OpenAI-compatible provider"></a>
+<p align="center"><sub><b>AI Assistant — any OpenAI-compatible provider</b></sub></p>
+</td>
+<td width="50%">
+<a href="docs/screenshots/alerts.png"><img src="docs/screenshots/alerts.png" alt="Alerting & silencing"></a>
+<p align="center"><sub><b>Alerting & silencing</b></sub></p>
+</td>
+</tr>
+<tr>
+<td width="50%">
+<a href="docs/screenshots/storage.png"><img src="docs/screenshots/storage.png" alt="Storage pools & Ceph"></a>
+<p align="center"><sub><b>Storage pools & Ceph</b></sub></p>
+</td>
+<td width="50%">
+<a href="docs/screenshots/backups.png"><img src="docs/screenshots/backups.png" alt="Backups & replication"></a>
 <p align="center"><sub><b>Backups & replication</b></sub></p>
 </td>
+</tr>
+<tr>
 <td width="50%">
-<a href="docs/screenshots/high-availability.png"><img src="docs/screenshots/high-availability.png" alt="HA resources and groups"></a>
+<a href="docs/screenshots/high-availability.png"><img src="docs/screenshots/high-availability.png" alt="High availability"></a>
 <p align="center"><sub><b>High availability</b></sub></p>
 </td>
-</tr>
-<tr>
 <td width="50%">
-<a href="docs/screenshots/firewall.png"><img src="docs/screenshots/firewall.png" alt="Cluster firewall rules"></a>
+<a href="docs/screenshots/firewall.png"><img src="docs/screenshots/firewall.png" alt="Firewall"></a>
 <p align="center"><sub><b>Firewall</b></sub></p>
 </td>
-<td width="50%">
-<a href="docs/screenshots/settings-appearance.png"><img src="docs/screenshots/settings-appearance.png" alt="Appearance settings — Enterprise, Proxmox-native, and Terminal look & feel"></a>
-<p align="center"><sub><b>Look & feel</b> — Enterprise / Proxmox-native / Terminal</sub></p>
-</td>
 </tr>
 <tr>
 <td width="50%">
-<a href="docs/screenshots/connections.png"><img src="docs/screenshots/connections.png" alt="Connections page"></a>
+<a href="docs/screenshots/connections.png"><img src="docs/screenshots/connections.png" alt="Connections"></a>
 <p align="center"><sub><b>Connections</b></sub></p>
 </td>
 <td width="50%">
-<a href="docs/screenshots/setup.png"><img src="docs/screenshots/setup.png" alt="First-run admin setup"></a>
-<p align="center"><sub><b>First-run setup</b></sub></p>
+<a href="docs/screenshots/settings-appearance.png"><img src="docs/screenshots/settings-appearance.png" alt="12 look-and-feel presets"></a>
+<p align="center"><sub><b>12 look-and-feel presets</b></sub></p>
 </td>
 </tr>
 </table>
