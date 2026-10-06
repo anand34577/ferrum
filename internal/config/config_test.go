@@ -26,7 +26,6 @@ var ferrumEnvVars = []string{
 	"FERRUM_OIDC_CLIENT_ID",
 	"FERRUM_OIDC_CLIENT_SECRET",
 	"FERRUM_OIDC_REDIRECT_URL",
-	"FERRUM_NEEDLE_BIN",
 }
 
 func clearFerrumEnv(t *testing.T) {
@@ -103,7 +102,6 @@ oidc:
   clientId: ferrum
   clientSecret: oidc-client-secret
   redirectUrl: https://ferrum.example.com/api/v1/auth/oidc/callback
-needleBinPath: /usr/local/bin/needle
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -136,9 +134,6 @@ needleBinPath: /usr/local/bin/needle
 		cfg.OIDC.ClientSecret != "oidc-client-secret" ||
 		cfg.OIDC.RedirectURL != "https://ferrum.example.com/api/v1/auth/oidc/callback" {
 		t.Errorf("oidc = %+v", cfg.OIDC)
-	}
-	if cfg.NeedleBinPath != "/usr/local/bin/needle" {
-		t.Errorf("needleBinPath = %q", cfg.NeedleBinPath)
 	}
 }
 

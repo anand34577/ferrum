@@ -24,7 +24,6 @@ import (
 	"ferrum/internal/digest"
 	"ferrum/internal/events"
 	"ferrum/internal/mcp"
-	"ferrum/internal/needle"
 	"ferrum/internal/notify"
 	"ferrum/internal/pbs"
 	"ferrum/internal/poller"
@@ -39,7 +38,6 @@ type Server struct {
 	secrets     *secrets.Box
 	connections *connections.Resolver
 	mcp         *mcp.Server
-	needle      *needle.Manager
 	options     ServerOptions
 	webFS       fs.FS
 
@@ -110,9 +108,6 @@ type ServerOptions struct {
 	// BehindProxy enables trusting X-Forwarded-For / X-Forwarded-Proto
 	// headers set by the reverse proxy in front of Ferrum.
 	BehindProxy bool
-	// NeedleBinPath locates the optional Needle 2 CLI binary backing the
-	// built-in AI provider (see internal/needle). Empty disables it.
-	NeedleBinPath string
 }
 
 // SetOIDC swaps in an SSO client built from the current admin-configured (or
@@ -172,7 +167,6 @@ func New(db *store.DB, authSvc *auth.Service, secretBox *secrets.Box, opts Serve
 		notify:      notify.New(notify.Settings{}),
 		logins:      newLoginLimiter(),
 		aiChatLimit: newRequestLimiter(aiChatMaxPerMinute, time.Minute),
-		needle:      needle.NewManager(opts.NeedleBinPath),
 	}
 	s.mcp = mcp.New(resolver, db,
 		func(ctx context.Context, userID, action, category, target string) {
@@ -180,26 +174,7 @@ func New(db *store.DB, authSvc *auth.Service, secretBox *secrets.Box, opts Serve
 		},
 		s.recordToolCall,
 	)
-	// Lets internal/needle render its --tools file from the same tool
-	// catalog the MCP server and AI Assistant already share, without
-	// needing to import internal/mcp itself (see needle.SetToolCatalog).
-	needle.SetToolCatalog(func() []needle.ToolDef {
-		defs := mcp.ToolDefinitions()
-		out := make([]needle.ToolDef, len(defs))
-		for i, t := range defs {
-			out[i] = needle.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
-		}
-		return out
-	})
-	s.seedBuiltinNeedleProvider(context.Background())
 	return s
-}
-
-// Close releases resources the server owns beyond the DB connection (which
-// callers already close separately) — currently just the Needle subprocess,
-// if one was ever started. Called once at shutdown (see cmd/ferrum/main.go).
-func (s *Server) Close() {
-	s.needle.Close()
 }
 
 // cookieSecure reports whether the session cookie for this request should
@@ -222,7 +197,7 @@ func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	if s.options.BehindProxy {
-		r.Use(middleware.RealIP)
+		r.Use(forwardedFor)
 	}
 	r.Use(middleware.Recoverer)
 	r.Use(s.requestLogger)

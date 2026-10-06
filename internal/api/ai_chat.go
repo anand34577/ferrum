@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"ferrum/internal/mcp"
-	"ferrum/internal/needle"
 )
 
 // systemPrompt scopes the assistant to Ferrum/Proxmox operations — it is
@@ -155,7 +154,7 @@ type reasoningEnvelope struct {
 // when the provider reports them (every OpenAI-compatible runtime that
 // honors stream_options.include_usage, or any non-streaming response's
 // "usage" object), estimated (Estimated=true, ~4 chars/token) when it
-// doesn't — Needle in particular has no token accounting of its own.
+// doesn't.
 type usageInfo struct {
 	PromptTokens     int     `json:"promptTokens"`
 	CompletionTokens int     `json:"completionTokens"`
@@ -201,8 +200,7 @@ type toolRoundResult struct {
 }
 
 // formatToolRoundAsAnswer turns a batch of tool results into a readable
-// markdown summary, for providers — Needle chief among them, see
-// internal/needle's doc comment — that call tools but never narrate the
+// markdown summary, for providers that call tools but never narrate the
 // outcome in prose. It knows nothing about what any particular tool means:
 // it just renders each tool's already-JSON result as a bullet list, so a
 // newly added tool is summarized for free.
@@ -412,8 +410,7 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 	var totalPromptTokens, totalCompletionTokens int
 	var haveRealUsage bool
 	// lastToolRound holds the most recent batch of tool calls/results — used
-	// as a fallback answer when a provider (Needle, in practice: it's a pure
-	// tool-router with no narrative output of its own) finishes calling tools
+	// as a fallback answer when a provider finishes calling tools
 	// but comes back with nothing to say. Overwritten each round rather than
 	// accumulated across the whole conversation, so it only ever describes
 	// "what just happened" going into the empty final reply.
@@ -507,7 +504,7 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 			delete(respMsg, "usage")
 		}
 
-		// Non-streaming providers (Needle) can only hand back reasoning once
+		// Non-streaming providers can only hand back reasoning once
 		// the whole response is in; a real streaming provider's own
 		// "reasoning_content" deltas (see parseChatCompletionStream) are
 		// already forwarded live and never land in respMsg, so this is a
@@ -561,8 +558,7 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 
 	if finalContent == "" && !ranOutOfIterations && len(lastToolRound) > 0 {
 		// The model completed its tool calls and then had nothing further to
-		// say — expected from Needle (a tool-router, not a chat model; see
-		// internal/needle's doc comment) and possible from any provider.
+		// say — possible from any provider, especially small local models.
 		// Rather than the misleading "ran out of tool calls" message below
 		// (nothing ran out — this finished successfully), turn the tool
 		// results themselves into the answer.
@@ -610,7 +606,7 @@ func (s *Server) aiChat(w http.ResponseWriter, r *http.Request) {
 	}
 	// No real streaming happened for this content — either it's the
 	// synthesized "ran out of iterations"/leak-fallback message, or it came
-	// from a provider that doesn't stream (Needle) or fell back to a plain
+	// from a provider that doesn't stream or fell back to a plain
 	// JSON response. Type it out for a live feel rather than dumping it all
 	// at once.
 	streamText(w, flusher, finalContent)
@@ -663,14 +659,7 @@ const leakPrefixWindow = 96
 // whether any of its content was already flushed live to the browser as it
 // arrived (see streamedLive below).
 //
-// baseURL == needle.BaseURL routes through the built-in Needle provider
-// (internal/needle) instead of making a real HTTP call — see that
-// package's doc comment for why it needs its own request/response shape;
-// Needle has no token-streaming protocol of its own, so its full response
-// always comes back with streamedLive == false and the caller types it out
-// afterward (see streamText).
-//
-// Every other provider is asked to stream ("stream": true) so a long final
+// The provider is asked to stream ("stream": true) so a long final
 // answer reaches the browser token-by-token as the model actually produces
 // it, instead of the old behavior of waiting for the entire response and
 // then just simulating a typing effect. Content is buffered only up to
@@ -684,11 +673,6 @@ func (s *Server) callChatCompletion(
 	ctx context.Context, w http.ResponseWriter, flusher http.Flusher,
 	baseURL, apiKey, model string, messages []map[string]any, tools []map[string]any, allowLeakCheck bool, reasoningEffort string, thinkingHint bool,
 ) (respMsg map[string]any, status int, streamedLive bool, err error) {
-	if needle.IsBuiltin(baseURL) {
-		respMsg, status, err = s.needle.ChatCompletion(ctx, messages, tools)
-		return respMsg, status, false, err
-	}
-
 	// stream_options.include_usage asks any OpenAI-compatible runtime that
 	// supports it to append one final chunk carrying real prompt/completion
 	// token counts (see parseChatCompletionStream) — ignored harmlessly by
@@ -964,7 +948,7 @@ func parseChatCompletionStream(body io.Reader, w http.ResponseWriter, flusher ht
 	return respMsg, streamedLive, nil
 }
 
-// streamReasoningText "types out" a non-streaming provider's (Needle's)
+// streamReasoningText "types out" a non-streaming provider's
 // reasoning text via reasoningEnvelope chunks — same idea as streamText, but
 // without streamText's own trailing [DONE]: this can run mid-loop, before
 // any tool calls or the final answer, so the SSE stream must stay open.
@@ -980,8 +964,7 @@ func streamReasoningText(w http.ResponseWriter, flusher http.Flusher, text strin
 
 // streamText "types out" text to the client in small chunks using the same
 // OpenAI streaming-chunk shape the frontend already parses — used only for
-// text that was never actually streamed by a provider: Needle's response
-// (no streaming protocol of its own), a provider that fell back to a plain
+// text that was never actually streamed by a provider: a provider that fell back to a plain
 // JSON response, or a message Ferrum synthesized itself (the tool-limit or
 // leaked-tool-call fallback text above).
 func streamText(w http.ResponseWriter, flusher http.Flusher, text string) {

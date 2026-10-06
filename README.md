@@ -14,7 +14,7 @@ Fleet control for Proxmox VE — a single dashboard for every cluster and standa
 - **Storage & backups** — pool usage and Ceph health across every connection, backup job status and replication, and PBS remote integration alongside native PVE storage.
 - **High availability, firewall & SDN** — HA groups/resources, cluster and per-node firewall rules, and SDN zones/VNets/subnets, all per connection.
 - **Alerting & automation** — threshold-based alerts (CPU/memory/disk/guest), config drift detection, guest lifecycle policies, capacity forecasting, a fleet health score, scheduled health-digest emails, and Terraform/Ansible inventory export.
-- **Integrations** — outbound webhooks for real-time events, a REST API and MCP server (scoped API keys, so any MCP-capable agent or script can drive Ferrum), and a built-in AI Assistant that can use any OpenAI-compatible provider — including a zero-config local model (Needle 2) with no API key or network required.
+- **Integrations** — outbound webhooks for real-time events, a REST API and MCP server (scoped API keys, so any MCP-capable agent or script can drive Ferrum), and a built-in AI Assistant that can use any OpenAI-compatible provider.
 - **Access & auditing** — user management with role labels (effective access control is admin vs non-admin), optional OIDC single sign-on, session/certificate monitoring, and a full audit log of every mutating action across the UI, REST API, and MCP.
 - **A dozen look-and-feel presets** — Enterprise, Proxmox-native, Terminal, Glass Flight Deck, Midnight, Paper, Glassmorphism, Neumorphism, Brutalist, Solarized, High Contrast, and Aurora — each with light/dark and a choice of accent colors.
 
@@ -177,20 +177,9 @@ Copy `config.example.yaml` to `config.yaml` and adjust as needed, or set the equ
 
 Everything else — notifications, SSO details, security policy, system settings, AI providers, and the REST API/MCP enable switches below — is configured from the admin **Settings** UI once Ferrum is running, not from environment variables.
 
-### Built-in LLM (Needle 2)
+### AI Assistant providers
 
-The AI Assistant and MCP tool-calling loop can use any OpenAI-chat-completions-compatible provider (OpenAI, Ollama, LM Studio, LocalAI, OpenRouter, ...) configured under **Settings > AI Providers**. There's also an optional zero-config, no-API-key, fully local option backed by [Needle 2](https://huggingface.co/Cactus-Compute/needle2) — a small (45M-parameter) tool-calling model that runs as a self-contained CLI binary with no GPU and no network access required at inference time.
-
-Needle 2 is Apache-2.0 licensed, so on **Windows, Linux, and macOS (amd64 or arm64)** Ferrum ships its official CLI binary baked into the `ferrum` binary itself (`internal/needle/bundled_*.go`, one per platform via `go:embed`) — nothing to download, nothing to configure. On a fresh install (no AI provider configured yet), Ferrum extracts it to a cache file and registers it automatically as the default assistant the first time it starts — no manual "Add provider" step needed. If you've already configured a provider, or want to add/re-add it yourself, use **Settings > AI Providers** > "Add provider" > the **Needle 2 (built-in, local)** preset.
-
-On any other platform (32-bit, RISC-V, Windows/ARM64, ...) there's no bundled binary — Ferrum still never fetches executable content from the network on its own. To enable it there:
-
-1. Download the `needle` CLI binary for your platform from the [Needle 2 files](https://huggingface.co/Cactus-Compute/needle2/tree/main).
-2. Point Ferrum at it: set `FERRUM_NEEDLE_BIN=/path/to/needle` (or `needleBinPath` in `config.yaml`) before starting Ferrum. This also overrides the bundled binary on a supported platform, if you'd rather run a different build.
-
-Ferrum starts the binary itself (as a local subprocess, `127.0.0.1`-only) the first time it's used, and stops it on shutdown. If no binary is bundled for the platform and `FERRUM_NEEDLE_BIN` isn't set (or doesn't exist), this provider simply isn't usable — every other provider is unaffected.
-
-**Troubleshooting on small ARM boards (Raspberry Pi and similar SBCs):** Needle does a one-time "tool retrieval" pass over Ferrum's full tool catalog (~60 tools) the first time it's used, which briefly uses noticeably more memory and CPU than steady-state chat — Ferrum already waits up to 60s for that first startup. On a board with very little RAM this pass can get the subprocess killed by the kernel's OOM-killer instead; the error will say `needle process exited: signal: killed`. If you hit that, set `FERRUM_NEEDLE_MAX_TOOLS=<n>` to cap how many tools Needle is given (e.g. `10` keeps just the original read-only lookup tools), trading away the newer create/manage tools for a much lighter embedding pass. If it still fails, the board likely doesn't have enough RAM to run even this small a model reliably — use a real OpenAI-compatible provider instead (a cheap/free hosted API, or Ollama on a separate, beefier machine).
+The AI Assistant and MCP tool-calling loop use any OpenAI-chat-completions-compatible provider (OpenAI, Ollama, LM Studio, LocalAI, OpenRouter, ...) configured under **Settings > AI Providers**. For a fully local setup, run Ollama or LM Studio and pick its preset.
 
 ## API access, MCP, and audit logging
 

@@ -59,13 +59,6 @@ type Config struct {
 	DB     DBConfig     `yaml:"db"`
 	Secret string       `yaml:"secret"`
 	OIDC   OIDCConfig   `yaml:"oidc"`
-	// NeedleBinPath locates the optional Needle 2 CLI binary (see
-	// internal/needle) that backs the built-in, no-API-key AI provider.
-	// Bootstrap-level like the rest of this struct: it names a file on disk
-	// Ferrum needs before it can do anything with it. Left blank (the
-	// default) means the built-in provider is simply unavailable — nothing
-	// else depends on it.
-	NeedleBinPath string `yaml:"needleBinPath"`
 }
 
 func defaults() Config {
@@ -178,8 +171,5 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("FERRUM_OIDC_REDIRECT_URL"); v != "" {
 		cfg.OIDC.RedirectURL = v
-	}
-	if v := os.Getenv("FERRUM_NEEDLE_BIN"); v != "" {
-		cfg.NeedleBinPath = v
 	}
 }

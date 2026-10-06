@@ -51,17 +51,6 @@ type RRDPoint struct {
 	Extra map[string]float64 `json:"extra,omitempty"`
 }
 
-// rrdKnownKeys maps the JSON column names we decode into typed fields. The
-// per-point decode keeps everything else in Extra.
-var rrdKnownKeys = map[string]bool{
-	"time": true, "cpu": true, "maxcpu": true, "mem": true, "maxmem": true,
-	"disk": true, "maxdisk": true, "netin": true, "netout": true,
-	"diskread": true, "diskwrite": true, "swap": true, "maxswap": true,
-	"iowait": true, "loadavg": true,
-	"pressurecpusome": true, "pressureiosome": true, "pressureiofull": true,
-	"pressurememorysome": true, "pressurememoryfull": true,
-}
-
 // nodeRRDAliases remaps node-only RRD column names onto the same typed
 // fields guest RRD already uses for the identical stat. PVE's node rrddata
 // uses a different schema than guest (qemu/lxc) rrddata: memtotal/memused

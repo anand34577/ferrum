@@ -274,7 +274,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </button>
             {/* Mirrors the real SSE lifecycle (lib/sse) — the fleet dashboard
                 must not claim "live" while the stream is down. */}
-            <div className="hidden items-center gap-2.5 rounded-sm border border-[var(--border)] bg-[var(--bg-surface)]/90 px-3 py-1 text-xs font-medium text-[var(--text-muted)] backdrop-blur-xs lg:flex" role="status">
+            <div className="hidden items-center gap-2.5 rounded-full border border-[var(--border)] bg-[var(--bg-surface)]/90 px-3 py-1 text-xs font-medium text-[var(--text-muted)] backdrop-blur-xs lg:flex" role="status">
               <StatusDot
                 status={sseStatus === "open" ? "ok" : sseStatus === "connecting" ? "warn" : "error"}
                 pulse={sseStatus === "open"}
@@ -300,7 +300,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1 transition-colors hover:bg-[var(--bg-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
                 aria-label="Account menu"
               >
-                <span className="flex h-7 w-7 items-center justify-center rounded-md border border-brand-700 bg-brand-600 font-mono text-xs font-bold text-white" aria-hidden>
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-brand-400 to-brand-700 font-mono text-xs font-bold text-white shadow-sm ring-2 ring-[var(--bg-surface)]" aria-hidden>
                   {initial}
                 </span>
                 <span className="hidden text-sm font-medium sm:block">{user?.username}</span>

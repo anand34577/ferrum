@@ -414,9 +414,6 @@ func (c *Client) post(ctx context.Context, path string, form url.Values, out any
 func (c *Client) put(ctx context.Context, path string, form url.Values, out any) error {
 	return c.do(ctx, http.MethodPut, path, nil, form, out)
 }
-func (c *Client) delete(ctx context.Context, path string, query url.Values, out any) error {
-	return c.do(ctx, http.MethodDelete, path, query, nil, out)
-}
 
 // Version reports the PBS server's version string, and doubles as a
 // connectivity/credential check (mirrors pve.Client.Version's role in

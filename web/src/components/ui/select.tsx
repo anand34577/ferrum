@@ -12,7 +12,7 @@ export function SelectTrigger({ className, children, ...props }: ComponentProps<
       className={cn(
         "flex h-9 w-full items-center justify-between gap-2 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 font-mono text-sm transition-colors",
         "hover:border-[var(--border-strong)] data-[placeholder]:text-[var(--text-faint)]",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:cursor-not-allowed disabled:opacity-50",
+        "focus-visible:outline-none focus-visible:border-[var(--ring)] focus-visible:ring-[3px] focus-visible:ring-[color-mix(in_oklab,var(--ring)_25%,transparent)] disabled:cursor-not-allowed disabled:opacity-50",
         className,
       )}
       {...props}

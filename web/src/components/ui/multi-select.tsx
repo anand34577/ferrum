@@ -57,7 +57,7 @@ export function MultiSelect({ options, selected, onChange, allLabel, label, clas
       <DropdownMenuTrigger
         className={cn(
           "flex h-9 items-center justify-between gap-2 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 text-sm shadow-xs transition-colors",
-          "hover:border-[var(--border-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
+          "hover:border-[var(--border-strong)] focus-visible:outline-none focus-visible:border-[var(--ring)] focus-visible:ring-[3px] focus-visible:ring-[color-mix(in_oklab,var(--ring)_25%,transparent)]",
           "data-[state=open]:border-[var(--border-strong)]",
           className,
         )}

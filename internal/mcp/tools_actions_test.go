@@ -9,8 +9,8 @@ import (
 )
 
 // validSchemaPropTypes are the JSON-schema type strings buildSchema (and
-// tools.go's schemaRequired/withIntProps) may ever emit. Needle's --tools
-// file is generated straight from this schema with no further validation,
+// tools.go's schemaRequired/withIntProps) may ever emit. AI tool definitions
+// are generated straight from this schema with no further validation,
 // so a typo here (e.g. "object" for what's actually a JSON array) reaches a
 // real LLM's tool call instead of failing anywhere in Go — this test is the
 // only thing that catches it.

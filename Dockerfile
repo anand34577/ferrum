@@ -31,14 +31,8 @@ ARG COMMIT=none
 ARG DATE=unknown
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH     go build -trimpath -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" -o /out/ferrum ./cmd/ferrum
 
-# "base" (not "static"): Ferrum's own binary is CGO_ENABLED=0/static and
-# would run fine on "static", but the bundled Needle 2 CLI (internal/needle)
-# is a dynamically-linked glibc binary (needs libc.so.6/libm.so.6/
-# libpthread.so.0/libdl.so.2 and the glibc dynamic linker) — "static" ships
-# no libc at all, so spawning that subprocess fails outright in this image.
-# "base" includes glibc, fixing that, while still carrying no shell/package
-# manager.
-FROM gcr.io/distroless/base-debian12
+# Static Go binary (CGO_ENABLED=0) � no libc needed.
+FROM gcr.io/distroless/static-debian12
 LABEL org.opencontainers.image.source="https://github.com/anand34577/ferrum" \
       org.opencontainers.image.description="Ferrum — a fleet-control UI for Proxmox VE" \
       org.opencontainers.image.licenses="MIT"

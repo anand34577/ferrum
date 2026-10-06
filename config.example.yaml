@@ -31,14 +31,6 @@ db:
 # secret is generated and persisted next to the SQLite file on first run —
 # fine for a single-node SQLite install. FERRUM_SECRET
 
-# needleBinPath: path to a Needle 2 (https://huggingface.co/Cactus-Compute/needle2)
-# CLI binary, downloaded separately by you — Ferrum does not fetch it — to
-# back an optional zero-config, no-API-key, fully local AI provider. Left
-# blank (the default), that provider is simply unavailable; every other
-# provider configured from Settings > AI Providers is unaffected. See
-# README "Built-in LLM (Needle 2)". FERRUM_NEEDLE_BIN
-needleBinPath: ""
-
 # oidc: optional single sign-on via any standard OpenID Connect provider
 # (Keycloak, Authentik, Entra ID, Okta, ...). Local username/password login
 # keeps working regardless — this adds a "Continue with ..." button next to

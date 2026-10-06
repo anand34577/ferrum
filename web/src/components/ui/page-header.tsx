@@ -42,7 +42,7 @@ export function PageHeader({ title, description, actions, icon: Icon, back, onRe
         )}
         <h1 className="panel-label flex items-center gap-3 text-2xl leading-tight tracking-tight text-[var(--text)]">
           {Icon && (
-            <div className="corner-frame flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-brand-700 bg-[color-mix(in_oklab,var(--color-brand-500)_12%,transparent)] text-brand-500">
+            <div className="corner-frame flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[color-mix(in_oklab,var(--color-brand-500)_35%,transparent)] bg-gradient-to-br from-[color-mix(in_oklab,var(--color-brand-400)_22%,transparent)] to-[color-mix(in_oklab,var(--color-brand-600)_8%,transparent)] text-brand-500 shadow-sm">
               <Icon className="h-5 w-5" aria-hidden />
             </div>
           )}

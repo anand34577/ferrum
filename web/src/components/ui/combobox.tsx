@@ -62,7 +62,7 @@ export function Combobox({
         className={cn(
           "flex h-9 w-full items-center justify-between gap-2 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 font-mono text-sm transition-colors",
           "hover:border-[var(--border-strong)] disabled:cursor-not-allowed disabled:opacity-50",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
+          "focus-visible:outline-none focus-visible:border-[var(--ring)] focus-visible:ring-[3px] focus-visible:ring-[color-mix(in_oklab,var(--ring)_25%,transparent)]",
           className,
         )}
       >
@@ -84,7 +84,7 @@ export function Combobox({
               onChange={(e) => setSearch(e.target.value)}
               placeholder={searchPlaceholder}
               aria-label={searchPlaceholder}
-              className="h-8 w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] pl-8 pr-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+              className="h-8 w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] pl-8 pr-2 text-xs outline-none focus-visible:border-[var(--ring)] focus-visible:ring-[3px] focus-visible:ring-[color-mix(in_oklab,var(--ring)_25%,transparent)]"
               onKeyDown={(e) => {
                 // Radix's roving-focus/typeahead on the menu items would
                 // otherwise swallow every keystroke meant for this input —

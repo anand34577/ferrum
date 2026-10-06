@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -15,92 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-
-	"ferrum/internal/needle"
 )
-
-// seedBuiltinNeedleProvider makes sure the built-in Needle 2 provider exists
-// and is enabled on every startup where a binary is available for the
-// running platform (bundled — see internal/needle's go:embed — or
-// FERRUM_NEEDLE_BIN), and — only if nothing else has been chosen yet — makes
-// its model the initial default so a fresh install has a working assistant
-// with zero setup. It is idempotent (matches the existing row by
-// base_url = needle.BaseURL rather than inserting a duplicate on every
-// restart). It deliberately does NOT re-assert the default on every restart
-// once an admin has picked one: doing so silently demoted an explicitly
-// configured external provider (e.g. OpenAI) back to the local model on
-// every server restart, which is not what "built-in fallback" should mean.
-func (s *Server) seedBuiltinNeedleProvider(ctx context.Context) {
-	if !s.needle.Available() {
-		return
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-
-	var providerID string
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM ai_providers WHERE base_url = ?`, needle.BaseURL).Scan(&providerID)
-	switch {
-	case err == sql.ErrNoRows:
-		var dismissed string
-		if err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, needleProviderDismissedKey).Scan(&dismissed); err == nil && dismissed == "1" {
-			return // an admin explicitly deleted it — stay deleted across restarts
-		}
-		providerID = uuid.NewString()
-		if _, err := s.db.ExecContext(ctx, `
-			INSERT INTO ai_providers (id, name, base_url, api_key_enc, model, is_enabled, is_default, created_at, updated_at)
-			VALUES (?, 'Needle 2 (built-in, local)', ?, NULL, '', 1, 0, ?, ?)`,
-			providerID, needle.BaseURL, now, now,
-		); err != nil {
-			slog.Error("seeding built-in needle provider", "error", err)
-			return
-		}
-	case err != nil:
-		slog.Error("looking up built-in needle provider", "error", err)
-		return
-	default:
-		// Already registered from a previous run — make sure it's still
-		// enabled even if an operator had switched it off.
-		if _, err := s.db.ExecContext(ctx, `UPDATE ai_providers SET is_enabled = 1, updated_at = ? WHERE id = ?`, now, providerID); err != nil {
-			slog.Error("re-enabling built-in needle provider", "error", err)
-		}
-	}
-
-	var modelID string
-	err = s.db.QueryRowContext(ctx, `SELECT id FROM ai_provider_models WHERE provider_id = ?`, providerID).Scan(&modelID)
-	switch {
-	case err == sql.ErrNoRows:
-		modelID = uuid.NewString()
-		if _, err := s.db.ExecContext(ctx, `
-			INSERT INTO ai_provider_models (id, provider_id, label, model_id, is_default, created_at)
-			VALUES (?, ?, 'needle2', 'needle2', 1, ?)`,
-			modelID, providerID, now,
-		); err != nil {
-			slog.Error("seeding built-in needle model", "error", err)
-			return
-		}
-	case err != nil:
-		slog.Error("looking up built-in needle model", "error", err)
-		return
-	}
-
-	// Only claim the default slot if nothing holds it yet (fresh install, or
-	// the previous default model row was deleted) — never override a default
-	// an admin already set, including on every subsequent restart.
-	var anyDefault int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ai_provider_models WHERE is_default = 1`).Scan(&anyDefault); err != nil {
-		slog.Error("checking for an existing default AI model", "error", err)
-		return
-	}
-	if anyDefault > 0 {
-		return
-	}
-	if err := s.clearOtherDefaultModels(ctx, s.db, modelID); err != nil {
-		slog.Error("clearing other default AI models", "error", err)
-		return
-	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE ai_provider_models SET is_default = 1 WHERE id = ?`, modelID); err != nil {
-		slog.Error("setting built-in needle model as default", "error", err)
-	}
-}
 
 // aiModelDTO is one selectable model under a provider. label is the
 // human-facing name shown in pickers; modelID is the exact identifier sent
@@ -251,9 +165,6 @@ func validateAIProviderRequest(name, baseURL string) error {
 	if name == "" {
 		return fmt.Errorf("name is required")
 	}
-	if needle.IsBuiltin(baseURL) {
-		return nil
-	}
 	if baseURL == "" || (!strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://")) {
 		return fmt.Errorf("baseUrl must start with http:// or https://")
 	}
@@ -318,7 +229,7 @@ func (s *Server) updateAIProvider(w http.ResponseWriter, r *http.Request) {
 		set("name", req.Name)
 	}
 	if req.BaseURL != "" {
-		if !needle.IsBuiltin(req.BaseURL) && !strings.HasPrefix(req.BaseURL, "http://") && !strings.HasPrefix(req.BaseURL, "https://") {
+		if !strings.HasPrefix(req.BaseURL, "http://") && !strings.HasPrefix(req.BaseURL, "https://") {
 			writeErrorMsg(w, http.StatusBadRequest, "baseUrl must start with http:// or https://")
 			return
 		}
@@ -356,20 +267,8 @@ func (s *Server) updateAIProvider(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"updated": true})
 }
 
-// needleProviderDismissedKey persists that an admin explicitly deleted the
-// built-in Needle 2 provider, so seedBuiltinNeedleProvider doesn't silently
-// resurrect it on the next server restart — deleting it should stay deleted,
-// same as any other provider, not just until the process restarts.
-const needleProviderDismissedKey = "ai.needle_provider_dismissed"
-
 func (s *Server) deleteAIProvider(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-
-	var baseURL string
-	if err := s.db.QueryRowContext(r.Context(), `SELECT base_url FROM ai_providers WHERE id = ?`, id).Scan(&baseURL); err != nil && err != sql.ErrNoRows {
-		s.writeError(w, http.StatusInternalServerError, err)
-		return
-	}
 
 	res, err := s.db.ExecContext(r.Context(), `DELETE FROM ai_providers WHERE id = ?`, id)
 	if err != nil {
@@ -379,17 +278,6 @@ func (s *Server) deleteAIProvider(w http.ResponseWriter, r *http.Request) {
 	if n, _ := res.RowsAffected(); n == 0 {
 		writeErrorMsg(w, http.StatusNotFound, "ai provider not found")
 		return
-	}
-
-	if needle.IsBuiltin(baseURL) {
-		now := time.Now().UTC().Format(time.RFC3339)
-		if _, err := s.db.ExecContext(r.Context(),
-			`INSERT INTO settings (key, value, updated_at) VALUES (?, '1', ?)
-			 ON CONFLICT(key) DO UPDATE SET value = '1', updated_at = excluded.updated_at`,
-			needleProviderDismissedKey, now,
-		); err != nil {
-			slog.Error("recording needle provider dismissal", "error", err)
-		}
 	}
 
 	s.audit(r, "ai.provider.delete", "settings", id)
@@ -604,13 +492,6 @@ type providerTestResult struct {
 // back to a minimal 1-token chat completion for runtimes that only
 // implement /chat/completions and don't expose /models at all.
 func (s *Server) testProviderConnection(ctx context.Context, baseURL, apiKey, model string) (providerTestResult, error) {
-	if needle.IsBuiltin(baseURL) {
-		models, err := s.needle.TestConnection(ctx)
-		if err != nil {
-			return providerTestResult{}, err
-		}
-		return providerTestResult{OK: true, Via: "needle", Models: models}, nil
-	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	base := strings.TrimRight(baseURL, "/")
 
@@ -707,7 +588,7 @@ func (s *Server) testAIProviderAdHoc(w http.ResponseWriter, r *http.Request) {
 		writeErrorMsg(w, http.StatusBadRequest, "expected a JSON object")
 		return
 	}
-	if !needle.IsBuiltin(req.BaseURL) && (req.BaseURL == "" || (!strings.HasPrefix(req.BaseURL, "http://") && !strings.HasPrefix(req.BaseURL, "https://"))) {
+	if (req.BaseURL == "" || (!strings.HasPrefix(req.BaseURL, "http://") && !strings.HasPrefix(req.BaseURL, "https://"))) {
 		writeErrorMsg(w, http.StatusBadRequest, "baseUrl must start with http:// or https://")
 		return
 	}
