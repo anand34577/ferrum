@@ -3,6 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta property="og:image" content="https://anand34577.github.io/ferrum/screenshots/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://anand34577.github.io/ferrum/screenshots/social-preview.png">
 <title>Ferrum — one dashboard for every Proxmox host you run</title>
 <meta name="description" content="Ferrum is a self-hosted fleet dashboard for Proxmox VE and Proxmox Backup Server: live inventory, backups, HA, firewall, alerting, and an AI assistant, across every cluster and standalone node from one binary.">
 <link rel="icon" type="image/svg+xml" href="./assets/favicon.svg">
@@ -161,7 +164,7 @@
       <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 6v6c0 5 4 8 9 10 5-2 9-5 9-10V6l-9-4Z"/></svg>Self-hosted, your infrastructure only</span>
       <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg>PVE clusters, standalone nodes &amp; PBS remotes</span>
       <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-12M6 9H3m18 0h-3M6 15H3m18 0h-3"/></svg>REST API &amp; MCP for agents and scripts</span>
-      <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v4"/></svg>Built-in AI assistant, works fully offline</span>
+      <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v4"/></svg>AI assistant for any OpenAI-compatible provider</span>
     </div>
   </section>
 
@@ -225,11 +228,14 @@
       <p>Screenshots below are Ferrum running against an actual fleet: three connections, six nodes, twenty-six VMs and LXCs across two clusters and a standalone host, with Ceph and NFS storage behind it.</p>
     </div>
     <div class="shots">
+      <figure class="shot"><img src="./screenshots/custom-dashboard.png" alt="Customizable dashboard with drag-and-drop widgets."><figcaption>Custom dashboards, drag-and-drop widgets</figcaption></figure>
+      <figure class="shot"><img src="./screenshots/ai-assistant.png" alt="AI assistant answering a fleet health question."><figcaption>AI assistant that reads live fleet state</figcaption></figure>
       <figure class="shot"><img src="./screenshots/topology.png" alt="Topology graph showing clusters, nodes, and guests as a connected map."><figcaption>Topology, the fleet as a map, not a table</figcaption></figure>
       <figure class="shot"><img src="./screenshots/inventory.png" alt="Inventory table listing nodes, VMs, and LXCs with live status."><figcaption>Inventory across every node</figcaption></figure>
       <figure class="shot"><img src="./screenshots/backups.png" alt="Backup jobs and replication status."><figcaption>Backup jobs &amp; replication</figcaption></figure>
       <figure class="shot"><img src="./screenshots/high-availability.png" alt="High availability groups and resources."><figcaption>HA groups &amp; resources</figcaption></figure>
       <figure class="shot"><img src="./screenshots/firewall.png" alt="Cluster firewall rules."><figcaption>Cluster &amp; per-node firewall</figcaption></figure>
+      <figure class="shot"><img src="./screenshots/alerts.png" alt="Active and silenced alerts."><figcaption>Threshold alerting &amp; silencing</figcaption></figure>
     </div>
     <p class="mt-4">Twelve look-and-feel presets ship in Settings, each with light and dark and a choice of accent color; pick one and it applies everywhere, including consoles and the AI assistant.</p>
     <div class="looks-row">
