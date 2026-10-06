@@ -145,9 +145,7 @@ func runServer(ctx context.Context, cfg config.Config) {
 	srv := api.New(db, authSvc, secretBox, api.ServerOptions{
 		SecureCookies: cfg.Server.SecureCookies,
 		BehindProxy:   cfg.Server.BehindProxy,
-		NeedleBinPath: cfg.NeedleBinPath,
 	})
-	defer srv.Close()
 
 	// OIDC and notification (Gotify/SMTP) settings are admin-editable from
 	// the Settings UI and live in the database from here on; config.yaml's
@@ -190,7 +188,7 @@ func runServer(ctx context.Context, cfg config.Config) {
 	pollerCtx, stopPoller := context.WithCancel(ctx)
 	defer stopPoller()
 	// wg tracks these four background loops so shutdown can wait for them to
-	// actually return before the deferred db.Close()/srv.Close() run —
+	// actually return before the deferred db.Close() runs —
 	// canceling pollerCtx only asks them to stop; without this wait, a poll
 	// tick still in flight when shutdown proceeds keeps issuing queries
 	// against a database (and server resources) that are already closing.

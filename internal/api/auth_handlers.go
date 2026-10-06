@@ -74,7 +74,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limiterKey := r.RemoteAddr + "|" + strings.ToLower(req.Username)
+	limiterKey := clientIP(r) + "|" + strings.ToLower(req.Username)
 	if allowed, retryAfter := s.logins.Allowed(limiterKey); !allowed {
 		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retryAfter.Seconds()))))
 		slog.Warn("login rate-limited", "remote", r.RemoteAddr)

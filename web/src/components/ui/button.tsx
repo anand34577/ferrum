@@ -12,7 +12,7 @@ const buttonVariants = cva(
         // color, one hairline top highlight (the physical bezel edge), state
         // change is a brightness step — never a two-tone gradient sweep.
         default:
-          "border border-brand-700 bg-brand-600 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.16)] hover:bg-brand-700 active:bg-brand-800",
+          "btn-primary border border-brand-700 bg-brand-600 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.16)] hover:bg-brand-700 active:bg-brand-800",
         secondary:
           "border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text)] active:bg-[var(--bg-muted)]",
         ghost:

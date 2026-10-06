@@ -111,18 +111,8 @@
       <p>This block (and its env equivalents) is a <strong>first-boot seed only</strong>: it's copied into the database once, the first time Ferrum starts against a fresh database. Every boot after that, and any save from <strong>Settings &gt; SSO</strong>, reads and writes the database exclusively; editing the file later has no effect. It exists purely to pre-seed SSO for scripted, first-time deployments.</p>
     </div>
 
-    <h2 id="needle">Built-in local AI provider (Needle 2)</h2>
-    <p>The AI assistant and the MCP tool-calling loop work with any OpenAI-chat-completions-compatible provider (OpenAI, Ollama, LM Studio, LocalAI, OpenRouter) configured from <strong>Settings &gt; AI Providers</strong>. There's also a zero-config option with no API key and no network access at inference time, backed by <a href="https://huggingface.co/Cactus-Compute/needle2" target="_blank" rel="noopener">Needle 2</a>, a 45M-parameter tool-calling model distributed as a self-contained CLI binary.</p>
-    <p>On Windows, Linux, and macOS (amd64 or arm64), Ferrum bundles Needle 2's binary directly into itself and registers it automatically as the default assistant the first time it starts with no provider configured: nothing to download, nothing to set. On any other platform there's no bundled binary, and Ferrum never fetches executable content on its own; to use Needle there:</p>
-    <ol class="step-list">
-      <li>Download the <code>needle</code> CLI binary for your platform from the <a href="https://huggingface.co/Cactus-Compute/needle2/tree/main" target="_blank" rel="noopener">Needle 2 files</a>.</li>
-      <li>Point Ferrum at it with <code>needleBinPath</code> in <code>config.yaml</code>, or <code>FERRUM_NEEDLE_BIN=/path/to/needle</code>, which also overrides the bundled binary if you'd rather run a different build.</li>
-    </ol>
-    <p>Ferrum starts it as a local, <code>127.0.0.1</code>-only subprocess the first time it's used and stops it on shutdown. If nothing is bundled and <code>FERRUM_NEEDLE_BIN</code> isn't set, this provider is simply unavailable; every other provider is unaffected.</p>
-    <div class="callout note">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 16v-5M12 8h.01"/></svg>
-      <p><strong>On small ARM boards</strong> (Raspberry Pi and similar): Needle's one-time tool-retrieval pass over Ferrum's ~60-tool catalog briefly spikes memory and CPU, and on very little RAM the kernel's OOM-killer can take the subprocess out (<code>needle process exited: signal: killed</code>). Set <code>FERRUM_NEEDLE_MAX_TOOLS=&lt;n&gt;</code> (e.g. <code>10</code>) to trim the catalog and lighten that pass. If it still fails, the board likely can't run even this small a model reliably; point at a hosted or remote OpenAI-compatible provider instead.</p>
-    </div>
+    <h2 id="ai">AI providers</h2>
+    <p>The AI assistant and the MCP tool-calling loop work with any OpenAI-chat-completions-compatible provider (OpenAI, Ollama, LM Studio, LocalAI, OpenRouter) configured from <strong>Settings &gt; AI Providers</strong>. For a fully local setup, run Ollama or LM Studio and pick its preset.</p>
 
     <div class="doc-footnav">
       <a href="./installation.html"><span class="lbl">Back</span><span class="ttl">← Installation</span></a>

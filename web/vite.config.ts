@@ -3,6 +3,9 @@ import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
+// FERRUM_API overrides the dev proxy target (e.g. when 8080 is reserved on Windows).
+const apiTarget = process.env.FERRUM_API ?? 'http://localhost:8080'
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
@@ -12,9 +15,12 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': 'http://localhost:8080',
+      // Object form (not the string shorthand, which implies changeOrigin):
+      // keep the browser's Host so the backend's CSRF origin check sees
+      // Origin and Host agree — otherwise every dev-mode login/POST is 403.
+      '/api': { target: apiTarget, changeOrigin: false },
       '/ws': {
-        target: 'ws://localhost:8080',
+        target: apiTarget.replace(/^http/, 'ws'),
         ws: true,
       },
     },

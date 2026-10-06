@@ -70,10 +70,10 @@
      [data-look] block below overrides this radius scale (and --elev-*,
      --font-*, --bg/--border/--text) as a whole, so switching looks never
      needs a component-level conditional. */
-  --radius-sm: 0.25rem;
-  --radius-md: 0.375rem;
-  --radius-lg: 0.5rem;
-  --radius-xl: 0.625rem;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 0.875rem;
 
   /* Elevation utilities reference runtime tokens (defined in :root/.dark
      below) so dark mode can swap to darker, tighter shadows — Tailwind v4
@@ -98,14 +98,14 @@
 
   /* Cool steel neutrals, not the warm-cream default — this is a fleet of
      iron and silicon, not a stationery brand. */
-  --bg: #eef0f3;
+  --bg: #f4f5f8;
   --bg-surface: #ffffff;
-  --bg-surface-hover: #f4f6f8;
+  --bg-surface-hover: #f6f7f9;
   --bg-elevated: #ffffff;
-  --bg-muted: #e4e7ec;
-  --border: #d7dbe2;
-  --border-strong: #c2c8d2;
-  --text: #14171c;
+  --bg-muted: #eceef2;
+  --border: #e2e5ea;
+  --border-strong: #cdd2da;
+  --text: #11141a;
   --text-muted: #5b6270;
   --text-faint: #6e7480; /* 4.6:1 on white — WCAG AA for the 10-11px text that uses it */
   --ring: var(--accent-600);
@@ -142,11 +142,11 @@
 
   /* Elevation. Kept as runtime tokens so dark mode can swap to darker,
      tighter shadows (shadow color reads differently on near-black surfaces). */
-  --elev-xs: 0 1px 2px rgb(16 20 26 / 0.05);
-  --elev-sm: 0 1px 2px rgb(16 20 26 / 0.06), 0 1px 3px rgb(16 20 26 / 0.05);
-  --elev-md: 0 2px 4px rgb(16 20 26 / 0.05), 0 4px 12px rgb(16 20 26 / 0.08);
-  --elev-lg: 0 4px 8px rgb(16 20 26 / 0.06), 0 12px 32px rgb(16 20 26 / 0.12);
-  --elev-card: 0 1px 3px rgb(16 20 26 / 0.05);
+  --elev-xs: 0 1px 2px rgb(16 20 26 / 0.04);
+  --elev-sm: 0 1px 2px rgb(16 20 26 / 0.05), 0 2px 6px -2px rgb(16 20 26 / 0.06);
+  --elev-md: 0 2px 4px -1px rgb(16 20 26 / 0.05), 0 8px 20px -6px rgb(16 20 26 / 0.12);
+  --elev-lg: 0 4px 8px -2px rgb(16 20 26 / 0.06), 0 20px 44px -12px rgb(16 20 26 / 0.22);
+  --elev-card: 0 1px 2px rgb(16 20 26 / 0.04), 0 1px 1px rgb(16 20 26 / 0.02);
   /* Card hover state as its own token (not just shadow-md) so a look can
      give hover a completely different treatment (glow, lift, none) instead
      of only scaling the same shadow up. */
@@ -164,16 +164,19 @@
   /* The sidebar is a fixed dark "control panel" regardless of the content
      theme — like an instrument rail bolted onto whichever room it's in,
      rather than a surface that repaints itself with the rest of the app. */
-  --sidebar-bg: #15171b;
-  --sidebar-border: #262930;
+  --sidebar-bg: #111318;
+  --sidebar-border: #22262e;
   --sidebar-text: #e7e9ec;
-  --sidebar-text-muted: #8b919c;
-  --sidebar-active-bg: #21242b;
+  --sidebar-text-muted: #8d94a0;
+  --sidebar-active-bg: #1e2229;
   --sidebar-active-text: #ffffff;
 
   /* Body-background texture, off by default (plain flat --bg) — only the
      Glass Flight Deck look below turns this into a blueprint grid. */
   --page-grid: none;
+  /* Enterprise-only ambient accent glow behind the content (see
+     body::before below) — every other look keeps its own flat ground. */
+  --page-glow: radial-gradient(1100px 520px at 70% -180px, color-mix(in oklab, var(--accent-400) 10%, transparent), transparent 70%);
 
   /* Structural knobs — AppShell reads these via inline style (not Tailwind
      classes) so a look can genuinely change the chrome's proportions, not
@@ -190,13 +193,13 @@
 .dark {
   color-scheme: dark;
 
-  --bg: #121417;
-  --bg-surface: #1a1d22;
-  --bg-surface-hover: #20242a;
-  --bg-elevated: #1f2329;
-  --bg-muted: #20242a;
-  --border: #2b3038;
-  --border-strong: #3a414c;
+  --bg: #0e1014;
+  --bg-surface: #16191f;
+  --bg-surface-hover: #1c2027;
+  --bg-elevated: #1b1f26;
+  --bg-muted: #1e222a;
+  --border: #262b34;
+  --border-strong: #363d49;
   --text: #e7e9ec;
   --text-muted: #969ea9;
   --text-faint: #9aa3b0; /* 5.5:1 on the dark surface */
@@ -213,8 +216,9 @@
   --elev-sm: 0 1px 2px rgb(0 0 0 / 0.45), 0 1px 3px rgb(0 0 0 / 0.35);
   --elev-md: 0 2px 4px rgb(0 0 0 / 0.4), 0 4px 12px rgb(0 0 0 / 0.45);
   --elev-lg: 0 4px 8px rgb(0 0 0 / 0.4), 0 12px 32px rgb(0 0 0 / 0.55);
-  --elev-card: inset 0 1px 0 0 rgb(255 255 255 / 0.05), 0 1px 3px rgb(0 0 0 / 0.4);
-  --card-shadow-hover: inset 0 1px 0 0 rgb(255 255 255 / 0.08), 0 8px 24px rgb(0 0 0 / 0.6);
+  --elev-card: inset 0 1px 0 0 rgb(255 255 255 / 0.04), 0 1px 2px rgb(0 0 0 / 0.35);
+  --card-shadow-hover: inset 0 1px 0 0 rgb(255 255 255 / 0.07), 0 12px 32px -8px rgb(0 0 0 / 0.65);
+  --page-glow: radial-gradient(1100px 520px at 70% -180px, color-mix(in oklab, var(--accent-500) 14%, transparent), transparent 70%);
 
   --chart-1: #d97a49;
   --chart-2: #3fa19e;
@@ -963,6 +967,49 @@
 }
 [data-look="brutalist"] .nav-item-active {
   border: 2px solid var(--sidebar-text);
+}
+
+/* Enterprise's modern finish — an ambient accent glow behind the content,
+   a softly graded sidebar rail, an accent indicator bar on the active nav
+   item, and a faint accent bloom under primary buttons. Gated to the
+   default look so every other preset keeps its own deliberate register. */
+[data-look="enterprise"] body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: var(--page-glow);
+}
+[data-look="enterprise"] .sidebar-shell {
+  background: linear-gradient(180deg, color-mix(in oklab, var(--accent-500) 7%, var(--sidebar-bg)) 0%, var(--sidebar-bg) 240px);
+}
+[data-look="enterprise"] .nav-item-active {
+  background: linear-gradient(90deg, color-mix(in oklab, var(--accent-400) 18%, var(--sidebar-active-bg)), var(--sidebar-active-bg));
+}
+[data-look="enterprise"] .nav-item-active::before {
+  content: "";
+  position: absolute;
+  left: -0.625rem;
+  top: 50%;
+  height: 1.125rem;
+  width: 3px;
+  transform: translateY(-50%);
+  border-radius: 0 3px 3px 0;
+  background: var(--accent-400);
+  box-shadow: 0 0 10px var(--accent-400);
+}
+[data-look="enterprise"] .btn-primary {
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.18),
+    0 1px 2px rgb(0 0 0 / 0.12),
+    0 4px 12px -4px color-mix(in oklab, var(--accent-500) 60%, transparent);
+}
+[data-look="enterprise"] .btn-primary:hover {
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.18),
+    0 1px 2px rgb(0 0 0 / 0.12),
+    0 6px 18px -4px color-mix(in oklab, var(--accent-500) 70%, transparent);
 }
 
 /* Density — "compact" tightens row padding across every DataTable (Tasks,

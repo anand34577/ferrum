@@ -569,9 +569,9 @@ on("GET", "/settings/webhooks/:id/deliveries", () => [
 on("GET", "/admin/settings/agent", () => ({ mcpEnabled: true, apiEnabled: true, maxToolIterations: 12 }))
 on("PUT", "/admin/settings/agent", ({ body }) => body)
 on("GET", "/admin/settings/ai/providers/", () => [
-  { id: "ai-needle", name: "Needle 2 (built-in, local)", baseUrl: "local://needle2", hasApiKey: false, isEnabled: true, models: [{ id: "m-1", label: "needle2-45m", modelId: "needle2", isDefault: true, createdAt: new Date().toISOString() }], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: "ai-ollama", name: "Ollama (local)", baseUrl: "http://localhost:11434/v1", hasApiKey: false, isEnabled: true, models: [{ id: "m-1", label: "Llama 3.1 8B", modelId: "llama3.1:8b", isDefault: true, createdAt: new Date().toISOString() }], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
 ])
-on("GET", "/ai/providers", () => [{ providerId: "ai-needle", providerName: "Needle 2 (built-in, local)", models: [{ id: "m-1", label: "needle2-45m", isDefault: true }] }])
+on("GET", "/ai/providers", () => [{ providerId: "ai-ollama", providerName: "Ollama (local)", models: [{ id: "m-1", label: "Llama 3.1 8B", isDefault: true }] }])
 on("GET", "/ai/activity", () => [])
 on("GET", "/admin/ai/activity", () => [])
 on("GET", "/admin/settings/system", () => ({ instanceName: "Ferrum", timezone: "UTC" }))

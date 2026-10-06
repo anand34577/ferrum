@@ -14,9 +14,9 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
       className={cn(
         "flex w-full resize-y rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-sm text-[var(--text)] transition-all duration-150",
         "placeholder:text-[var(--text-faint)] hover:border-[var(--border-strong)]",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:border-transparent",
+        "focus-visible:outline-none focus-visible:border-[var(--ring)] focus-visible:ring-[3px] focus-visible:ring-[color-mix(in_oklab,var(--ring)_25%,transparent)]",
         "disabled:cursor-not-allowed disabled:opacity-50",
-        "aria-[invalid=true]:border-[var(--status-error)] aria-[invalid=true]:focus-visible:ring-[var(--status-error)]",
+        "aria-[invalid=true]:border-[var(--status-error)] aria-[invalid=true]:focus-visible:border-[var(--status-error)] aria-[invalid=true]:focus-visible:ring-[color-mix(in_oklab,var(--status-error)_25%,transparent)]",
         className,
       )}
       {...props}

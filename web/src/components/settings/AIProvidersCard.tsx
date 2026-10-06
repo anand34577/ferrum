@@ -28,13 +28,7 @@ const PRESETS = [
   { label: "OpenAI", baseUrl: "https://api.openai.com/v1" },
   { label: "Ollama (local)", baseUrl: "http://localhost:11434/v1" },
   { label: "LM Studio (local)", baseUrl: "http://localhost:1234/v1" },
-  { label: "Needle 2 (built-in, local)", baseUrl: "needle://local" },
 ]
-
-// Ferrum's sentinel base URL (internal/needle.BaseURL) for the optional,
-// no-API-key, no-network built-in provider — see README "Built-in LLM
-// (Needle 2)" for how an admin installs the binary this depends on.
-const NEEDLE_BUILTIN_URL = "needle://local"
 
 /**
  * Admin-managed OpenAI-chat-completions-compatible providers backing the AI
@@ -271,13 +265,6 @@ export function AIProvidersCard() {
                 }}
                 placeholder="https://api.openai.com/v1"
               />
-              {form.baseUrl === NEEDLE_BUILTIN_URL && (
-                <p className="text-xs text-[var(--text-muted)]">
-                  Runs entirely on this server — no API key, no outbound network call. Requires the Needle 2 CLI binary to be installed
-                  and pointed at via <code className="rounded-sm bg-[var(--bg-muted)] px-1">FERRUM_NEEDLE_BIN</code> (see README "Built-in LLM
-                  (Needle 2)"); "Discover" below will fail until it's installed.
-                </p>
-              )}
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="ai-key">API key {editingId && <span className="text-[var(--text-muted)]">(leave blank to keep current)</span>}</Label>
@@ -287,7 +274,6 @@ export function AIProvidersCard() {
                 value={form.apiKey}
                 onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
                 placeholder="Not required for most local runtimes"
-                disabled={form.baseUrl === NEEDLE_BUILTIN_URL}
               />
             </div>
             <div className="flex items-center justify-between rounded-md border border-[var(--border)] px-3 py-2.5">

@@ -61,7 +61,7 @@ export function KpiCard({
   return (
     <div
       className={cn(
-        "corner-frame group relative flex min-w-0 flex-col justify-between rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-4.5 py-4 transition-colors duration-200",
+        "corner-frame group relative flex min-w-0 flex-col justify-between rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-4.5 py-4 shadow-card transition-[border-color,box-shadow] duration-200 hover:shadow-[var(--card-shadow-hover)]",
         toneCardBorder[tone],
       )}
     >

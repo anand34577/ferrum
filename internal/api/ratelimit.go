@@ -1,6 +1,9 @@
 package api
 
 import (
+	"net"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -176,4 +179,35 @@ func (l *requestLimiter) Allow(key string) (allowed bool, retryAfter time.Durati
 	}
 	c.count++
 	return true, 0
+}
+
+// clientIP is the caller's address without the port. Go's server sets
+// RemoteAddr to "ip:port", and the source port changes with every new TCP
+// connection — keying a limiter on the raw value let a client dodge the
+// login lockout simply by reconnecting for each guess.
+func clientIP(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr // already bare (forwardedFor rewrote it)
+}
+
+// forwardedFor replaces chi's deprecated middleware.RealIP, which trusted the
+// LEFTMOST X-Forwarded-For entry (or X-Real-IP / True-Client-IP) — all
+// client-controlled, so any caller could pick its own IP and rotate past the
+// login lockout. Only the rightmost entry is written by the reverse proxy
+// directly in front of Ferrum, so that is the one trusted here.
+func forwardedFor(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if xff := r.Header.Values("X-Forwarded-For"); len(xff) > 0 {
+			parts := strings.Split(xff[len(xff)-1], ",")
+			if ip := net.ParseIP(strings.TrimSpace(parts[len(parts)-1])); ip != nil {
+				r.RemoteAddr = ip.String()
+			}
+		} else if ip := net.ParseIP(strings.TrimSpace(r.Header.Get("X-Real-IP"))); ip != nil {
+			// Proxies configured to send only X-Real-IP (a common nginx setup).
+			r.RemoteAddr = ip.String()
+		}
+		next.ServeHTTP(w, r)
+	})
 }
