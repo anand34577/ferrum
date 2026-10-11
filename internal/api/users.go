@@ -6,6 +6,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -372,11 +374,60 @@ func (s *Server) listRoles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+const (
+	auditLogDefaultLimit = 200
+	auditLogMaxLimit     = 5000
+)
+
+// auditLog returns audit entries, newest first. Optional query parameters:
+//
+//	from, to — RFC 3339 bounds on when the entry was recorded (from is
+//	           inclusive, to is exclusive)
+//	limit    — how many entries to return; default 200, capped at 5000
+//
+// Without these the endpoint could only ever show the latest 200 entries —
+// on a busy instance that is less than a day, so anything older was
+// unreachable from the UI even though it was still in the database.
 func (s *Server) auditLog(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.QueryContext(r.Context(), `
-		SELECT a.id, COALESCE(u.username, 'system'), a.action, a.category, COALESCE(a.target,''), a.ip, a.created_at
-		FROM audit_log a LEFT JOIN users u ON u.id = a.user_id
-		ORDER BY a.created_at DESC LIMIT 200`)
+	q := r.URL.Query()
+
+	limit := auditLogDefaultLimit
+	if raw := q.Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			writeErrorMsg(w, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		limit = min(n, auditLogMaxLimit)
+	}
+
+	// created_at is stored as RFC 3339 in UTC, so normalising the bounds to
+	// the same form makes a plain string comparison a correct time comparison.
+	query := `
+		SELECT a.id, COALESCE(u.username, 'system'), a.action, a.category, COALESCE(a.target,''), COALESCE(a.ip,''), a.created_at
+		FROM audit_log a LEFT JOIN users u ON u.id = a.user_id`
+	var conds []string
+	var args []any
+	for _, bound := range []struct{ param, op string }{{"from", ">="}, {"to", "<"}} {
+		raw := q.Get(bound.param)
+		if raw == "" {
+			continue
+		}
+		ts, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			writeErrorMsg(w, http.StatusBadRequest, bound.param+" must be an RFC 3339 timestamp")
+			return
+		}
+		conds = append(conds, "a.created_at "+bound.op+" ?")
+		args = append(args, ts.UTC().Format(time.RFC3339))
+	}
+	if len(conds) > 0 {
+		query += " WHERE " + strings.Join(conds, " AND ")
+	}
+	query += " ORDER BY a.created_at DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(r.Context(), query, args...)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
