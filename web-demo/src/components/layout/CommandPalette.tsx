@@ -7,6 +7,8 @@ import {
   Container,
   CornerDownLeft,
   Database,
+  DatabaseBackup,
+  GitBranch,
   HardDrive,
   Keyboard,
   LayoutDashboard,
@@ -20,8 +22,10 @@ import {
   Settings,
   Shield,
   ShieldCheck,
+  Sparkles,
   Sun,
   Terminal,
+  UserRound,
   Users,
   Waypoints,
   Webhook,
@@ -31,6 +35,7 @@ import { useNavigate } from "react-router-dom"
 import { api, type ClusterResource, type ConnectionInventory } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
 import { useTheme, type ThemePreference } from "@/lib/theme"
+import { prefetchRoute } from "@/lib/routes"
 
 const pages = [
   { to: "/", label: "Fleet Overview", icon: Waypoints },
@@ -38,18 +43,22 @@ const pages = [
   { to: "/inventory", label: "Inventory", icon: Server },
   { to: "/topology", label: "Topology", icon: Network },
   { to: "/storage", label: "Storage", icon: Database },
+  { to: "/pbs", label: "PBS Backups", icon: DatabaseBackup },
   { to: "/pools", label: "Resource Pools", icon: Layers },
   { to: "/backups", label: "Backups", icon: HardDrive },
   { to: "/ha", label: "High Availability", icon: ShieldCheck },
   { to: "/firewall", label: "Firewall", icon: Shield },
   { to: "/alerts", label: "Alerts", icon: AlertTriangle },
   { to: "/tasks", label: "Task Center", icon: Terminal },
+  { to: "/ai-assistant", label: "AI Assistant", icon: Sparkles },
+  { to: "/cluster", label: "Cluster & SDN", icon: GitBranch, adminOnly: true },
   { to: "/bulk-operations", label: "Bulk Operations", icon: Layers3, adminOnly: true },
   { to: "/connections", label: "Connections", icon: Network, adminOnly: true },
   { to: "/users", label: "Users", icon: Users, adminOnly: true },
   { to: "/webhooks", label: "Webhooks", icon: Webhook, adminOnly: true },
   { to: "/audit", label: "Audit Log", icon: ClipboardList, adminOnly: true },
   { to: "/settings", label: "Settings", icon: Settings, adminOnly: true },
+  { to: "/profile", label: "Profile & security", icon: UserRound },
 ]
 
 // cmdk mounts every item you hand it (its filter only hides non-matches with
@@ -195,6 +204,7 @@ export function CommandPalette() {
   }, [debouncedSearch, remoteResults, localGuests])
 
   function go(to: string) {
+    prefetchRoute(to)
     navigate(to)
     setOpen(false)
   }
@@ -203,12 +213,13 @@ export function CommandPalette() {
   const modKey = isMac ? "⌘" : "Ctrl"
 
   return (
+    // Layering scale: header 30 / dialog 50 / drawer 200 / dropdown 300 / palette 350 / tooltip 400 / skip-link 600.
     <Command.Dialog
       open={open}
       onOpenChange={setOpen}
       label="Command palette"
-      overlayClassName="fixed inset-0 z-50 bg-black/65 backdrop-blur-sm data-[state=open]:animate-in data-[state=open]:fade-in data-[state=closed]:animate-out data-[state=closed]:fade-out"
-      contentClassName="fixed left-1/2 top-[12vh] z-50 w-[calc(100vw-2rem)] max-w-xl -translate-x-1/2 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] shadow-2xl dark:shadow-[0_24px_64px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.08)] data-[state=open]:animate-in data-[state=open]:fade-in data-[state=open]:zoom-in-95 data-[state=open]:slide-in-from-top-4 data-[state=closed]:animate-out data-[state=closed]:fade-out data-[state=closed]:zoom-out-95"
+      overlayClassName="fixed inset-0 z-[350] bg-black/65 backdrop-blur-sm data-[state=open]:animate-in data-[state=open]:fade-in data-[state=closed]:animate-out data-[state=closed]:fade-out"
+      contentClassName="fixed left-1/2 top-[12vh] z-[350] w-[calc(100vw-2rem)] max-w-xl -translate-x-1/2 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] shadow-lg data-[state=open]:animate-in data-[state=open]:fade-in data-[state=open]:zoom-in-95 data-[state=open]:slide-in-from-top-4 data-[state=closed]:animate-out data-[state=closed]:fade-out data-[state=closed]:zoom-out-95"
     >
       <div
         className="flex items-center gap-2.5 border-b border-[var(--border)] px-4 py-3"

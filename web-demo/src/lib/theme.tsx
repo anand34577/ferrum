@@ -49,6 +49,8 @@ const KNOWN_LOOKS: Look[] = [
   "aurora",
 ]
 
+const KNOWN_ACCENTS: Accent[] = ["oxide", "azure", "verdant", "violet", "slate", "amber", "rose", "teal"]
+
 const THEME_KEY = "ferrum-theme"
 const ACCENT_KEY = "ferrum-accent"
 const LOOK_KEY = "ferrum-look"
@@ -77,37 +79,58 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null)
 
+// Storage can be blocked outright (hardened browsers, some embedded
+// webviews), where merely touching localStorage throws. These run during the
+// provider's first render, so an unguarded read meant a blank app; the theme
+// simply doesn't persist locally there (the server copy still does).
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function writeStored(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    // not persisted in this browser — see readStored
+  }
+}
+
 function cachedTheme(): ThemePreference {
-  const stored = localStorage.getItem(THEME_KEY)
+  const stored = readStored(THEME_KEY)
   return stored === "light" || stored === "dark" || stored === "system" ? stored : "system"
 }
 
 function cachedAccent(): Accent {
-  const stored = localStorage.getItem(ACCENT_KEY)
-  return stored === "azure" || stored === "verdant" || stored === "violet" || stored === "slate" ? stored : "oxide"
+  const stored = readStored(ACCENT_KEY)
+  return (KNOWN_ACCENTS as string[]).includes(stored ?? "") ? (stored as Accent) : "oxide"
 }
 
 function cachedLook(): Look {
-  const stored = localStorage.getItem(LOOK_KEY)
+  const stored = readStored(LOOK_KEY)
   return (KNOWN_LOOKS as string[]).includes(stored ?? "") ? (stored as Look) : "enterprise"
 }
 
 function cachedDensity(): Density {
-  const stored = localStorage.getItem(DENSITY_KEY)
+  const stored = readStored(DENSITY_KEY)
   return stored === "compact" ? "compact" : "comfortable"
 }
 
 const osDarkQuery = () => window.matchMedia("(prefers-color-scheme: dark)")
 
 // Applies the classes/attributes and keeps the browser UI chrome (theme-color) in sync.
+// theme-color reads the live --bg token so browser chrome follows the active
+// look preset (Paper, Solarized, High Contrast repaint it), not just light/dark.
 function applyTheme(theme: Theme, accent: Accent, look: Look, density: Density) {
   document.documentElement.classList.toggle("dark", theme === "dark")
   document.documentElement.dataset.accent = accent
   document.documentElement.dataset.look = look
   document.documentElement.dataset.density = density
-  document
-    .querySelector('meta[name="theme-color"]')
-    ?.setAttribute("content", theme === "dark" ? "#15171b" : "#ffffff")
+  const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim()
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", bg || (theme === "dark" ? "#15171b" : "#ffffff"))
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -137,23 +160,22 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     const server = prefsQuery.data?.theme
     if (server && (server === "light" || server === "dark" || server === "system") && server !== themeRef.current) {
       setThemeState(server)
-      localStorage.setItem(THEME_KEY, server)
+      writeStored(THEME_KEY, server)
     }
     const serverAccent = prefsQuery.data?.accent
-    const knownAccents: Accent[] = ["oxide", "azure", "verdant", "violet", "slate", "amber", "rose", "teal"]
-    if (serverAccent && knownAccents.includes(serverAccent) && serverAccent !== accentRef.current) {
+    if (serverAccent && KNOWN_ACCENTS.includes(serverAccent) && serverAccent !== accentRef.current) {
       setAccentState(serverAccent)
-      localStorage.setItem(ACCENT_KEY, serverAccent)
+      writeStored(ACCENT_KEY, serverAccent)
     }
     const serverLook = prefsQuery.data?.look
     if (serverLook && KNOWN_LOOKS.includes(serverLook) && serverLook !== lookRef.current) {
       setLookState(serverLook)
-      localStorage.setItem(LOOK_KEY, serverLook)
+      writeStored(LOOK_KEY, serverLook)
     }
     const serverDensity = prefsQuery.data?.density
     if (serverDensity && (serverDensity === "comfortable" || serverDensity === "compact") && serverDensity !== densityRef.current) {
       setDensityState(serverDensity)
-      localStorage.setItem(DENSITY_KEY, serverDensity)
+      writeStored(DENSITY_KEY, serverDensity)
     }
   }, [prefsQuery.data])
 
@@ -184,25 +206,25 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   const setTheme = (next: ThemePreference) => {
     setThemeState(next)
-    localStorage.setItem(THEME_KEY, next)
+    writeStored(THEME_KEY, next)
     save(next, accentRef.current, lookRef.current, densityRef.current)
   }
 
   const setAccent = (next: Accent) => {
     setAccentState(next)
-    localStorage.setItem(ACCENT_KEY, next)
+    writeStored(ACCENT_KEY, next)
     save(themeRef.current, next, lookRef.current, densityRef.current)
   }
 
   const setLook = (next: Look) => {
     setLookState(next)
-    localStorage.setItem(LOOK_KEY, next)
+    writeStored(LOOK_KEY, next)
     save(themeRef.current, accentRef.current, next, densityRef.current)
   }
 
   const setDensity = (next: Density) => {
     setDensityState(next)
-    localStorage.setItem(DENSITY_KEY, next)
+    writeStored(DENSITY_KEY, next)
     save(themeRef.current, accentRef.current, lookRef.current, next)
   }
 
@@ -227,6 +249,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
 }
 
+// Provider and its consumer hook live in one file on purpose (React's context
+// pattern); splitting the hook out would churn a dozen importer files for no
+// runtime gain.
+// eslint-disable-next-line react/only-export-components
 export function useTheme() {
   const ctx = useContext(ThemeContext)
   if (!ctx) throw new Error("useTheme must be used within ThemeProvider")

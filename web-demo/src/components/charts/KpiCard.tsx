@@ -61,7 +61,7 @@ export function KpiCard({
   return (
     <div
       className={cn(
-        "corner-frame group relative flex min-w-0 flex-col justify-between rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-4.5 py-4 transition-colors duration-200",
+        "corner-frame group relative flex min-w-0 flex-col justify-between rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-4.5 py-4 shadow-card transition-[border-color,box-shadow] duration-200 hover:shadow-[var(--card-shadow-hover)]",
         toneCardBorder[tone],
       )}
     >
@@ -82,9 +82,12 @@ export function KpiCard({
         </div>
       </div>
       {/* The digit-bank readout: monospace, tabular, no display-face flourish. */}
-      <p className={cn("mt-3 truncate font-mono text-2xl font-bold leading-none tracking-tight tabular", toneClass[tone])}>
-        {value}
-        {sub && <span className="ml-2 font-sans text-xs font-normal normal-case tracking-normal text-[var(--text-muted)]">{sub}</span>}
+      {/* Value and sub sit on one baseline when they fit; the sub wraps to
+          its own line (instead of truncating to "136 c…") when the card is
+          too narrow for both — a unit-less number is worse than a taller card. */}
+      <p className={cn("mt-3 flex flex-wrap items-baseline gap-x-2 gap-y-1 font-mono text-2xl font-bold leading-none tracking-tight tabular", toneClass[tone])}>
+        <span className="truncate">{value}</span>
+        {sub && <span className="min-w-0 truncate font-sans text-xs font-normal normal-case tracking-normal text-[var(--text-muted)]">{sub}</span>}
       </p>
       {progress !== undefined && <Meter value={progress} size="sm" invert={progressInvert} label={label} className="mt-3.5" />}
       {spark && spark.length > 1 && (

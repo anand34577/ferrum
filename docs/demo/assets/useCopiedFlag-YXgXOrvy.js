@@ -1,0 +1,1 @@
+import{r as e}from"./rolldown-runtime-hePW80VL.js";import{tn as t}from"./button-JNnJiorE.js";var n=e(t(),1);function r(e=1500){let[t,r]=(0,n.useState)(!1),i=(0,n.useRef)(null);(0,n.useEffect)(()=>()=>{i.current!==null&&clearTimeout(i.current)},[]);function a(){i.current!==null&&clearTimeout(i.current),r(!0),i.current=setTimeout(()=>r(!1),e)}return[t,a]}export{r as t};

@@ -12,7 +12,7 @@ export function SelectTrigger({ className, children, ...props }: ComponentProps<
       className={cn(
         "flex h-9 w-full items-center justify-between gap-2 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 font-mono text-sm transition-colors",
         "hover:border-[var(--border-strong)] data-[placeholder]:text-[var(--text-faint)]",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:cursor-not-allowed disabled:opacity-50",
+        "focus-visible:outline-none focus-visible:border-[var(--ring)] focus-visible:ring-[3px] focus-visible:ring-[color-mix(in_oklab,var(--ring)_25%,transparent)] disabled:cursor-not-allowed disabled:opacity-50",
         className,
       )}
       {...props}
@@ -35,7 +35,7 @@ export function SelectContent({ className, children, ...props }: ComponentProps<
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
         className={cn(
-          "z-50 max-h-[var(--radix-select-content-available-height,18rem)] min-w-[8rem] overflow-y-auto overscroll-contain rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] p-1.5 shadow-lg dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_12px_28px_rgba(0,0,0,0.6)]",
+          "z-50 max-h-[var(--radix-select-content-available-height,18rem)] min-w-[8rem] overflow-y-auto overscroll-contain rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] p-1.5 shadow-lg",
           "data-[state=open]:animate-in data-[state=open]:fade-in data-[state=open]:zoom-in-95",
           "data-[state=closed]:animate-out data-[state=closed]:fade-out data-[state=closed]:zoom-out-95",
           className,

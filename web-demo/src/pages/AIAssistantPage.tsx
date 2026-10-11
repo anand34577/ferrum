@@ -33,22 +33,28 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { useConfirm } from "@/components/ui/confirm-dialog"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { EmptyState } from "@/components/ui/empty-state"
 import { ErrorState } from "@/components/ui/error-state"
 import { PageHeader } from "@/components/ui/page-header"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
-import { api, type ToolCallRecord, type UsableAIProvider } from "@/lib/api"
+import { api, notifyUnauthorized, type ToolCallRecord, type UsableAIProvider } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
 import { type Conversation, type DisplayMessage, type MessageUsage, type ReasoningEffort, type ToolCallEntry, useAIConversations } from "@/lib/useAIConversations"
+import { useCopiedFlag } from "@/lib/useCopiedFlag"
 import { cn, formatRelativeTime } from "@/lib/utils"
+import { copyText } from "@/lib/clipboard"
 
 function newId() {
   return Math.random().toString(36).slice(2)
 }
 
 interface ToolActivity {
+  // The provider's tool_call_id when the SSE envelope carried one — undefined
+  // for a provider/runtime that doesn't echo it back, in which case matching
+  // falls back to name+status the way it always has.
+  id?: string
   name: string
   status: "running" | "ok" | "error"
   args?: unknown
@@ -89,8 +95,8 @@ function formatJSON(raw: string): string {
 function parseSSELine(line: string): {
   delta?: string
   reasoning?: string
-  toolCall?: { name: string; args?: unknown }
-  toolResult?: { name: string; ok: boolean; result?: string }
+  toolCall?: { id?: string; name: string; args?: unknown }
+  toolResult?: { id?: string; name: string; ok: boolean; result?: string }
   usage?: MessageUsage
   error?: string
   done?: boolean
@@ -102,9 +108,9 @@ function parseSSELine(line: string): {
     const parsed = JSON.parse(payload)
     if (parsed.ferrum_error) return { error: parsed.ferrum_error }
     if (typeof parsed.ferrum_reasoning === "string") return { reasoning: parsed.ferrum_reasoning }
-    if (parsed.ferrum_tool_call) return { toolCall: { name: parsed.ferrum_tool_call.name, args: parsed.ferrum_tool_call.args } }
+    if (parsed.ferrum_tool_call) return { toolCall: { id: parsed.ferrum_tool_call.id, name: parsed.ferrum_tool_call.name, args: parsed.ferrum_tool_call.args } }
     if (parsed.ferrum_tool_result)
-      return { toolResult: { name: parsed.ferrum_tool_result.name, ok: !!parsed.ferrum_tool_result.ok, result: parsed.ferrum_tool_result.result } }
+      return { toolResult: { id: parsed.ferrum_tool_result.id, name: parsed.ferrum_tool_result.name, ok: !!parsed.ferrum_tool_result.ok, result: parsed.ferrum_tool_result.result } }
     if (parsed.ferrum_usage) return { usage: parsed.ferrum_usage }
     return { delta: parsed.choices?.[0]?.delta?.content ?? undefined }
   } catch {
@@ -181,8 +187,11 @@ export function AIAssistantPage() {
     queryKey: ["ai", "providers"],
     queryFn: () => api.get<UsableAIProvider[]>("/ai/providers"),
   })
-  const providers = providersQuery.data ?? []
-  const flatModels = useMemo(() => flattenModels(providers), [providers])
+  // Memo inputs must be referentially stable: react-query's structural
+  // sharing keeps `data` the same object between renders, whereas a
+  // `data ?? []` fallback allocates a fresh array every render and would
+  // defeat the memo.
+  const flatModels = useMemo(() => flattenModels(providersQuery.data ?? []), [providersQuery.data])
   const defaultModelId = flatModels.find((m) => m.isDefault)?.modelRowId ?? flatModels[0]?.modelRowId ?? ""
 
   const { conversations, active, activeId, setActiveId, createConversation, deleteConversation, deleteConversations, updateConversation, setMessages } =
@@ -196,10 +205,19 @@ export function AIAssistantPage() {
   const [pendingReasoningEffort, setPendingReasoningEffort] = useState<ReasoningEffort>("")
 
   const [input, setInput] = useState("")
+  // Escape dismisses the slash-command popup without wiping what was typed —
+  // it also lets someone send a literal message that starts with "/".
+  const [slashDismissed, setSlashDismissed] = useState(false)
   const [streamingText, setStreamingText] = useState<string | null>(null)
   const [streamingReasoning, setStreamingReasoning] = useState<string | null>(null)
   const [toolActivity, setToolActivity] = useState<ToolActivity[]>([])
   const [streaming, setStreaming] = useState(false)
+  // Which conversation the in-flight completion belongs to — only one
+  // completion can run at a time app-wide (see send/regenerate's `streaming`
+  // guard), but switching conversations mid-stream must not let the live
+  // bubble (or its tokens, once they land) render under whatever
+  // conversation happens to be active when they arrive.
+  const [streamingConvId, setStreamingConvId] = useState<string | null>(null)
   const [slashIndex, setSlashIndex] = useState(0)
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -256,14 +274,18 @@ export function AIAssistantPage() {
   const reasoningEffort: ReasoningEffort = active?.reasoningEffort ?? pendingReasoningEffort
   const selectedModel = flatModels.find((m) => m.modelRowId === modelId)
   const committedMessages = active?.messages ?? []
-  const displayMessages: (DisplayMessage & { streaming?: boolean })[] = streaming
+  // Gated on streamingConvId matching activeId, not just `streaming` — the
+  // completion itself is global (only one runs at a time), but its live
+  // bubble must only appear in the transcript it actually belongs to.
+  const isStreamingHere = streaming && streamingConvId === activeId
+  const displayMessages: (DisplayMessage & { streaming?: boolean })[] = isStreamingHere
     ? [...committedMessages, { id: "__streaming__", role: "assistant", content: streamingText ?? "", reasoning: streamingReasoning ?? undefined, streaming: true }]
     : committedMessages
 
   const slashMatches = useMemo(() => {
-    if (!input.startsWith("/") || input.includes(" ") || input.includes("\n")) return []
+    if (slashDismissed || !input.startsWith("/") || input.includes(" ") || input.includes("\n")) return []
     return SLASH_COMMANDS.filter((c) => c.cmd.startsWith(input.toLowerCase()))
-  }, [input])
+  }, [input, slashDismissed])
 
   useEffect(() => setSlashIndex(0), [slashMatches.length])
 
@@ -305,8 +327,22 @@ export function AIAssistantPage() {
     if (!el) return
     if (stickToBottomRef.current) el.scrollTop = el.scrollHeight
     else setNewBelow(true)
+    // Live-stream deps only count when the stream belongs to this transcript;
+    // another conversation's tokens must not raise "new messages below" here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [displayMessages.length, streamingText, streamingReasoning, toolActivity.length])
+  }, [displayMessages.length, isStreamingHere && streamingText, isStreamingHere && streamingReasoning, isStreamingHere && toolActivity.length])
+
+  // Leaving the page mid-stream must abort the in-flight chat request — the
+  // SSE reader would otherwise keep pulling tokens for a page that no longer
+  // exists. Aborting lands in the same AbortError path as the Stop button
+  // (see runCompletion's catch), so the finally block still runs its usual
+  // cleanup and partial-commit handling.
+  useEffect(
+    () => () => {
+      abortRef.current?.abort()
+    },
+    [],
+  )
 
   function handleScroll() {
     const el = scrollRef.current
@@ -319,6 +355,7 @@ export function AIAssistantPage() {
 
   async function runCompletion(convId: string, history: DisplayMessage[], useModelId: string, useReasoningEffort: ReasoningEffort) {
     setStreaming(true)
+    setStreamingConvId(convId)
     setStreamingText("")
     setStreamingReasoning(null)
     setToolActivity([])
@@ -358,6 +395,10 @@ export function AIAssistantPage() {
         }),
       })
       if (!res.ok || !res.body) {
+        // Raw fetch() bypasses lib/api's request(), so 401s need routing
+        // through the same handler it uses — an expired session should land
+        // on the login page, not surface as a chat error bubble.
+        if (res.status === 401) notifyUnauthorized()
         const data = await res.json().catch(() => undefined)
         throw new Error(data?.error ?? `Request failed (${res.status})`)
       }
@@ -380,23 +421,36 @@ export function AIAssistantPage() {
             reasoningText += evt.reasoning
             scheduleFlush()
           } else if (evt.toolCall) {
-            const { name, args } = evt.toolCall
-            setToolActivity((prev) => [...prev, { name, args, status: "running" }])
-            toolLog.push({ name, args, ok: true })
+            const { id, name, args } = evt.toolCall
+            setToolActivity((prev) => [...prev, { id, name, args, status: "running" }])
+            toolLog.push({ id, name, args, ok: true })
           } else if (evt.toolResult) {
-            const { name, ok, result } = evt.toolResult
+            const { id, name, ok, result } = evt.toolResult
+            // Prefer matching by the provider's own tool_call_id — falling
+            // back to "most recent running call with this name" only when
+            // the provider didn't echo one back. Name-only matching can
+            // attach a result to the wrong pill when the model calls the
+            // same tool twice in parallel before either result arrives.
             setToolActivity((prev) => {
-              const idx = [...prev].reverse().findIndex((t) => t.name === name && t.status === "running")
+              const idx = id
+                ? prev.findIndex((t) => t.id === id)
+                : (() => {
+                  // Search newest-first, then map back to a real index.
+                  const fromEnd = [...prev].reverse().findIndex((t) => t.name === name && t.status === "running")
+                  return fromEnd === -1 ? -1 : prev.length - 1 - fromEnd
+                })()
               if (idx === -1) return prev
-              const realIdx = prev.length - 1 - idx
               const next = [...prev]
-              next[realIdx] = { ...next[realIdx], status: ok ? "ok" : "error", result }
+              next[idx] = { ...next[idx], status: ok ? "ok" : "error", result }
               return next
             })
-            const logIdx = [...toolLog].reverse().findIndex((t) => t.name === name && t.result === undefined)
+            let logIdx = id ? toolLog.findIndex((t) => t.id === id) : -1
+            if (logIdx === -1 && !id) {
+              const fromEnd = [...toolLog].reverse().findIndex((t) => t.name === name && t.result === undefined)
+              logIdx = fromEnd === -1 ? -1 : toolLog.length - 1 - fromEnd
+            }
             if (logIdx !== -1) {
-              const realIdx = toolLog.length - 1 - logIdx
-              toolLog[realIdx] = { ...toolLog[realIdx], ok, result }
+              toolLog[logIdx] = { ...toolLog[logIdx], ok, result }
             }
           } else if (evt.usage) {
             usage = evt.usage
@@ -423,6 +477,7 @@ export function AIAssistantPage() {
         flushRafRef.current = null
       }
       setStreaming(false)
+      setStreamingConvId(null)
       setStreamingText(null)
       setStreamingReasoning(null)
       setToolActivity([])
@@ -508,7 +563,7 @@ export function AIAssistantPage() {
   }
 
   function copyMessage(content: string) {
-    navigator.clipboard.writeText(content).then(() => toast.success("Copied to clipboard"))
+    void copyText(content).then((ok) => (ok ? toast.success("Copied to clipboard") : toast.error("Could not copy to clipboard")))
   }
 
   const lastMessageIsAssistant = committedMessages.at(-1)?.role === "assistant"
@@ -566,7 +621,7 @@ export function AIAssistantPage() {
       <div className="flex min-h-0 flex-1 gap-4 overflow-hidden">
         {/* Conversation history sidebar — desktop only; mobile reaches the
             same list through the History button in the chat panel's header. */}
-        <div className="hidden w-60 shrink-0 flex-col gap-2 md:flex">
+        <div className="hidden w-60 shrink-0 flex-col gap-2 lg:flex">
           <div className="flex items-center gap-1">
             <Button size="sm" variant="secondary" className="flex-1 justify-start" onClick={() => createConversation(modelId, reasoningEffort)}>
               <MessageSquarePlus className="h-3.5 w-3.5" /> New chat
@@ -575,7 +630,7 @@ export function AIAssistantPage() {
               <Button
                 size="sm"
                 variant="ghost"
-                title={selectMode ? "Cancel selection" : "Select conversations"}
+                data-tip={selectMode ? "Cancel selection" : "Select conversations"}
                 onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
               >
                 {selectMode ? <X className="h-3.5 w-3.5" /> : <ListChecks className="h-3.5 w-3.5" />}
@@ -604,12 +659,13 @@ export function AIAssistantPage() {
         </div>
 
         {/* Mobile conversation history — the sidebar above is hidden below
-            md, so this is the only way to switch or delete a conversation
+            lg, so this is the only way to switch or delete a conversation
             on a narrow viewport. */}
         <Dialog open={historyOpen} onOpenChange={(open) => { setHistoryOpen(open); if (!open) exitSelectMode() }}>
           <DialogContent className="max-w-sm">
             <DialogHeader>
               <DialogTitle>Conversations</DialogTitle>
+              <DialogDescription>Stored in this browser only — they don&apos;t sync to other devices or accounts.</DialogDescription>
             </DialogHeader>
             <div className="flex items-center gap-1">
               <Button size="sm" variant="secondary" className="flex-1 justify-start" onClick={() => { createConversation(modelId, reasoningEffort); setHistoryOpen(false) }}>
@@ -619,7 +675,7 @@ export function AIAssistantPage() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  title={selectMode ? "Cancel selection" : "Select conversations"}
+                  data-tip={selectMode ? "Cancel selection" : "Select conversations"}
                   onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
                 >
                   {selectMode ? <X className="h-3.5 w-3.5" /> : <ListChecks className="h-3.5 w-3.5" />}
@@ -657,7 +713,7 @@ export function AIAssistantPage() {
             >
               <SelectTrigger
                 className="w-auto max-w-[60%] min-w-0 gap-2 overflow-hidden sm:max-w-xs"
-                title={selectedModel ? `${selectedModel.providerName} · ${selectedModel.label}` : undefined}
+                data-tip={selectedModel ? `${selectedModel.providerName} · ${selectedModel.label}` : undefined}
               >
                 <SelectValue className="min-w-0 flex-1 truncate text-left" />
               </SelectTrigger>
@@ -680,7 +736,7 @@ export function AIAssistantPage() {
               >
                 <SelectTrigger
                   className="hidden w-auto gap-1.5 sm:flex"
-                  title="Reasoning effort — passed through as the OpenAI-compatible `reasoning_effort` field; ignored by providers/models that don't support it. When on, the model's reasoning is always shown inline as it thinks."
+                  data-tip="Reasoning effort — passed through as the OpenAI-compatible `reasoning_effort` field; ignored by providers/models that don't support it. When on, the model's reasoning is always shown inline as it thinks."
                 >
                   {/* SelectTrigger's own wrapper span isn't a flex container,
                       and Tailwind's preflight makes <svg> block-level by
@@ -700,11 +756,10 @@ export function AIAssistantPage() {
                   <SelectItem value="high">High reasoning</SelectItem>
                 </SelectContent>
               </Select>
-              <Badge variant="brand" className="hidden sm:inline-flex">Fleet-focused</Badge>
-              <Button size="sm" variant="ghost" className="md:hidden" onClick={() => setHistoryOpen(true)}>
+              <Button size="sm" variant="ghost" className="lg:hidden" onClick={() => setHistoryOpen(true)}>
                 <History className="h-3.5 w-3.5" /> History
               </Button>
-              <Button size="sm" variant="ghost" className="md:hidden" onClick={() => createConversation(modelId, reasoningEffort)}>
+              <Button size="sm" variant="ghost" className="lg:hidden" onClick={() => createConversation(modelId, reasoningEffort)}>
                 <MessageSquarePlus className="h-3.5 w-3.5" /> New
               </Button>
             </div>
@@ -714,7 +769,7 @@ export function AIAssistantPage() {
               happening" cue than the per-message ThinkingDots/spinners alone,
               visible even while scrolled away from the bottom of a long reply. */}
           <div className="relative h-0.5 shrink-0 overflow-hidden bg-transparent">
-            {streaming && (
+            {isStreamingHere && (
               <div className="absolute inset-0 bg-[var(--bg-muted)]">
                 <div className="absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-brand-500 to-transparent" />
               </div>
@@ -893,7 +948,11 @@ export function AIAssistantPage() {
             <div className="flex items-end gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-1.5 pl-3.5 shadow-sm transition-colors focus-within:border-brand-500/60 focus-within:ring-2 focus-within:ring-[var(--ring)]">
               <textarea
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                aria-label="Message the AI assistant"
+                onChange={(e) => {
+                  setInput(e.target.value)
+                  setSlashDismissed(false)
+                }}
                 onKeyDown={(e) => {
                   if (slashMatches.length > 0) {
                     if (e.key === "ArrowDown") {
@@ -912,7 +971,8 @@ export function AIAssistantPage() {
                       return
                     }
                     if (e.key === "Escape") {
-                      setInput("")
+                      e.preventDefault()
+                      setSlashDismissed(true)
                       return
                     }
                   }
@@ -925,12 +985,19 @@ export function AIAssistantPage() {
                 rows={1}
                 className="max-h-32 flex-1 resize-none bg-transparent py-1.5 text-sm outline-none"
               />
-              {streaming ? (
-                <Button variant="destructive" className="shrink-0" size="icon" onClick={stop} title="Stop">
+              {isStreamingHere ? (
+                <Button variant="secondary" className="shrink-0" size="icon" onClick={stop} data-tip="Stop generating" aria-label="Stop generating">
                   <Square className="h-3.5 w-3.5" />
                 </Button>
               ) : (
-                <Button className="shrink-0" size="icon" onClick={() => send()} disabled={!input.trim()} title="Send">
+                <Button
+                  className="shrink-0"
+                  size="icon"
+                  onClick={() => send()}
+                  disabled={!input.trim() || streaming}
+                  data-tip={streaming ? "Another conversation is still answering" : "Send"}
+                  aria-label="Send message"
+                >
                   <Send className="h-3.5 w-3.5" />
                 </Button>
               )}
@@ -964,6 +1031,7 @@ function ActivityPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (o
           <DialogTitle className="flex items-center gap-2">
             <Activity className="h-4 w-4" /> Your AI &amp; MCP activity
           </DialogTitle>
+          <DialogDescription>Every tool call made on your behalf — by the assistant or an MCP client using your keys — most recent first.</DialogDescription>
         </DialogHeader>
         <div className="max-h-[60vh] space-y-1.5 overflow-y-auto">
           {query.isLoading ? (
@@ -1004,8 +1072,6 @@ function ActivityPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (o
   )
 }
 
-/** The conversation-switcher list — shared by the desktop sidebar and the
- * mobile History dialog so they can never drift into two implementations. */
 /** Shown above the conversation list while multi-select is active — the
  * running count plus the one bulk action, so clearing out old chats doesn't
  * mean confirming and clicking the trash icon once per conversation. */
@@ -1025,6 +1091,8 @@ function SelectionBar({ count, total, onSelectAll, onDelete }: { count: number; 
   )
 }
 
+/** The conversation-switcher list — shared by the desktop sidebar and the
+ * mobile History dialog so they can never drift into two implementations. */
 function ConversationList({
   conversations,
   activeId,
@@ -1048,37 +1116,47 @@ function ConversationList({
   return (
     <>
       {conversations.map((c) => (
-        <button
+        // A plain wrapper (not one big <button>) so the per-row delete control
+        // can be a real, keyboard-focusable button instead of an SVG with an
+        // onClick — and so no interactive element ends up nested inside another.
+        <div
           key={c.id}
-          type="button"
-          onClick={() => (selectMode ? onToggleSelect?.(c.id) : onSelect(c.id))}
           className={cn(
-            "group relative flex w-full items-center justify-between gap-1 rounded-lg py-2 pr-2.5 pl-3.5 text-left text-sm transition-colors",
+            "group relative flex w-full items-center gap-1 rounded-lg text-sm transition-colors",
             c.id === activeId ? "bg-[var(--bg-muted)] text-[var(--text)]" : "text-[var(--text-muted)] hover:bg-[var(--bg-surface-hover)]",
           )}
         >
           {c.id === activeId && <span className="absolute top-1.5 bottom-1.5 left-0 w-[3px] rounded-full bg-brand-500" aria-hidden />}
           {selectMode && (
-            <Checkbox
-              checked={selectedIds?.has(c.id) ?? false}
-              onClick={(e) => e.stopPropagation()}
-              onCheckedChange={() => onToggleSelect?.(c.id)}
-            />
+            <span className="pl-3.5">
+              <Checkbox
+                checked={selectedIds?.has(c.id) ?? false}
+                aria-label={`Select ${c.title}`}
+                onCheckedChange={() => onToggleSelect?.(c.id)}
+              />
+            </span>
           )}
-          <span className="min-w-0 flex-1">
+          <button
+            type="button"
+            onClick={() => (selectMode ? onToggleSelect?.(c.id) : onSelect(c.id))}
+            aria-current={c.id === activeId ? "true" : undefined}
+            className="min-w-0 flex-1 rounded-lg py-2 pr-2.5 pl-3.5 text-left"
+          >
             <span className="block truncate">{c.title}</span>
             <span className="block text-[10px] text-[var(--text-muted)]">{formatRelativeTime(c.updatedAt)}</span>
-          </span>
+          </button>
           {!selectMode && (
-            <Trash2
-              className="h-3 w-3 shrink-0 opacity-0 transition-opacity hover:text-[var(--status-error)] group-hover:opacity-100"
-              onClick={(e) => {
-                e.stopPropagation()
-                onDelete(c.id, c.title)
-              }}
-            />
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              className="mr-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 hover:bg-[color-mix(in_oklab,var(--status-error)_12%,transparent)] hover:text-[var(--status-error)]"
+              aria-label={`Delete ${c.title}`}
+              onClick={() => onDelete(c.id, c.title)}
+            >
+              <Trash2 className="h-3 w-3" />
+            </Button>
           )}
-        </button>
+        </div>
       ))}
     </>
   )
@@ -1168,7 +1246,7 @@ function ThinkingBlock({ text, active }: { text: string; active: boolean }) {
 
 function ThinkingDots() {
   return (
-    <span className="flex items-center gap-1 py-0.5" aria-label="Thinking">
+    <span className="flex items-center gap-1 py-0.5" role="status" aria-label="Thinking">
       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--text-muted)] [animation-delay:-0.3s]" />
       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--text-muted)] [animation-delay:-0.15s]" />
       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--text-muted)]" />
@@ -1177,7 +1255,7 @@ function ThinkingDots() {
 }
 
 function CopyMessageButton({ content, onCopy }: { content: string; onCopy: (content: string) => void }) {
-  const [copied, setCopied] = useState(false)
+  const [copied, flashCopied] = useCopiedFlag()
   return (
     <Button
       size="sm"
@@ -1185,8 +1263,7 @@ function CopyMessageButton({ content, onCopy }: { content: string; onCopy: (cont
       className="h-6 px-2 text-xs"
       onClick={() => {
         onCopy(content)
-        setCopied(true)
-        setTimeout(() => setCopied(false), 1500)
+        flashCopied()
       }}
     >
       {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />} {copied ? "Copied" : "Copy"}

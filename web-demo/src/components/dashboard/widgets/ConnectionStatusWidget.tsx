@@ -31,12 +31,12 @@ export function ConnectionStatusWidget({ settings }: { settings: WidgetSettings 
             {c.online ? (
               <span className="flex shrink-0 items-center gap-2.5 text-xs text-[var(--text-muted)] tabular">
                 {ov?.latencyMs !== undefined && (
-                  <span title="Round-trip time of the last fleet poll">{ov.latencyMs} ms</span>
+                  <span data-tip="Round-trip time of the last fleet poll">{ov.latencyMs} ms</span>
                 )}
-                <span title={ov?.checkedAt}>checked {ov ? formatRelativeTime(ov.checkedAt) : "—"}</span>
+                <span data-tip={ov?.checkedAt}>checked {ov ? formatRelativeTime(ov.checkedAt) : "—"}</span>
               </span>
             ) : (
-              <span className="shrink-0 truncate text-xs text-[var(--status-error)]" title={c.error}>
+              <span className="shrink-0 truncate text-xs text-[var(--status-error)]" data-tip={c.error}>
                 {c.error ?? "unreachable"}
               </span>
             )}

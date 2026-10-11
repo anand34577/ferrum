@@ -102,3 +102,15 @@ export function utilizationTone(pct: number): "ok" | "warn" | "error" {
   if (pct >= 75) return "warn"
   return "ok"
 }
+
+/** Chart color for a utilization percentage. The `>=90 error / >=75 warn`
+ * thresholds were re-implemented inline per chart call site with drifting
+ * neutral fallbacks (chart-3 vs brand-500 vs undefined) — this is the one
+ * implementation, so recoloring "hot" across every chart is a one-line
+ * change. `fallback` is the color for the non-hot case (a bar's own series
+ * color); defaults to the chart's neutral track accent. */
+export function chartToneFor(pct: number, fallback?: string): string | undefined {
+  if (pct >= 90) return "var(--status-error)"
+  if (pct >= 75) return "var(--status-warn)"
+  return fallback
+}

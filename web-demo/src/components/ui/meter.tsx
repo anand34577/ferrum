@@ -54,7 +54,11 @@ export function Meter({
   return (
     <div className={cn("flex min-w-0 items-center gap-2", className)}>
       <div
-        className={cn("w-full min-w-8 overflow-hidden rounded-none bg-[var(--track)]", sizeClass[size], trackClassName)}
+        // No overflow-hidden here: the fill can never exceed the track
+        // (width is clamped to 0-100%) so nothing needs clipping, and
+        // clipping was cutting off the fill's own glow shadow flush against
+        // the track's left edge (visible as the glow trimmed on one side).
+        className={cn("w-full min-w-8 rounded-none bg-[var(--track)]", sizeClass[size], trackClassName)}
         role="progressbar"
         aria-valuenow={Math.round(pct)}
         aria-valuemin={0}

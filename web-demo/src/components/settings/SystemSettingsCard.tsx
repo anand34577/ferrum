@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { toast } from "sonner"
+import { useFormDirty } from "@/components/settings/use-form-dirty"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ErrorState } from "@/components/ui/error-state"
+import { FormError } from "@/components/ui/form-error"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -47,6 +49,9 @@ export function SystemSettingsCard() {
 function SystemSettingsForm({ initial }: { initial: SystemSettings }) {
   const queryClient = useQueryClient()
   const [form, setForm] = useState(initial)
+  // Remounted via key={JSON.stringify(query.data)} on save, so dirty resets
+  // for free; `initial` is the form's own starting state.
+  const dirty = useFormDirty(form, initial)
 
   const save = useMutation({
     mutationFn: () => api.put<SystemSettings>("/admin/settings/system", form),
@@ -54,7 +59,7 @@ function SystemSettingsForm({ initial }: { initial: SystemSettings }) {
       toast.success("System settings saved")
       queryClient.setQueryData(["admin", "settings", "system"], data)
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to save system settings"),
+    // Failure surfaces inline via <FormError> below, not a toast.
   })
 
   return (
@@ -84,7 +89,10 @@ function SystemSettingsForm({ initial }: { initial: SystemSettings }) {
           keep the API same-origin only — this has no effect on Ferrum's own web app, which always works.
         </p>
       </div>
-      <Button size="sm" loading={save.isPending} onClick={() => save.mutate()}>
+      <FormError
+        message={save.error instanceof ApiError ? save.error.message : save.error ? "Couldn't save system settings — try again." : null}
+      />
+      <Button size="sm" loading={save.isPending} disabled={!dirty} onClick={() => save.mutate()}>
         Save system settings
       </Button>
     </>

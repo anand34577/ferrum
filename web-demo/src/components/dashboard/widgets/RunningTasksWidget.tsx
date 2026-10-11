@@ -37,7 +37,7 @@ export function RunningTasksWidget({ settings }: { settings: WidgetSettings }) {
         <div key={t.upid} className="flex items-center gap-2 text-sm">
           <span className="w-24 shrink-0 truncate text-xs text-[var(--text-muted)]">{t.connName}</span>
           <span className="min-w-0 flex-1 truncate font-mono text-xs">{t.type}</span>
-          <Badge variant={statusVariant(t.status)} className="max-w-24 shrink-0 truncate" title={t.status || undefined}>
+          <Badge variant={statusVariant(t.status)} className="max-w-24 shrink-0 truncate" data-tip={t.status || undefined}>
             {statusLabel(t.status)}
           </Badge>
         </div>

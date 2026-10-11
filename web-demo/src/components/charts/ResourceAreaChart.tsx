@@ -1,3 +1,4 @@
+import { useId } from "react"
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import { byteUnitIndex, formatBytesAtUnit, formatRRDTick, formatRRDTooltip } from "@/lib/utils"
 import { computeNiceScale } from "@/lib/niceScale"
@@ -91,6 +92,9 @@ export function ResourceAreaChart({
   allowDecimals = true,
   valueKind,
 }: ResourceAreaChartProps) {
+  // Per-instance gradient ids: two charts plotting the same series key would
+  // otherwise emit duplicate ids and both paint with the first one's <defs>.
+  const gradId = useId().replace(/[^a-z0-9]/gi, "")
   // X tick granularity follows the visible span: minutes for an hour view,
   // day-hours for a week, dates for a year.
   const times = data.map((d) => d.time as number).filter((t) => typeof t === "number" && t > 0)
@@ -141,7 +145,7 @@ export function ResourceAreaChart({
         <AreaChart data={data} margin={{ top: 14, right: 14, left: 0, bottom: 4 }} syncId={syncId}>
           <defs>
             {series.map((s) => (
-              <linearGradient key={s.key} id={`grad-${s.key}`} x1="0" y1="0" x2="0" y2="1">
+              <linearGradient key={s.key} id={`grad-${gradId}-${s.key}`} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor={s.color} stopOpacity={0.3} />
                 <stop offset="95%" stopColor={s.color} stopOpacity={0} />
               </linearGradient>
@@ -189,7 +193,7 @@ export function ResourceAreaChart({
               dataKey={s.key}
               name={s.label}
               stroke={s.color}
-              fill={`url(#grad-${s.key})`}
+              fill={`url(#grad-${gradId}-${s.key})`}
               strokeWidth={1.75}
               connectNulls
               dot={false}

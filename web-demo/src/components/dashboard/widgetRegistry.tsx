@@ -6,19 +6,27 @@ import { CapacityForecastWidget } from "./widgets/CapacityForecastWidget"
 import { CapacityPlanningWidget } from "./widgets/CapacityPlanningWidget"
 import { ClusterComparisonWidget } from "./widgets/ClusterComparisonWidget"
 import { ConnectionStatusWidget } from "./widgets/ConnectionStatusWidget"
+import { ClusterActivityWidget } from "./widgets/ClusterActivityWidget"
 import { CpuByNodeWidget } from "./widgets/CpuByNodeWidget"
 import { FleetOverviewWidget } from "./widgets/FleetOverviewWidget"
 import { FleetSummaryWidget } from "./widgets/FleetSummaryWidget"
 import { FleetTrendWidget } from "./widgets/FleetTrendWidget"
 import { GuestStatusWidget } from "./widgets/GuestStatusWidget"
+import { HaStatusWidget } from "./widgets/HaStatusWidget"
 import { HealthScoreWidget } from "./widgets/HealthScoreWidget"
 import { MemoryByNodeWidget } from "./widgets/MemoryByNodeWidget"
 import { NodeCompositionWidget } from "./widgets/NodeCompositionWidget"
 import { NodeComparisonWidget } from "./widgets/NodeComparisonWidget"
 import { NodeScatterWidget } from "./widgets/NodeScatterWidget"
+import { NodeVersionsWidget } from "./widgets/NodeVersionsWidget"
+import { PbsDatastoresWidget } from "./widgets/PbsDatastoresWidget"
+import { PoolUsageWidget } from "./widgets/PoolUsageWidget"
+import { ReplicationStatusWidget } from "./widgets/ReplicationStatusWidget"
 import { RunningTasksWidget } from "./widgets/RunningTasksWidget"
+import { ServerRosterWidget } from "./widgets/ServerRosterWidget"
 import { StorageTreemapWidget } from "./widgets/StorageTreemapWidget"
 import { StorageUsageWidget } from "./widgets/StorageUsageWidget"
+import { TagBreakdownWidget } from "./widgets/TagBreakdownWidget"
 import { TopConsumersWidget } from "./widgets/TopConsumersWidget"
 import { UtilizationHeatmapWidget } from "./widgets/UtilizationHeatmapWidget"
 import { UtilizationHistogramWidget } from "./widgets/UtilizationHistogramWidget"
@@ -48,4 +56,12 @@ export const widgetRegistry: Record<WidgetType, ComponentType<{ settings: Widget
   "uptime-leaderboard": UptimeLeaderboardWidget,
   "capacity-forecast": CapacityForecastWidget,
   "health-score": HealthScoreWidget,
+  "ha-status": HaStatusWidget,
+  "tag-breakdown": TagBreakdownWidget,
+  "cluster-activity": ClusterActivityWidget,
+  "node-versions": NodeVersionsWidget,
+  "server-roster": ServerRosterWidget,
+  "pool-usage": PoolUsageWidget,
+  "pbs-datastores": PbsDatastoresWidget,
+  "replication-status": ReplicationStatusWidget,
 }

@@ -80,6 +80,9 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
   )
 }
 
+// Provider and its consumer hook live in one file on purpose (React's context
+// pattern); splitting the hook out would churn every caller for no runtime gain.
+// eslint-disable-next-line react/only-export-components
 export function useConfirm(): ConfirmFn {
   const ctx = useContext(ConfirmContext)
   if (!ctx) throw new Error("useConfirm must be used within ConfirmProvider")

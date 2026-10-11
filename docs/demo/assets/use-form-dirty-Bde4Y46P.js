@@ -1,0 +1,1 @@
+import{r as e}from"./rolldown-runtime-hePW80VL.js";import{tn as t}from"./button-JNnJiorE.js";var n=e(t(),1);function r(e,t){let r=JSON.stringify(e),i=JSON.stringify(t);return(0,n.useMemo)(()=>r!==i,[r,i])}export{r as t};

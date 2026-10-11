@@ -25,12 +25,13 @@ import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 import { api, type ClusterResource, type Connection, type ConnectionInventory } from "@/lib/api"
 import { useTheme } from "@/lib/theme"
-import { cn, formatBytes, formatPercentFine } from "@/lib/utils"
+import { cn, formatBytes, formatPercentFine, guestUrl } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { ErrorState } from "@/components/ui/error-state"
 import { Meter } from "@/components/ui/meter"
 import { PageHeader } from "@/components/ui/page-header"
 import { StatusDot } from "@/components/ui/status-dot"
+import { TypeChip } from "@/components/ui/type-chip"
 
 const STATUS_COLOR: Record<string, string> = {
   online: "var(--status-ok)",
@@ -63,16 +64,6 @@ function loadPositions(): PositionMap {
 /** Tiny horizontal load bar used across all topology cards. */
 function LoadBar({ pct }: { pct: number }) {
   return <Meter value={pct} size="xs" label="Load" className="min-w-10 flex-1" />
-}
-
-function Chip({ kind }: { kind: string }) {
-  const styles =
-    kind === "VM"
-      ? "bg-[color-mix(in_oklab,var(--chart-1)_15%,transparent)] text-[var(--chart-1)]"
-      : kind === "LXC"
-        ? "bg-[color-mix(in_oklab,var(--chart-2)_15%,transparent)] text-[var(--chart-2)]"
-        : "bg-[var(--bg-muted)] text-[var(--text-muted)]"
-  return <span className={cn("shrink-0 rounded-sm px-1 py-px font-mono text-[9px] font-semibold uppercase tracking-wide", styles)}>{kind}</span>
 }
 
 function RootNameEditor({
@@ -116,7 +107,7 @@ function RootNameEditor({
 function RootNode({ data }: NodeProps<Node<{ label: string; connections: number; nodes: number; guests: number; editing: boolean; onStartEdit: () => void; onRename: (name: string) => void }>>) {
   return (
     <div className="flex min-w-52 flex-col items-center gap-0.5 rounded-xl bg-[var(--bg-elevated)] px-5 py-3 text-center shadow-lg ring-2 ring-brand-500/60">
-      <div onDoubleClick={data.onStartEdit} className="flex cursor-text items-center gap-1.5" title="Double-click to rename">
+      <div onDoubleClick={data.onStartEdit} className="flex cursor-text items-center gap-1.5" data-tip="Double-click to rename">
         <Waypoints className="h-4 w-4 shrink-0 text-brand-400" />
         {data.editing ? (
           <RootNameEditor
@@ -159,24 +150,24 @@ function ConnectionNode({ data }: NodeProps<Node<{ label: string; online: boolea
       <div className="flex items-center gap-2">
         <ServerCog className="h-4 w-4 shrink-0 text-brand-500" />
         <p className="truncate font-display text-sm font-semibold leading-tight">{data.label}</p>
-        <span className="ml-auto shrink-0" title={data.online ? "Online" : "Offline"}>
+        <span className="ml-auto shrink-0" role="img" aria-label={data.online ? "Online" : "Offline"} data-tip={data.online ? "Online" : "Offline"}>
           <StatusDot status={data.online ? "ok" : "error"} />
         </span>
       </div>
       {data.address && (
-        <p className="truncate font-mono text-[11px]" title={`https://${data.address}`}>
+        <p className="truncate font-mono text-[11px]" data-tip={`https://${data.address}`}>
           https://{data.address}
         </p>
       )}
       <div className="flex items-center gap-3 text-[10px] text-[var(--text-muted)]">
         {data.auth && (
-          <span className="flex min-w-0 items-center gap-1" title={data.auth}>
+          <span className="flex min-w-0 items-center gap-1" data-tip={data.auth}>
             <KeyRound className="h-3 w-3 shrink-0" />
             <span className="truncate font-mono">{data.auth}</span>
           </span>
         )}
         {data.verifyTls === false && (
-          <span className="flex shrink-0 items-center gap-1 text-[var(--status-warn)]" title="TLS certificate verification is disabled for this connection">
+          <span className="flex shrink-0 items-center gap-1 text-[var(--status-warn)]" data-tip="TLS certificate verification is disabled for this connection">
             <Lock className="h-3 w-3" /> no TLS verify
           </span>
         )}
@@ -200,8 +191,8 @@ function PveNode({ data }: NodeProps<Node<{ label: string; status: string; cpu: 
     <div className="w-52 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 shadow-sm">
       <div className="flex items-center gap-1.5">
         <Server className="h-3.5 w-3.5 shrink-0" style={{ color: STATUS_COLOR[data.status] ?? "var(--text-muted)" }} />
-        <span className="truncate text-xs font-semibold" title={data.label}>{data.label}</span>
-        <span className="ml-auto shrink-0" title={data.status}>
+        <span className="truncate text-xs font-semibold" data-tip={data.label}>{data.label}</span>
+        <span className="ml-auto shrink-0" role="img" aria-label={`Node ${data.status}`} data-tip={data.status}>
           <StatusDot status={data.status === "online" ? "ok" : data.status === "offline" ? "error" : "warn"} />
         </span>
       </div>
@@ -232,14 +223,16 @@ function PveNode({ data }: NodeProps<Node<{ label: string; status: string; cpu: 
 
 /** VM / container: type chip, status dot, and live CPU / RAM / disk load. */
 function GuestNode({ data }: NodeProps<Node<{ label: string; vmid: number; status: string; type: string; cpu: number; mem: number; maxmem: number; disk: number; maxdisk: number }>>) {
-  const kind = data.type === "lxc" ? "LXC" : "VM"
   const memPct = data.maxmem ? (data.mem / data.maxmem) * 100 : 0
   const diskPct = data.maxdisk ? (data.disk / data.maxdisk) * 100 : 0
   return (
-    <div className="w-44 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 shadow-sm">
+    <div
+      className="w-44 cursor-pointer rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 shadow-sm transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-hover)]"
+      data-tip="Open in Inventory"
+    >
       <div className="flex items-center gap-1.5">
-        <Chip kind={kind} />
-        <span className="truncate text-xs font-medium" title={data.label}>{data.label}</span>
+        <TypeChip type={data.type} size="sm" />
+        <span className="truncate text-xs font-medium" data-tip={data.label}>{data.label}</span>
         <span className="ml-auto flex shrink-0 items-center gap-1">
           <span className="font-mono text-[9px] text-[var(--text-faint)] tabular">#{data.vmid}</span>
           <StatusDot status={data.status === "running" ? "ok" : "error"} />
@@ -320,6 +313,7 @@ function injectSvgBackground(dataUrl: string, width: number, height: number, col
  * a child of <ReactFlow> — useReactFlow() only resolves inside that tree. */
 function ExportSvgButton() {
   const { getNodes } = useReactFlow()
+  const [exporting, setExporting] = useState(false)
 
   async function exportSvg() {
     const nodes = getNodes()
@@ -335,6 +329,7 @@ function ExportSvgButton() {
 
     const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#ffffff"
     try {
+      setExporting(true)
       const rawDataUrl = await toSvg(viewportEl, {
         backgroundColor: bg,
         width,
@@ -352,12 +347,14 @@ function ExportSvgButton() {
       a.click()
     } catch {
       toast.error("Couldn't export the topology as SVG")
+    } finally {
+      setExporting(false)
     }
   }
 
   return (
-    <Button type="button" size="sm" variant="outline" onClick={() => void exportSvg()}>
-      <Download className="h-3.5 w-3.5" /> Export SVG
+    <Button type="button" size="sm" variant="outline" onClick={() => void exportSvg()} loading={exporting}>
+      {!exporting && <Download className="h-3.5 w-3.5" />} Export SVG
     </Button>
   )
 }
@@ -489,8 +486,13 @@ export function TopologyPage() {
           onNodeClick={(_, node) => {
             if (node.type === "pveNode" && node.data.connId && node.data.nodeName) {
               navigate(`/nodes/${node.data.connId}/${node.data.nodeName}`)
-            } else if (node.type === "overflow") {
-              navigate("/inventory")
+            } else if (node.type === "guest" && node.data.connId) {
+              // The most numerous card on the page used to be a dead end —
+              // a click now opens that guest in Inventory (detail dialog
+              // auto-opened via guestUrl's focusGuest param).
+              navigate(guestUrl(node.data.connId as string, node.data.vmid as number | undefined, node.data.label as string))
+            } else if (node.type === "overflow" && node.data.connId) {
+              navigate(`/inventory?conn=${encodeURIComponent(node.data.connId as string)}`)
             }
           }}
         >
@@ -508,7 +510,7 @@ export function TopologyPage() {
               type="button"
               size="sm"
               variant={snapEnabled ? "default" : "outline"}
-              title={snapEnabled ? "Snap to grid: on" : "Snap to grid: off"}
+              data-tip={snapEnabled ? "Snap to grid: on" : "Snap to grid: off"}
               onClick={() => {
                 const next = !snapEnabled
                 setSnapEnabled(next)
@@ -546,7 +548,7 @@ export function TopologyPage() {
             </Panel>
           )}
           {hasGraph && (
-            <Panel position="top-left" className="!m-2 flex items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-[11px] text-[var(--text-muted)] shadow-xs">
+            <Panel position="top-left" className="!m-2 hidden items-center gap-2 rounded-md lg:flex border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-[11px] text-[var(--text-muted)] shadow-xs">
               <Boxes className="h-3.5 w-3.5" />
               Drag any card to rearrange · positions are remembered
             </Panel>
@@ -681,6 +683,7 @@ function buildGraph(
           position: savedPositions[guestId] ?? { x: 1010, y: nodeY + guestIdx * 84 - ((slots - 1) * 84) / 2 },
           data: {
             label: g.name ?? `#${g.vmid}`,
+            connId: conn.connectionId,
             vmid: g.vmid ?? 0,
             status: g.status ?? "unknown",
             type: g.type,
@@ -705,7 +708,7 @@ function buildGraph(
           id: overflowId,
           type: "overflow",
           position: savedPositions[overflowId] ?? { x: 1010, y: nodeY + nodeGuests.length * 84 - ((slots - 1) * 84) / 2 },
-          data: { count: overflowCount },
+          data: { count: overflowCount, connId: conn.connectionId, nodeName: pn.node },
         })
         edges.push({
           id: `e-${nodeId}-${overflowId}`,

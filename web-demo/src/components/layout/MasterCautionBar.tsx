@@ -38,16 +38,19 @@ export function MasterCautionBar() {
   return (
     <Link
       to="/alerts"
-      role="status"
       className={cn(
         "group relative flex h-6 shrink-0 items-center justify-center gap-2 overflow-hidden px-4 text-center transition-colors",
-        level === "error" && cn("bg-[var(--status-error)] text-white", persistent && "caution-band"),
+        // Dark looks lift --status-error to a salmon that white text can't
+        // reach 4.5:1 on at 11px; black does (same as the warn strip).
+        level === "error" && cn("bg-[var(--status-error)] text-white dark:text-black", persistent && "caution-band"),
         level === "warn" && cn("bg-[var(--status-warn)] text-black", persistent && "caution-band"),
         level === "ok" && "border-b border-[var(--border)] bg-[var(--bg-muted)] text-[var(--status-ok)]",
       )}
     >
       {level === "ok" ? <ShieldCheck className="h-3 w-3 shrink-0" aria-hidden /> : <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />}
-      <span className={cn("truncate text-[11px]", persistent ? "panel-label tracking-[0.12em]" : "font-medium")}>
+      {/* role="status" lives on the text, not the link: a link with a
+          status role has no link semantics (and no accessible name). */}
+      <span role="status" className={cn("truncate text-[11px]", persistent ? "panel-label tracking-[0.12em]" : "font-medium")}>
         {persistent ? parts.join(" · ").toUpperCase() : parts.join(" · ")}
       </span>
       {offline > 0 && <WifiOff className="h-3.5 w-3.5 shrink-0" aria-hidden />}

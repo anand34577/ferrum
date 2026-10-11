@@ -4,6 +4,7 @@ import type { WidgetSettings } from "@/lib/dashboardTypes"
 import { scopedConnection, utilizationTone } from "@/lib/fleet"
 import { cn } from "@/lib/utils"
 import { WidgetError } from "@/components/dashboard/WidgetChrome"
+import { Skeleton } from "@/components/ui/skeleton"
 
 function scoreTone(score: number): string {
   // utilizationTone reads "higher = worse"; a health score is the inverse.
@@ -66,12 +67,12 @@ export function HealthScoreWidget({ settings }: { settings: WidgetSettings }) {
   if (isError) return <WidgetError />
 
   if (connId !== "all") {
-    if (!connectionQuery.data) return <p className="text-sm text-[var(--text-muted)]">Loading…</p>
+    if (!connectionQuery.data) return <Skeleton className="h-24" />
     return <ScoreCard result={connectionQuery.data} />
   }
 
   const fleet = fleetQuery.data
-  if (!fleet) return <p className="text-sm text-[var(--text-muted)]">Loading…</p>
+  if (!fleet) return <Skeleton className="h-24" />
   if (fleet.connections.length === 0) {
     return <p className="text-sm text-[var(--text-muted)]">No connections configured yet.</p>
   }

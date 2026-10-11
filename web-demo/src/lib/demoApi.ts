@@ -286,11 +286,42 @@ on("GET", "/alerts/summary", () => ({
   warning: W.alerts.filter((a) => a.status === "active" && a.severity === "warning").length,
   critical: W.alerts.filter((a) => a.status === "active" && a.severity === "critical").length,
 }))
-on("GET", "/alerts/", () => W.alerts)
-on("POST", "/alerts/:id/silence", ({ params }) => {
+// Honours ?status= like the real endpoint — without it the Alerts page's
+// "active" and "silenced" lists were both handed every alert.
+on("GET", "/alerts/", ({ query }) => {
+  const status = query.get("status")
+  // A timed silence that has run out comes back by itself, as the real
+  // evaluator would do on its next tick.
+  for (const a of W.alerts) {
+    if (a.status === "silenced" && a.silencedUntil && new Date(a.silencedUntil).getTime() <= Date.now()) {
+      a.status = "active"
+      a.silencedUntil = undefined
+    }
+  }
+  return status ? W.alerts.filter((a) => a.status === status) : W.alerts
+})
+on("POST", "/alerts/:id/silence", ({ params, body }) => {
   const a = W.alerts.find((x) => x.id === params.id)
-  if (a) a.status = "resolved"
+  if (!a) return null
+  const minutes = (body as { durationMinutes?: number } | undefined)?.durationMinutes ?? 0
+  a.status = "silenced"
+  a.silencedUntil = minutes > 0 ? new Date(Date.now() + minutes * 60_000).toISOString() : undefined
+  a.updatedAt = new Date().toISOString()
   return {}
+})
+on("POST", "/alerts/:id/unsilence", ({ params }) => {
+  const a = W.alerts.find((x) => x.id === params.id)
+  if (!a) return null
+  a.status = "active"
+  a.silencedUntil = undefined
+  return {}
+})
+on("PUT", "/alert-rules/:id", ({ params, body }) => {
+  const rule = W.alertRules.find((r) => r.id === params.id)
+  if (!rule) return null
+  const b = body as Partial<W.DemoAlertRule>
+  Object.assign(rule, { name: b.name ?? rule.name, metric: b.metric ?? rule.metric, threshold: b.threshold ?? rule.threshold, severity: b.severity ?? rule.severity, connectionId: b.connectionId })
+  return { id: rule.id }
 })
 on("GET", "/alert-rules/", () => W.alertRules)
 on("POST", "/alert-rules/", ({ body }) => {
@@ -537,7 +568,16 @@ on("DELETE", "/users/:id", ({ params }) => {
   return {}
 })
 
-on("GET", "/audit", () => W.auditLog)
+// from (inclusive) / to (exclusive) / limit, newest first — as internal/api/users.go.
+on("GET", "/audit", ({ query }) => {
+  const from = query.get("from")
+  const to = query.get("to")
+  const limit = Number(query.get("limit")) || 200
+  return W.auditLog
+    .filter((e) => (!from || e.createdAt >= from) && (!to || e.createdAt < to))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, limit)
+})
 
 // --- webhooks --------------------------------------------------------------
 
@@ -733,6 +773,38 @@ export function installDemoApi() {
     if (u.includes("/api/v1/events")) return new NullEventSource() as unknown as EventSource
     return new RealEventSource(url, init)
   } as unknown as typeof EventSource
+
+  // File uploads go through XMLHttpRequest (for progress events), which
+  // window.fetch patching doesn't see. There is nowhere to upload to here,
+  // so an /api/v1 XHR reports steady progress and then succeeds.
+  const RealXHR = window.XMLHttpRequest
+  window.XMLHttpRequest = function () {
+    const xhr = new RealXHR()
+    let demo = false
+    const open = xhr.open.bind(xhr) as (...args: unknown[]) => void
+    xhr.open = (...args: unknown[]) => {
+      demo = String(args[1]).includes("/api/v1")
+      if (!demo) open(...args)
+    }
+    const send = xhr.send.bind(xhr)
+    xhr.send = (body?: Document | XMLHttpRequestBodyInit | null) => {
+      if (!demo) return send(body)
+      let pct = 0
+      const tick = setInterval(() => {
+        pct += 20
+        xhr.upload.dispatchEvent(new ProgressEvent("progress", { lengthComputable: true, loaded: pct, total: 100 }))
+        if (pct < 100) return
+        clearInterval(tick)
+        Object.defineProperties(xhr, {
+          status: { value: 200 },
+          statusText: { value: "OK" },
+          responseText: { value: JSON.stringify({ upid: "UPID:demo:upload" }) },
+        })
+        xhr.dispatchEvent(new ProgressEvent("load"))
+      }, 250)
+    }
+    return xhr
+  } as unknown as typeof XMLHttpRequest
 
   const realFetch = window.fetch.bind(window)
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {

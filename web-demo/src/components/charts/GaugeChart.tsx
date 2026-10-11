@@ -1,3 +1,4 @@
+import { useId } from "react"
 import { cn } from "@/lib/utils"
 
 interface GaugeChartProps {
@@ -23,7 +24,11 @@ function gaugeColor(value: number): string {
 export function GaugeChart({ value, label, size = 110 }: GaugeChartProps) {
   const clamped = Math.max(0, Math.min(100, value))
   const color = gaugeColor(clamped)
-  const gradId = `gauge-${label.replace(/[^a-z0-9]/gi, "")}`
+  // useId, not just the label — two gauges sharing a label (e.g. two guests
+  // both showing "CPU") would otherwise emit duplicate <linearGradient id>s,
+  // and the browser renders both using whichever <defs> came first.
+  const autoId = useId()
+  const gradId = `gauge-${label.replace(/[^a-z0-9]/gi, "")}${autoId.replace(/[^a-z0-9]/gi, "")}`
 
   const stroke = 7
   const r = (size - stroke) / 2

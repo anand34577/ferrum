@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
-import { AlertTriangle, BellOff, ChartPie, Plus, ShieldAlert, Trash2, WifiOff } from "lucide-react"
+import { AlertTriangle, BellOff, ChartPie, ChevronDown, Pencil, Plus, ShieldAlert, Trash2, WifiOff } from "lucide-react"
 import { useMemo, useState } from "react"
+import { Link } from "react-router-dom"
 import { toast } from "sonner"
 import { DonutChart } from "@/components/charts/DonutChart"
 import { Badge } from "@/components/ui/badge"
@@ -15,9 +16,11 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { PageHeader } from "@/components/ui/page-header"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Timestamp } from "@/components/ui/timestamp"
 import { Hint } from "@/components/ui/tooltip"
 import { api, ApiError, type AlertInstance, type AlertRule, type ConnectionHealth, type ConnectionInventory } from "@/lib/api"
-import { formatAlertValue } from "@/lib/utils"
+import { alertUrl, formatAlertValue, formatTimeLeft } from "@/lib/utils"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 
 /** How long ago `since` was, as a short "3h 12m" style duration — connection
  * downtime is the one alert-adjacent number worth reading at a glance. */
@@ -44,11 +47,36 @@ const METRIC_LABELS: Record<string, string> = {
   storage_orphan_disk: "Orphaned volume",
 }
 
+// Metrics the rule API actually accepts (validMetrics server-side) — every
+// one is a 0-100 percentage. The form used to offer the built-in system
+// metrics too (certificate expiry, connection staleness, orphaned volumes),
+// which the API rejects with a 400.
+const RULE_METRICS = ["node_cpu", "node_mem", "node_disk", "guest_cpu", "guest_mem", "storage_usage"] as const
+
+// Mirrors maxSilenceMinutes (30 days) in internal/api/alerts.go.
+const SILENCE_CHOICES = [
+  { minutes: 60, label: "1 hour" },
+  { minutes: 4 * 60, label: "4 hours" },
+  { minutes: 24 * 60, label: "24 hours" },
+  { minutes: 7 * 24 * 60, label: "7 days" },
+]
+
+interface RuleFormState {
+  id?: string
+  name: string
+  metric: string
+  connectionId: string
+  threshold: string
+  severity: string
+}
+
+const EMPTY_RULE_FORM: RuleFormState = { name: "", metric: "node_cpu", connectionId: "", threshold: "90", severity: "warning" }
+
 export function AlertsPage() {
   const queryClient = useQueryClient()
   const confirm = useConfirm()
   const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState({ name: "", metric: "node_cpu", connectionId: "", threshold: "90", severity: "warning" })
+  const [form, setForm] = useState<RuleFormState>(EMPTY_RULE_FORM)
 
   const summaryQuery = useQuery({
     queryKey: ["alerts-summary"],
@@ -60,6 +88,13 @@ export function AlertsPage() {
     queryFn: () => api.get<AlertInstance[]>("/alerts/?status=active"),
     refetchInterval: 30_000,
   })
+  // Silenced alerts get their own query so they can be surfaced (and
+  // un-silenced) instead of vanishing into nowhere after the Silence click.
+  const silencedAlertsQuery = useQuery({
+    queryKey: ["alerts", "silenced"],
+    queryFn: () => api.get<AlertInstance[]>("/alerts/?status=silenced"),
+    refetchInterval: 30_000,
+  })
   const rulesQuery = useQuery({ queryKey: ["alert-rules"], queryFn: () => api.get<AlertRule[]>("/alert-rules/") })
   const healthQuery = useQuery({
     queryKey: ["connection-health"],
@@ -69,14 +104,37 @@ export function AlertsPage() {
   const downConnections = (healthQuery.data ?? []).filter((h) => h.status === "down")
   const { data: inventory } = useQuery({ queryKey: ["inventory"], queryFn: () => api.get<ConnectionInventory[]>("/inventory/") })
 
+  // Pending state is tracked per alert id — the previous shared
+  // `mutation.isPending` spun the Silence button on every visible row at
+  // once whenever any one of them was clicked.
+  const [silencingId, setSilencingId] = useState<string | null>(null)
   const silenceMutation = useMutation({
-    mutationFn: (id: string) => api.post(`/alerts/${id}/silence`),
-    onSuccess: () => {
-      toast.success("Alert silenced")
+    mutationFn: ({ id, minutes }: { id: string; minutes: number }) => {
+      setSilencingId(id)
+      return api.post(`/alerts/${id}/silence`, { durationMinutes: minutes })
+    },
+    onSettled: () => setSilencingId(null),
+    onSuccess: (_data, { minutes }) => {
+      const choice = SILENCE_CHOICES.find((c) => c.minutes === minutes)
+      toast.success(minutes > 0 ? `Alert silenced for ${choice?.label ?? `${minutes} minutes`}` : "Alert silenced until it resolves")
       queryClient.invalidateQueries({ queryKey: ["alerts"] })
       queryClient.invalidateQueries({ queryKey: ["alerts-summary"] })
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to silence alert"),
+  })
+  const [unsilencingId, setUnsilencingId] = useState<string | null>(null)
+  const unsilenceMutation = useMutation({
+    mutationFn: (id: string) => {
+      setUnsilencingId(id)
+      return api.post(`/alerts/${id}/unsilence`)
+    },
+    onSettled: () => setUnsilencingId(null),
+    onSuccess: () => {
+      toast.success("Alert re-enabled — it will fire again while its threshold is breached")
+      queryClient.invalidateQueries({ queryKey: ["alerts"] })
+      queryClient.invalidateQueries({ queryKey: ["alerts-summary"] })
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to un-silence alert"),
   })
 
   const createRuleMutation = useMutation({
@@ -91,10 +149,28 @@ export function AlertsPage() {
     onSuccess: () => {
       toast.success("Alert rule created")
       queryClient.invalidateQueries({ queryKey: ["alert-rules"] })
-      setForm({ name: "", metric: "node_cpu", connectionId: "", threshold: "90", severity: "warning" })
+      setForm(EMPTY_RULE_FORM)
       setShowForm(false)
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to create rule"),
+  })
+
+  const updateRuleMutation = useMutation({
+    mutationFn: () =>
+      api.put(`/alert-rules/${form.id}`, {
+        name: form.name,
+        metric: form.metric,
+        connectionId: form.connectionId || undefined,
+        threshold: Number(form.threshold),
+        severity: form.severity,
+      }),
+    onSuccess: () => {
+      toast.success("Alert rule updated")
+      queryClient.invalidateQueries({ queryKey: ["alert-rules"] })
+      setForm(EMPTY_RULE_FORM)
+      setShowForm(false)
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to update rule"),
   })
 
   const deleteRuleMutation = useMutation({
@@ -113,6 +189,20 @@ export function AlertsPage() {
       confirmLabel: "Delete rule",
     })
     if (ok) deleteRuleMutation.mutate(rule.id)
+  }
+
+  function editRule(rule: AlertRule) {
+    setForm({
+      id: rule.id,
+      name: rule.name,
+      metric: rule.metric,
+      connectionId: rule.connectionId ?? "",
+      threshold: String(rule.threshold),
+      severity: rule.severity,
+    })
+    setShowForm(true)
+    // Bring the form into view when the edit button lives at the bottom.
+    requestAnimationFrame(() => document.getElementById("alert-rule-form")?.scrollIntoView({ behavior: "smooth", block: "start" }))
   }
 
   const donutData = useMemo(
@@ -135,7 +225,15 @@ export function AlertsPage() {
         header: "Severity",
         cell: (c) => <Badge variant={c.getValue<string>() === "critical" ? "error" : "warn"}>{c.getValue<string>()}</Badge>,
       },
-      { accessorKey: "resourceName", header: "Resource" },
+      {
+        accessorKey: "resourceName",
+        header: "Resource",
+        cell: (c) => (
+          <Link to={alertUrl(c.row.original)} className="underline-offset-2 hover:underline" data-tip="Open this resource">
+            {c.getValue<string>()}
+          </Link>
+        ),
+      },
       { accessorKey: "connectionName", header: "Connection", meta: { hideBelowMd: true } },
       { accessorKey: "metric", header: "Metric", cell: (c) => METRIC_LABELS[c.getValue<string>()] ?? c.getValue<string>() },
       {
@@ -143,7 +241,7 @@ export function AlertsPage() {
         header: "Value",
         meta: { hideBelowMd: true },
         cell: (c) => (
-          <span className="font-mono text-xs tabular">
+          <span className="font-mono text-xs whitespace-nowrap tabular">
             {formatAlertValue(c.row.original.metric, c.row.original.value, c.row.original.threshold)}
           </span>
         ),
@@ -151,26 +249,99 @@ export function AlertsPage() {
       {
         accessorKey: "triggeredAt",
         header: "Triggered",
-        cell: (c) => <span className="text-xs text-[var(--text-muted)] tabular">{new Date(c.getValue<string>()).toLocaleString()}</span>,
+        cell: (c) => <Timestamp iso={c.getValue<string>()} className="text-xs text-[var(--text-muted)]" />,
       },
       {
         id: "actions",
         header: "",
         cell: (c) => (
-          <Button size="sm" variant="ghost" loading={silenceMutation.isPending} onClick={() => silenceMutation.mutate(c.row.original.id)}>
-            {!silenceMutation.isPending && <BellOff className="h-3.5 w-3.5" />} Silence
+          // A menu rather than a single button: "mute this for the 4 hours
+          // the maintenance takes" is the common case, and an open-ended
+          // mute is the one people forget to undo.
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="sm"
+                variant="ghost"
+                loading={silencingId === c.row.original.id}
+                disabled={silencingId !== null && silencingId !== c.row.original.id}
+                aria-label={`Silence alert for ${c.row.original.resourceName}`}
+              >
+                {silencingId !== c.row.original.id && <BellOff className="h-3.5 w-3.5" />} Silence
+                <ChevronDown className="h-3 w-3 opacity-60" aria-hidden />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Silence for</DropdownMenuLabel>
+              {SILENCE_CHOICES.map((choice) => (
+                <DropdownMenuItem key={choice.minutes} onSelect={() => silenceMutation.mutate({ id: c.row.original.id, minutes: choice.minutes })}>
+                  {choice.label}
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => silenceMutation.mutate({ id: c.row.original.id, minutes: 0 })}>Until it resolves</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ),
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [silencingId],
+  )
+
+  const silencedColumns = useMemo<ColumnDef<AlertInstance>[]>(
+    () => [
+      {
+        accessorKey: "severity",
+        header: "Severity",
+        cell: (c) => <Badge variant={c.getValue<string>() === "critical" ? "error" : "warn"}>{c.getValue<string>()}</Badge>,
+      },
+      { accessorKey: "resourceName", header: "Resource" },
+      { accessorKey: "connectionName", header: "Connection", meta: { hideBelowMd: true } },
+      { accessorKey: "metric", header: "Metric", cell: (c) => METRIC_LABELS[c.getValue<string>()] ?? c.getValue<string>() },
+      {
+        accessorKey: "silencedUntil",
+        header: "Returns",
+        cell: (c) => {
+          const until = c.getValue<string | undefined>()
+          const left = until ? formatTimeLeft(until) : ""
+          if (!until) return <span className="text-xs text-[var(--text-muted)]">When un-silenced or resolved</span>
+          return (
+            <span className="text-xs tabular" data-tip={new Date(until).toLocaleString()}>
+              {left ? `in ${left}` : "any moment"}
+            </span>
+          )
+        },
+      },
+      {
+        id: "actions",
+        header: "",
+        cell: (c) => (
+          <Button
+            size="sm"
+            variant="ghost"
+            loading={unsilencingId === c.row.original.id}
+            disabled={unsilencingId !== null && unsilencingId !== c.row.original.id}
+            onClick={() => unsilenceMutation.mutate(c.row.original.id)}
+          >
+            Un-silence
           </Button>
         ),
       },
     ],
-    [silenceMutation],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [unsilencingId],
   )
 
   const ruleColumns = useMemo<ColumnDef<AlertRule>[]>(
     () => [
       { accessorKey: "name", header: "Name" },
       { accessorKey: "metric", header: "Metric", cell: (c) => METRIC_LABELS[c.getValue<string>()] ?? c.getValue<string>() },
-      { accessorKey: "threshold", header: "Threshold", cell: (c) => <span className="tabular">{c.getValue<number>()}%</span> },
+      {
+        accessorKey: "threshold",
+        header: "Threshold",
+        cell: (c) => <span className="tabular">{c.getValue<number>()}%</span>,
+      },
       {
         accessorKey: "severity",
         header: "Severity",
@@ -180,28 +351,38 @@ export function AlertsPage() {
         id: "scope",
         header: "Scope",
         meta: { hideBelowMd: true },
-        cell: (c) => (c.row.original.connectionId ? "One connection" : "All connections"),
+        cell: (c) => {
+          const id = c.row.original.connectionId
+          if (!id) return "All connections"
+          return inventory?.find((conn) => conn.connectionId === id)?.name ?? "One connection"
+        },
       },
       {
         id: "actions",
         header: "",
         cell: (c) => (
-          <Hint label="Delete rule">
-            <Button
-              size="icon"
-              variant="ghost"
-              className="hover:bg-[color-mix(in_oklab,var(--status-error)_12%,transparent)] hover:text-[var(--status-error)]"
-              aria-label={`Delete rule ${c.row.original.name}`}
-              onClick={() => removeRule(c.row.original)}
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          </Hint>
+          <div className="flex items-center gap-0.5">
+            <Hint label="Edit rule">
+              <Button size="icon" variant="ghost" aria-label={`Edit rule ${c.row.original.name}`} onClick={() => editRule(c.row.original)}>
+                <Pencil className="h-4 w-4" />
+              </Button>
+            </Hint>
+            <Hint label="Delete rule">
+              <Button
+                size="icon"
+                variant="ghost-danger"
+                aria-label={`Delete rule ${c.row.original.name}`}
+                onClick={() => removeRule(c.row.original)}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </Hint>
+          </div>
         ),
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [deleteRuleMutation],
+    [deleteRuleMutation, inventory],
   )
 
   return (
@@ -210,8 +391,15 @@ export function AlertsPage() {
         title="Alerts"
         description="Threshold-based monitoring across every connection, evaluated every minute."
         icon={AlertTriangle}
+        onRefresh={() => {
+          void queryClient.invalidateQueries({ queryKey: ["alerts"] })
+          void queryClient.invalidateQueries({ queryKey: ["alerts-summary"] })
+          void queryClient.invalidateQueries({ queryKey: ["alert-rules"] })
+          void queryClient.invalidateQueries({ queryKey: ["connection-health"] })
+        }}
+        refreshing={activeAlertsQuery.isRefetching || summaryQuery.isRefetching}
         actions={
-          <Button onClick={() => setShowForm((s) => !s)}>
+          <Button onClick={() => { setForm(EMPTY_RULE_FORM); setShowForm((s) => !s) }}>
             <Plus className="h-4 w-4" /> New rule
           </Button>
         }
@@ -234,7 +422,7 @@ export function AlertsPage() {
                 <div className="flex min-w-0 items-center gap-2">
                   <Badge variant="error">down</Badge>
                   <span className="font-medium">{h.connectionName}</span>
-                  {h.lastError && <span className="truncate text-xs text-[var(--text-muted)]" title={h.lastError}>{h.lastError}</span>}
+                  {h.lastError && <span className="truncate text-xs text-[var(--text-muted)]" data-tip={h.lastError}>{h.lastError}</span>}
                 </div>
                 <span className="shrink-0 text-xs text-[var(--text-muted)] tabular">unreachable for {ageFrom(h.since)}</span>
               </div>
@@ -243,8 +431,8 @@ export function AlertsPage() {
         </Card>
       )}
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Card className="sm:col-span-1">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <Card className="lg:col-span-1">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <ChartPie className="h-4 w-4" /> Alert summary
@@ -269,7 +457,7 @@ export function AlertsPage() {
           </CardContent>
         </Card>
 
-        <Card className="sm:col-span-2">
+        <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <ShieldAlert className="h-4 w-4" /> Active alerts
@@ -280,6 +468,7 @@ export function AlertsPage() {
               <ErrorState title="Couldn't load active alerts" onRetry={activeAlertsQuery.refetch} />
             ) : (
               <DataTable
+                storageKey="alerts-1"
                 columns={alertColumns}
                 data={activeAlertsQuery.data ?? []}
                 loading={activeAlertsQuery.isLoading}
@@ -292,10 +481,40 @@ export function AlertsPage() {
         </Card>
       </div>
 
-      {showForm && (
+      {/* Silenced alerts used to vanish with no trace and no way back — this
+          card is the way back. Hidden entirely while there's nothing silenced
+          (and no error worth surfacing about it). */}
+      {(silencedAlertsQuery.isError || (silencedAlertsQuery.data?.length ?? 0) > 0) && (
         <Card>
           <CardHeader>
-            <CardTitle>New alert rule</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <BellOff className="h-4 w-4" /> Silenced alerts
+              <Badge variant="outline">{silencedAlertsQuery.data?.length ?? 0}</Badge>
+            </CardTitle>
+            <p className="text-xs text-[var(--text-muted)]">Muted on purpose. A timed silence ends by itself; any silence ends early if you un-silence it or the condition clears.</p>
+          </CardHeader>
+          <CardContent>
+            {silencedAlertsQuery.isError ? (
+              <ErrorState title="Couldn't load silenced alerts" onRetry={silencedAlertsQuery.refetch} />
+            ) : (
+              <DataTable
+                storageKey="alerts-2"
+                columns={silencedColumns}
+                data={silencedAlertsQuery.data ?? []}
+                loading={silencedAlertsQuery.isLoading}
+                searchPlaceholder="Search silenced alerts..."
+                emptyMessage="Nothing is silenced."
+                pageSize={5}
+              />
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {showForm && (
+        <Card id="alert-rule-form">
+          <CardHeader>
+            <CardTitle>{form.id ? `Edit rule "${form.name}"` : "New alert rule"}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -308,8 +527,8 @@ export function AlertsPage() {
                 <Select value={form.metric} onValueChange={(v) => setForm({ ...form, metric: v })}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {Object.entries(METRIC_LABELS).map(([k, label]) => (
-                      <SelectItem key={k} value={k}>{label}</SelectItem>
+                    {RULE_METRICS.map((k) => (
+                      <SelectItem key={k} value={k}>{METRIC_LABELS[k]}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -329,10 +548,14 @@ export function AlertsPage() {
                 </Select>
               </div>
               <div className="space-y-1.5 sm:col-span-2">
-                <Label>Connection (optional — leave blank to apply everywhere)</Label>
-                <Select value={form.connectionId} onValueChange={(v) => setForm({ ...form, connectionId: v })}>
-                  <SelectTrigger><SelectValue placeholder="All connections" /></SelectTrigger>
+                <Label>Applies to</Label>
+                {/* "all" is a sentinel for the empty connectionId: a Select can't
+                    choose "no value", so without an explicit option a rule
+                    scoped to one connection could never be widened again. */}
+                <Select value={form.connectionId || "all"} onValueChange={(v) => setForm({ ...form, connectionId: v === "all" ? "" : v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="all">All connections</SelectItem>
                     {inventory?.map((c) => (
                       <SelectItem key={c.connectionId} value={c.connectionId}>{c.name}</SelectItem>
                     ))}
@@ -341,13 +564,19 @@ export function AlertsPage() {
               </div>
             </div>
             {thresholdInvalid && form.threshold.trim() !== "" && (
-              <p className="text-xs text-[var(--text-muted)]">Threshold must be a number between 1 and 100.</p>
+              <p className="text-xs text-[var(--status-error)]">Threshold must be a number between 1 and 100.</p>
             )}
             <div className="flex gap-2">
-              <Button disabled={ruleFormInvalid} loading={createRuleMutation.isPending} onClick={() => createRuleMutation.mutate()}>
-                Create rule
-              </Button>
-              <Button variant="ghost" onClick={() => setShowForm(false)}>Cancel</Button>
+              {form.id ? (
+                <Button disabled={ruleFormInvalid} loading={updateRuleMutation.isPending} onClick={() => updateRuleMutation.mutate()}>
+                  Save changes
+                </Button>
+              ) : (
+                <Button disabled={ruleFormInvalid} loading={createRuleMutation.isPending} onClick={() => createRuleMutation.mutate()}>
+                  Create rule
+                </Button>
+              )}
+              <Button variant="ghost" onClick={() => { setShowForm(false); setForm(EMPTY_RULE_FORM) }}>Cancel</Button>
             </div>
           </CardContent>
         </Card>
@@ -362,6 +591,7 @@ export function AlertsPage() {
             <ErrorState title="Couldn't load alert rules" onRetry={rulesQuery.refetch} />
           ) : (
             <DataTable
+              storageKey="alerts-3"
               columns={ruleColumns}
               data={rulesQuery.data ?? []}
               loading={rulesQuery.isLoading}

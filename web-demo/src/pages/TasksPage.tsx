@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
-import { CheckCircle2, CircleSlash, Loader2, ScrollText, Square, Terminal, XCircle } from "lucide-react"
-import { useMemo, useState } from "react"
+import { CheckCircle2, Loader2, ScrollText, Square, Terminal, XCircle } from "lucide-react"
+import { useEffect, useMemo, useState } from "react"
+import { Link, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -15,7 +16,7 @@ import { PageHeader } from "@/components/ui/page-header"
 import { Hint } from "@/components/ui/tooltip"
 import { api, ApiError } from "@/lib/api"
 import { useClusterTasks, type FleetTask } from "@/lib/useClusterTasks"
-import { cn } from "@/lib/utils"
+import { cn, guestUrl } from "@/lib/utils"
 
 function duration(task: FleetTask): string {
   const end = task.endtime || Math.floor(Date.now() / 1000)
@@ -47,15 +48,41 @@ function taskLabel(t: FleetTask): string {
   return t.id ? `${base} · ${t.id}` : base
 }
 
+/** Task types whose `id` field is a guest VMID — those rows deep-link to the
+ * guest (Inventory with the detail dialog opened). */
+const GUEST_TASK_TYPES = new Set(["qmstart", "qmstop", "qmshutdown", "qmigrate", "vzsuspend", "vzstart", "vxmove"])
+
+function guestVmid(t: FleetTask): number | null {
+  if (!GUEST_TASK_TYPES.has(t.type)) return null
+  const n = Number(t.id)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
 export function TasksPage() {
   const { tasks, isLoading, isError, refetch } = useClusterTasks()
   const queryClient = useQueryClient()
   const confirm = useConfirm()
   const [logTask, setLogTask] = useState<FleetTask | null>(null)
+  // Filters live in the URL (same convention as Inventory) so a filtered
+  // task view survives navigation and can be pasted to a teammate during an
+  // incident — they used to evaporate on every route change.
+  const [searchParams, setSearchParams] = useSearchParams()
   // Empty array = "all" (the MultiSelect convention).
-  const [statusFilter, setStatusFilter] = useState<string[]>([])
-  const [connFilter, setConnFilter] = useState<string[]>([])
-  const [nodeFilter, setNodeFilter] = useState<string[]>([])
+  const [statusFilter, setStatusFilter] = useState<string[]>(() => searchParams.get("status")?.split(",").filter(Boolean) ?? [])
+  const [connFilter, setConnFilter] = useState<string[]>(() => searchParams.get("conn")?.split(",").filter(Boolean) ?? [])
+  const [nodeFilter, setNodeFilter] = useState<string[]>(() => searchParams.get("node")?.split(",").filter(Boolean) ?? [])
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams)
+    if (connFilter.length) next.set("conn", connFilter.join(","))
+    else next.delete("conn")
+    if (nodeFilter.length) next.set("node", nodeFilter.join(","))
+    else next.delete("node")
+    if (statusFilter.length) next.set("status", statusFilter.join(","))
+    else next.delete("status")
+    setSearchParams(next, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connFilter, nodeFilter, statusFilter])
 
   const logQuery = useQuery({
     queryKey: ["task-log", logTask?.connId, logTask?.node, logTask?.upid],
@@ -101,6 +128,11 @@ export function TasksPage() {
     [tasks],
   )
 
+  // The summary tiles are one-click status filters: "3 failed" is the
+  // question, the three failed rows are the answer.
+  const onlyStatus = statusFilter.length === 1 ? statusFilter[0] : null
+  const toggleStatus = (status: string) => setStatusFilter(onlyStatus === status ? [] : [status])
+
   const filtered = useMemo(() => {
     let rows = tasks
     if (connFilter.length > 0) rows = rows.filter((t) => connFilter.includes(t.connName))
@@ -124,14 +156,26 @@ export function TasksPage() {
           </div>
         ),
       },
-      { accessorKey: "connName", header: "Cluster", cell: (c) => <span className="block max-w-36 truncate text-xs font-medium" title={c.getValue<string>()}>{c.getValue<string>()}</span> },
-      { accessorKey: "node", header: "Node", cell: (c) => <span className="block max-w-28 truncate font-mono text-xs" title={c.getValue<string>()}>{c.getValue<string>()}</span> },
+      { accessorKey: "connName", header: "Cluster", cell: (c) => <span className="block max-w-36 truncate text-xs font-medium" data-tip={c.getValue<string>()}>{c.getValue<string>()}</span> },
+      { accessorKey: "node", header: "Node", cell: (c) => <span className="block max-w-28 truncate font-mono text-xs" data-tip={c.getValue<string>()}>{c.getValue<string>()}</span> },
       {
         accessorKey: "type",
         header: "Task",
-        cell: (c) => <span className="block max-w-40 truncate text-xs" title={c.getValue<string>()}>{taskLabel(c.row.original)}</span>,
+        cell: (c) => {
+          const vmid = guestVmid(c.row.original)
+          const label = <span className="block max-w-40 truncate text-xs" data-tip={c.getValue<string>()}>{taskLabel(c.row.original)}</span>
+          // Guest-scoped tasks link straight to the guest — "which VM was
+          // this backup/migration for" shouldn't require a manual search.
+          return vmid !== null ? (
+            <Link to={guestUrl(c.row.original.connId, vmid)} className="underline-offset-2 hover:underline">
+              {label}
+            </Link>
+          ) : (
+            label
+          )
+        },
       },
-      { accessorKey: "user", header: "User", meta: { hideBelowMd: true }, cell: (c) => <span className="block max-w-32 truncate font-mono text-xs text-[var(--text-muted)]" title={c.getValue<string>()}>{c.getValue<string>()}</span> },
+      { accessorKey: "user", header: "User", meta: { hideBelowMd: true }, cell: (c) => <span className="block max-w-32 truncate font-mono text-xs text-[var(--text-muted)]" data-tip={c.getValue<string>()}>{c.getValue<string>()}</span> },
       {
         id: "duration",
         header: "Duration",
@@ -151,7 +195,7 @@ export function TasksPage() {
             <div className="min-w-0 max-w-64">
               <Badge variant={failed ? "error" : raw === "OK" ? "ok" : "warn"}>{failed ? "failed" : raw || "running"}</Badge>
               {failed && (
-                <p className="mt-0.5 truncate font-mono text-[11px] text-[var(--text-muted)]" title={raw}>
+                <p className="mt-0.5 truncate font-mono text-[11px] text-[var(--text-muted)]" data-tip={raw}>
                   {raw}
                 </p>
               )}
@@ -174,9 +218,8 @@ export function TasksPage() {
               <Hint label="Cancel task">
                 <Button
                   size="icon"
-                  variant="ghost"
+                  variant="ghost-danger"
                   aria-label="Cancel task"
-                  className="hover:bg-[color-mix(in_oklab,var(--status-error)_12%,transparent)] hover:text-[var(--status-error)]"
                   disabled={cancelMutation.isPending}
                   onClick={() => cancelTask(c.row.original)}
                 >
@@ -198,12 +241,14 @@ export function TasksPage() {
         title="Task Center"
         description="Recent and running Proxmox tasks across every connected cluster and node."
         icon={Terminal}
+        onRefresh={() => void refetch()}
+        refreshing={isLoading}
       />
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <SummaryChip label="Running" value={counts.running} tone="warn" icon={<CircleSlash className="h-3.5 w-3.5" />} />
-        <SummaryChip label="Finished OK" value={counts.ok} tone="ok" icon={<CheckCircle2 className="h-3.5 w-3.5" />} />
-        <SummaryChip label="Failed" value={counts.failed} tone="error" icon={<XCircle className="h-3.5 w-3.5" />} />
+        <SummaryChip label="Running" value={counts.running} tone="warn" icon={<Loader2 className={cn("h-3.5 w-3.5", counts.running > 0 && "animate-spin")} />} active={onlyStatus === "running"} onClick={() => toggleStatus("running")} />
+        <SummaryChip label="Finished OK" value={counts.ok} tone="ok" icon={<CheckCircle2 className="h-3.5 w-3.5" />} active={onlyStatus === "ok"} onClick={() => toggleStatus("ok")} />
+        <SummaryChip label="Failed" value={counts.failed} tone="error" icon={<XCircle className="h-3.5 w-3.5" />} active={onlyStatus === "failed"} onClick={() => toggleStatus("failed")} />
       </div>
 
       {isError && (
@@ -214,11 +259,13 @@ export function TasksPage() {
       <Card>
         <CardContent className="pt-4">
           <DataTable
+            storageKey="tasks-1"
             columns={columns}
             data={filtered}
             loading={isLoading}
             searchPlaceholder="Search tasks by type, node, user…"
             emptyMessage={tasks.length === 0 ? "No tasks yet — actions you take on the fleet will show up here." : "No tasks match the current filters."}
+            exportName={`ferrum-tasks-${new Date().toISOString().slice(0, 10)}`}
             toolbar={
               <div className="flex flex-wrap items-center gap-2">
                 <MultiSelect
@@ -288,9 +335,33 @@ export function TasksPage() {
   )
 }
 
-function SummaryChip({ label, value, tone, icon }: { label: string; value: number; tone: "ok" | "warn" | "error"; icon?: React.ReactNode }) {
+function SummaryChip({
+  label,
+  value,
+  tone,
+  icon,
+  active,
+  onClick,
+}: {
+  label: string
+  value: number
+  tone: "ok" | "warn" | "error"
+  icon?: React.ReactNode
+  active: boolean
+  onClick: () => void
+}) {
   return (
-    <div className={cn("flex items-center gap-2.5 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-2.5")}>
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      aria-label={`${value} ${label.toLowerCase()} — ${active ? "clear filter" : "show only these"}`}
+      className={cn(
+        "flex cursor-pointer items-center gap-2.5 rounded-lg border bg-[var(--bg-surface)] px-3.5 py-2.5 text-left transition-colors",
+        "hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
+        active ? "border-brand-500 bg-[color-mix(in_oklab,var(--color-brand-500)_6%,var(--bg-surface))]" : "border-[var(--border)]",
+      )}
+    >
       <span
         className={cn(
           "flex h-7 w-7 items-center justify-center rounded-sm",
@@ -305,6 +376,6 @@ function SummaryChip({ label, value, tone, icon }: { label: string; value: numbe
         <p className="font-display text-lg font-semibold leading-none tabular">{value}</p>
         <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">{label}</p>
       </div>
-    </div>
+    </button>
   )
 }

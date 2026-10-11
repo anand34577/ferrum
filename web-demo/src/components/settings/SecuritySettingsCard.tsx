@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { toast } from "sonner"
+import { useFormDirty } from "@/components/settings/use-form-dirty"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ErrorState } from "@/components/ui/error-state"
+import { FormError } from "@/components/ui/form-error"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -53,6 +55,9 @@ export function SecuritySettingsCard() {
 function SecuritySettingsForm({ initial }: { initial: SecuritySettings }) {
   const queryClient = useQueryClient()
   const [form, setForm] = useState(initial)
+  // Remounted via key={JSON.stringify(query.data)} on save, so dirty resets
+  // for free; `initial` is the form's own starting state.
+  const dirty = useFormDirty(form, initial)
 
   const save = useMutation({
     mutationFn: () => api.put<SecuritySettings>("/admin/settings/security", form),
@@ -60,7 +65,8 @@ function SecuritySettingsForm({ initial }: { initial: SecuritySettings }) {
       toast.success("Security settings saved")
       queryClient.setQueryData(["admin", "settings", "security"], data)
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to save security settings"),
+    // Failure surfaces inline via <FormError> below, not a toast — the error
+    // has to outlive the toast's auto-dismiss, next to the fields to fix.
   })
 
   return (
@@ -100,10 +106,14 @@ function SecuritySettingsForm({ initial }: { initial: SecuritySettings }) {
             Admin accounts without two-factor authentication are blocked from everything except enrolling, on their next request.
           </p>
         </div>
-        <Switch checked={form.require2faAdmins} onCheckedChange={(v) => setForm({ ...form, require2faAdmins: v })} />
+        <Switch aria-label="Require 2FA for admins" checked={form.require2faAdmins} onCheckedChange={(v) => setForm({ ...form, require2faAdmins: v })} />
       </div>
 
-      <Button size="sm" loading={save.isPending} onClick={() => save.mutate()}>
+      <FormError
+        message={save.error instanceof ApiError ? save.error.message : save.error ? "Couldn't save security settings — try again." : null}
+      />
+
+      <Button size="sm" loading={save.isPending} disabled={!dirty} onClick={() => save.mutate()}>
         Save security settings
       </Button>
     </>

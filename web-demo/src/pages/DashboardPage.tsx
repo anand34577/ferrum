@@ -158,6 +158,11 @@ export function DashboardPage() {
     queryKey: ["dashboard", activeId],
     queryFn: () => (activeId ? api.get<DashboardFull>(`/dashboards/${activeId}`) : Promise.resolve(null)),
     enabled: Boolean(activeId),
+    // This page is the only writer of the layout, and the render-time sync
+    // below replaces local state on every new fetch — a background refetch
+    // would snap an unsaved drag back to the server copy.
+    refetchInterval: false,
+    refetchOnWindowFocus: false,
   })
 
   // Synchronize local editable layout with loaded dashboard when activeId or query changes
@@ -184,11 +189,29 @@ export function DashboardPage() {
     return () => window.removeEventListener("beforeunload", onBeforeUnload)
   }, [])
 
+  // The catch below runs after a later render; it must compare against the
+  // dashboard on screen THEN, not the activeId captured when the save began.
+  const activeIdRef = useRef(activeId)
+  useEffect(() => {
+    activeIdRef.current = activeId
+  }, [activeId])
+
   function saveLayout(next: WidgetSpec[], targetId = activeId) {
     if (!targetId) return
     dirty.current = false
     api.put(`/dashboards/${targetId}`, { version: LAYOUT_VERSION, widgets: next }).catch((err: unknown) => {
-      toast.error(err instanceof ApiError ? err.message : "Failed to save dashboard layout")
+      // Only re-arm the dirty flag if targetId is still the dashboard on
+      // screen — switchDashboard's flush-on-leave calls this for the
+      // dashboard being LEFT, and by the time a failure lands here
+      // activeId may already point at a freshly-loaded, genuinely-clean
+      // dashboard; marking that one dirty would trigger a false "unsaved
+      // changes" warning while doing nothing for the edit that actually
+      // failed (which has no retry path once its own widgets are gone
+      // from state — the toast is the only signal left for that case).
+      const stillOnScreen = targetId === activeIdRef.current
+      if (stillOnScreen) dirty.current = true
+      const msg = err instanceof ApiError ? err.message : "Failed to save dashboard layout"
+      toast.error(stillOnScreen ? `${msg} — your changes are not saved yet.` : `${msg} — changes to the dashboard you left were not saved.`)
     })
   }
 
@@ -267,7 +290,8 @@ export function DashboardPage() {
 
   function addWidget(type: WidgetType, connection?: string) {
     if (!widgets) return
-    const spec = WIDGET_CATALOG.find((w) => w.type === type)!
+    const spec = WIDGET_CATALOG.find((w) => w.type === type)
+    if (!spec) return
     const maxY = widgets.reduce((m, w) => Math.max(m, w.y + w.h), 0)
     const settings = { ...widgetDefaultSettings(type) }
     if (connection) settings.connection = connection
@@ -402,7 +426,15 @@ export function DashboardPage() {
                 {/* Menu scrolls instead of overflowing the viewport when the
                     widget list is taller than the screen. */}
                 <DropdownMenuContent align="end" className="max-h-[var(--radix-dropdown-menu-content-available-height,18rem)] w-64 overflow-y-auto">
-                  <DropdownMenuLabel className="sticky top-0 bg-[var(--bg-elevated)]">Available widgets</DropdownMenuLabel>
+                  {/* DropdownMenuContent has its own p-1 padding, so a plain
+                      "sticky top-0" label sits inset from the real top edge —
+                      scrolled items show through that inset strip. Pull the
+                      label out to the container's true edges with negative
+                      margins and re-add the padding itself, plus a border to
+                      seal the boundary against the list scrolling under it. */}
+                  <DropdownMenuLabel className="sticky -top-1 z-10 -mx-1 -mt-1 border-b border-[var(--border)] bg-[var(--bg-elevated)] px-3.5 pt-2.5">
+                    Available widgets
+                  </DropdownMenuLabel>
                   {addableTypes.map((a) =>
                     a.fleetFree ? (
                       <DropdownMenuItem key={a.type} onSelect={() => addWidget(a.type)}>
@@ -477,7 +509,23 @@ export function DashboardPage() {
           layouts={{
             // Desktop keeps the saved 12-column layout; smaller breakpoints get
             // a derived full-width stack so tablets/phones never overflow.
-            lg: widgets.map((w) => ({ i: w.id, x: w.x, y: w.y, w: w.w, h: w.h })),
+            // minW/minH keep a resize from being dragged down to an unusably
+            // tiny sliver (a real complaint on its own — nothing stops the
+            // handle from being dragged too far without a floor) and maxH
+            // caps a drag/collision cascade from running away to an
+            // absurd height. Bounds come off each widget's own catalog
+            // default (roughly its smallest still-readable size), not a
+            // single fixed number, since a full-width chart and a small KPI
+            // tile need very different floors.
+            lg: widgets.map((w) => {
+              const spec = WIDGET_CATALOG.find((c) => c.type === w.type)
+              return {
+                i: w.id, x: w.x, y: w.y, w: w.w, h: w.h,
+                minW: spec ? Math.min(spec.defaultSize.w, 3) : 2,
+                minH: spec ? Math.min(spec.defaultSize.h, 4) : 4,
+                maxH: 60,
+              }
+            }),
             sm: (() => {
               let y = 0
               return widgets.map((w) => {

@@ -25,7 +25,7 @@ export function StorageUsageWidget({ settings }: { settings: WidgetSettings }) {
           const pct = Math.min(100, ((p.disk ?? 0) / (p.maxdisk || 1)) * 100)
           return (
             <div key={p.id} className="flex items-center gap-2 text-sm">
-              <span className="w-28 shrink-0 truncate" title={p.storage ?? p.name}>{p.storage ?? p.name}</span>
+              <span className="w-28 shrink-0 truncate" data-tip={p.storage ?? p.name}>{p.storage ?? p.name}</span>
               <Meter value={pct} label={`${p.storage ?? p.name} usage`} className="min-w-16 flex-1" />
               {/* Fixed width (not just shrink-0) — every row's byte string is a
                   different length, and without a fixed column the Meter above
