@@ -543,7 +543,7 @@ export function NodeDetailPage() {
                     <HardDrive className="h-4 w-4 shrink-0 text-[var(--text-muted)]" />
                     <div className="min-w-0 flex-1">
                       <p className="flex items-center gap-1.5">
-                        <span className="truncate font-medium" title={d.devpath}>{d.model || d.devpath}</span>
+                        <span className="truncate font-medium" data-tip={d.devpath}>{d.model || d.devpath}</span>
                         <Badge>{d.type.toUpperCase()}</Badge>
                         {d.health && (
                           <Badge variant={d.health === "PASSED" ? "ok" : d.health === "FAILED" ? "error" : "default"}>{d.health}</Badge>
@@ -554,7 +554,7 @@ export function NodeDetailPage() {
                       </p>
                     </div>
                     {typeof d.wearout === "number" && (
-                      <div className="flex w-28 shrink-0 items-center gap-1.5" title="Estimated life remaining">
+                      <div className="flex w-28 shrink-0 items-center gap-1.5" data-tip="Estimated life remaining">
                         <div
                           className="h-1.5 flex-1 overflow-hidden rounded-none bg-[var(--track)]"
                           role="progressbar"
@@ -582,7 +582,7 @@ export function NodeDetailPage() {
                             "flex shrink-0 items-center gap-1 text-xs tabular",
                             hot ? "text-[var(--status-error)]" : warm ? "text-[var(--status-warn)]" : "text-[var(--text-muted)]",
                           )}
-                          title="Drive temperature (from SMART)"
+                          data-tip="Drive temperature (from SMART)"
                         >
                           <Thermometer className="h-3.5 w-3.5" /> {temp}°C
                         </span>

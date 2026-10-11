@@ -377,6 +377,7 @@ export function UsersPage() {
         <Card>
           <CardContent className="pt-4">
             <DataTable
+              storageKey="users-1"
               columns={columns}
               data={usersQuery.data ?? []}
               loading={usersQuery.isLoading}

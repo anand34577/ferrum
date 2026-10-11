@@ -16,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { api, ApiError, type ApiKey, type CreatedApiKey } from "@/lib/api"
 import { useCopiedFlag } from "@/lib/useCopiedFlag"
 import { formatRelativeTime } from "@/lib/utils"
+import { copyText } from "@/lib/clipboard"
 
 const EXPIRY_OPTIONS = [
   { value: "0", label: "Never" },
@@ -90,10 +91,11 @@ export function ApiKeysCard() {
 
   function copyKey() {
     if (!created) return
-    navigator.clipboard.writeText(created.key).then(() => {
+    void copyText(created.key).then((ok) => {
+      if (!ok) return toast.error("Could not copy — select the key and copy it manually")
       flashCopied()
       toast.success("Copied to clipboard")
-    }).catch(() => toast.error("Could not copy to clipboard"))
+    })
   }
 
   const keys = query.data ?? []

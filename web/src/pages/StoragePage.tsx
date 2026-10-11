@@ -291,7 +291,7 @@ export function StoragePage() {
           {storageGroups.length > 0 && <CreateStorageDialog groups={storageGroups} />}
         </CardHeader>
         <CardContent>
-          <DataTable columns={columns} data={localPools} searchPlaceholder="Search local storage..." emptyMessage="No local storage found." />
+          <DataTable storageKey="storage-1" columns={columns} data={localPools} searchPlaceholder="Search local storage..." emptyMessage="No local storage found." />
         </CardContent>
       </Card>
 
@@ -303,7 +303,7 @@ export function StoragePage() {
           <p className="text-xs text-[var(--text-muted)]">NFS, CIFS, PBS, Ceph, iSCSI, and similar — reachable from (and reported by) every node it's mounted on.</p>
         </CardHeader>
         <CardContent>
-          <DataTable columns={columns} data={sharedPools} searchPlaceholder="Search shared storage..." emptyMessage="No shared storage found." />
+          <DataTable storageKey="storage-2" columns={columns} data={sharedPools} searchPlaceholder="Search shared storage..." emptyMessage="No shared storage found." />
         </CardContent>
       </Card>
 
@@ -339,7 +339,7 @@ export function StoragePage() {
                   ) : q.isPending ? (
                     <span className="text-xs text-[var(--text-muted)]">Checking…</span>
                   ) : q.isError ? (
-                    <span className="flex items-center gap-2 text-xs text-[var(--status-warn)]" title={q.error instanceof Error ? q.error.message : undefined}>
+                    <span className="flex items-center gap-2 text-xs text-[var(--status-warn)]" data-tip={q.error instanceof Error ? q.error.message : undefined}>
                       Ceph not detected or unavailable
                       <Button size="sm" variant="ghost" onClick={() => void q.refetch()} aria-label={`Retry Ceph check for ${t.connName}`}>
                         Retry
@@ -456,7 +456,7 @@ function CapacityCard({ title, capacity }: { title: string; capacity: CapacityRo
                 <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} aria-hidden />
                 <div className="min-w-0 flex-1">
                   <p className="flex items-baseline justify-between gap-2">
-                    <span className="truncate font-medium" title={r.name}>{r.name}</span>
+                    <span className="truncate font-medium" data-tip={r.name}>{r.name}</span>
                     <span className="shrink-0 text-[var(--text-muted)] tabular">{pctUsed.toFixed(0)}% used</span>
                   </p>
                   <div className="mt-1 h-1 w-full overflow-hidden rounded-none bg-[var(--track)]">

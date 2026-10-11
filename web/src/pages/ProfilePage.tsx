@@ -18,6 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { api, ApiError } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
+import { copyText } from "@/lib/clipboard"
 
 interface PersonalPreferences {
   notifyEmail: boolean
@@ -187,7 +188,9 @@ export function ProfilePage() {
 
   function copyRecoveryCodes() {
     if (!recoveryCodes) return
-    navigator.clipboard.writeText(recoveryCodes.join("\n")).then(() => toast.success("Copied to clipboard")).catch(() => toast.error("Could not copy to clipboard"))
+    void copyText(recoveryCodes.join("\n")).then((ok) =>
+      ok ? toast.success("Copied to clipboard") : toast.error("Could not copy — select the codes and copy them manually"),
+    )
   }
 
   return (

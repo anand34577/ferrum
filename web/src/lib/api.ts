@@ -79,9 +79,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   get: <T>(path: string, init?: Omit<RequestInit, "method">) => request<T>(path, { ...init, method: "GET" }),
   post: <T>(path: string, body?: unknown, init?: Omit<RequestInit, "method" | "body">) =>
-    request<T>(path, { ...init, method: "POST", body: body ? JSON.stringify(body) : undefined }),
+    request<T>(path, { ...init, method: "POST", body: body !== undefined ? JSON.stringify(body) : undefined }),
   put: <T>(path: string, body?: unknown, init?: Omit<RequestInit, "method" | "body">) =>
-    request<T>(path, { ...init, method: "PUT", body: body ? JSON.stringify(body) : undefined }),
+    request<T>(path, { ...init, method: "PUT", body: body !== undefined ? JSON.stringify(body) : undefined }),
   delete: <T>(path: string, init?: Omit<RequestInit, "method">) => request<T>(path, { ...init, method: "DELETE" }),
 }
 // --- Domain types (mirrors internal/auth, internal/pve, internal/api on the backend) ---
@@ -905,6 +905,8 @@ export interface AlertInstance {
   triggeredAt: string
   updatedAt: string
   resolvedAt?: string
+  /** Set for a timed silence; absent on an open-ended one. */
+  silencedUntil?: string
 }
 
 // Mirrors auth.APIKey (internal/auth/apikeys.go). scope "api" works against

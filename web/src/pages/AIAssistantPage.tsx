@@ -44,6 +44,7 @@ import { useAuth } from "@/lib/auth"
 import { type Conversation, type DisplayMessage, type MessageUsage, type ReasoningEffort, type ToolCallEntry, useAIConversations } from "@/lib/useAIConversations"
 import { useCopiedFlag } from "@/lib/useCopiedFlag"
 import { cn, formatRelativeTime } from "@/lib/utils"
+import { copyText } from "@/lib/clipboard"
 
 function newId() {
   return Math.random().toString(36).slice(2)
@@ -562,7 +563,7 @@ export function AIAssistantPage() {
   }
 
   function copyMessage(content: string) {
-    navigator.clipboard.writeText(content).then(() => toast.success("Copied to clipboard")).catch(() => toast.error("Could not copy to clipboard"))
+    void copyText(content).then((ok) => (ok ? toast.success("Copied to clipboard") : toast.error("Could not copy to clipboard")))
   }
 
   const lastMessageIsAssistant = committedMessages.at(-1)?.role === "assistant"
@@ -629,7 +630,7 @@ export function AIAssistantPage() {
               <Button
                 size="sm"
                 variant="ghost"
-                title={selectMode ? "Cancel selection" : "Select conversations"}
+                data-tip={selectMode ? "Cancel selection" : "Select conversations"}
                 onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
               >
                 {selectMode ? <X className="h-3.5 w-3.5" /> : <ListChecks className="h-3.5 w-3.5" />}
@@ -674,7 +675,7 @@ export function AIAssistantPage() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  title={selectMode ? "Cancel selection" : "Select conversations"}
+                  data-tip={selectMode ? "Cancel selection" : "Select conversations"}
                   onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
                 >
                   {selectMode ? <X className="h-3.5 w-3.5" /> : <ListChecks className="h-3.5 w-3.5" />}
@@ -712,7 +713,7 @@ export function AIAssistantPage() {
             >
               <SelectTrigger
                 className="w-auto max-w-[60%] min-w-0 gap-2 overflow-hidden sm:max-w-xs"
-                title={selectedModel ? `${selectedModel.providerName} · ${selectedModel.label}` : undefined}
+                data-tip={selectedModel ? `${selectedModel.providerName} · ${selectedModel.label}` : undefined}
               >
                 <SelectValue className="min-w-0 flex-1 truncate text-left" />
               </SelectTrigger>
@@ -735,7 +736,7 @@ export function AIAssistantPage() {
               >
                 <SelectTrigger
                   className="hidden w-auto gap-1.5 sm:flex"
-                  title="Reasoning effort — passed through as the OpenAI-compatible `reasoning_effort` field; ignored by providers/models that don't support it. When on, the model's reasoning is always shown inline as it thinks."
+                  data-tip="Reasoning effort — passed through as the OpenAI-compatible `reasoning_effort` field; ignored by providers/models that don't support it. When on, the model's reasoning is always shown inline as it thinks."
                 >
                   {/* SelectTrigger's own wrapper span isn't a flex container,
                       and Tailwind's preflight makes <svg> block-level by
@@ -985,7 +986,7 @@ export function AIAssistantPage() {
                 className="max-h-32 flex-1 resize-none bg-transparent py-1.5 text-sm outline-none"
               />
               {isStreamingHere ? (
-                <Button variant="secondary" className="shrink-0" size="icon" onClick={stop} title="Stop generating" aria-label="Stop generating">
+                <Button variant="secondary" className="shrink-0" size="icon" onClick={stop} data-tip="Stop generating" aria-label="Stop generating">
                   <Square className="h-3.5 w-3.5" />
                 </Button>
               ) : (
@@ -994,7 +995,7 @@ export function AIAssistantPage() {
                   size="icon"
                   onClick={() => send()}
                   disabled={!input.trim() || streaming}
-                  title={streaming ? "Another conversation is still answering" : "Send"}
+                  data-tip={streaming ? "Another conversation is still answering" : "Send"}
                   aria-label="Send message"
                 >
                   <Send className="h-3.5 w-3.5" />

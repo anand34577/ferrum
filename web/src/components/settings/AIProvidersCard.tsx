@@ -369,7 +369,7 @@ function ModelsEditor({ providerId, models, discovered, onChanged }: { providerI
                   loading={setDefault.isPending}
                   onClick={() => setDefault.mutate(m.id)}
                   aria-label={m.isDefault ? `${m.label} is the default model` : `Make ${m.label} the default model`}
-                  title={m.isDefault ? "Default model" : "Make default"}
+                  data-tip={m.isDefault ? "Default model" : "Make default"}
                 >
                   <Star className={m.isDefault ? "h-3.5 w-3.5 fill-current text-brand-500" : "h-3.5 w-3.5"} />
                 </Button>

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Upload } from "lucide-react"
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
@@ -9,22 +9,54 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { api, ApiError, type ClusterResource, type Storage } from "@/lib/api"
+import { api, ApiError, notifyUnauthorized, type ClusterResource, type Storage } from "@/lib/api"
+import { FileDropzone } from "@/components/ui/file-dropzone"
 
 // Multipart file upload bypasses api.ts's request() helper (it always sets
 // Content-Type: application/json when a body is present) — the browser must
 // set the multipart boundary itself.
-async function uploadFile(path: string, form: FormData): Promise<{ upid: string }> {
-  const res = await fetch(`/api/v1${path}`, { method: "POST", body: form, credentials: "include" })
-  const data = await res.json().catch(() => undefined)
-  if (!res.ok) {
-    throw new ApiError(
-      res.status,
-      (typeof data?.error === "string" && data.error) || res.statusText || `Request failed (HTTP ${res.status})`,
-      data?.code,
-    )
-  }
-  return data
+//
+// XMLHttpRequest rather than fetch: fetch still has no upload-progress event,
+// and an ISO is routinely several gigabytes — a spinner with no percentage
+// for ten minutes is indistinguishable from a hung upload.
+function uploadFile(path: string, form: FormData, onProgress: (pct: number) => void, signal: AbortSignal): Promise<{ upid: string }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open("POST", `/api/v1${path}`)
+    xhr.withCredentials = true
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress((e.loaded / e.total) * 100)
+    }
+    xhr.onload = () => {
+      let data: { upid?: string; error?: unknown; code?: string } | undefined
+      try {
+        data = JSON.parse(xhr.responseText)
+      } catch {
+        data = undefined
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(data as { upid: string })
+        return
+      }
+      if (xhr.status === 401) notifyUnauthorized()
+      reject(
+        new ApiError(
+          xhr.status,
+          (typeof data?.error === "string" && data.error) || xhr.statusText || `Request failed (HTTP ${xhr.status})`,
+          data?.code,
+        ),
+      )
+    }
+    xhr.onerror = () => reject(new Error("The upload was interrupted — check your connection and try again."))
+    xhr.onabort = () => reject(new DOMException("Upload cancelled", "AbortError"))
+    signal.addEventListener("abort", () => xhr.abort())
+    xhr.send(form)
+  })
+}
+
+const ACCEPT: Record<"iso" | "vztmpl", string> = {
+  iso: ".iso,.img",
+  vztmpl: ".tar.gz,.tar.xz,.tar.zst,.tgz",
 }
 
 interface UploadTemplateDialogProps {
@@ -44,6 +76,8 @@ export function UploadTemplateDialog({ connId, nodes, content }: UploadTemplateD
   const [file, setFile] = useState<File | null>(null)
   const [url, setUrl] = useState("")
   const [filename, setFilename] = useState("")
+  const [progress, setProgress] = useState<number | undefined>(undefined)
+  const abortRef = useRef<AbortController | null>(null)
 
   const storagesQuery = useQuery({
     queryKey: ["node-storage", connId, node],
@@ -66,7 +100,13 @@ export function UploadTemplateDialog({ connId, nodes, content }: UploadTemplateD
       const form = new FormData()
       form.set("content", content)
       form.set("file", file)
-      return uploadFile(`/connections/${connId}/nodes/${node}/storage/${storage}/upload`, form)
+      abortRef.current = new AbortController()
+      setProgress(0)
+      return uploadFile(`/connections/${connId}/nodes/${node}/storage/${storage}/upload`, form, setProgress, abortRef.current.signal)
+    },
+    onSettled: () => {
+      setProgress(undefined)
+      abortRef.current = null
     },
     onSuccess: () => {
       toast.success(`${content === "iso" ? "ISO" : "Template"} upload started`)
@@ -74,7 +114,10 @@ export function UploadTemplateDialog({ connId, nodes, content }: UploadTemplateD
       setOpen(false)
       reset()
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Upload failed"),
+    onError: (err) => {
+      if (err instanceof DOMException && err.name === "AbortError") return void toast.info("Upload cancelled")
+      toast.error(err instanceof Error && err.message ? err.message : "Upload failed")
+    },
   })
 
   const downloadMutation = useMutation({
@@ -96,7 +139,16 @@ export function UploadTemplateDialog({ connId, nodes, content }: UploadTemplateD
   const label = content === "iso" ? "ISO" : "container template"
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) reset() }}>
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        // Closing mid-upload would otherwise leave a multi-gigabyte transfer
+        // running with nothing on screen to show or stop it.
+        if (!o && uploadMutation.isPending) return
+        setOpen(o)
+        if (!o) reset()
+      }}
+    >
       <DialogTrigger asChild>
         <Button type="button" variant="outline" size="sm">
           <Upload className="h-3.5 w-3.5" /> Add {label}
@@ -137,12 +189,26 @@ export function UploadTemplateDialog({ connId, nodes, content }: UploadTemplateD
               <TabsTrigger value="url">Download by URL</TabsTrigger>
             </TabsList>
             <TabsContent value="upload" className="space-y-3">
-              <div className="space-y-1.5">
-                <Label>File</Label>
-                <Input type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-              </div>
-              <FormError message={uploadMutation.error instanceof ApiError ? uploadMutation.error.message : uploadMutation.error ? "Upload failed" : undefined} />
+              <FileDropzone
+                file={file}
+                onChange={setFile}
+                accept={ACCEPT[content]}
+                hint={content === "iso" ? "ISO or IMG image" : "Container template archive (.tar.gz, .tar.xz, .tar.zst)"}
+                progress={progress}
+              />
+              <FormError
+                message={
+                  uploadMutation.error && !(uploadMutation.error instanceof DOMException)
+                    ? uploadMutation.error.message || "Upload failed"
+                    : undefined
+                }
+              />
               <DialogFooter>
+                {uploadMutation.isPending && (
+                  <Button variant="ghost" onClick={() => abortRef.current?.abort()}>
+                    Cancel upload
+                  </Button>
+                )}
                 <Button disabled={!node || !storage || !file} loading={uploadMutation.isPending} onClick={() => uploadMutation.mutate()}>
                   {!uploadMutation.isPending && <Upload className="h-3.5 w-3.5" />}
                   Upload

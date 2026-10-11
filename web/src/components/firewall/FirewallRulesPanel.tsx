@@ -210,6 +210,7 @@ export function FirewallRulesPanel({ basePath, queryKey }: { basePath: string; q
         <ErrorState title="Couldn't load firewall rules" onRetry={() => void rulesQuery.refetch()} />
       ) : (
         <DataTable
+          storageKey="firewallrules-1"
           columns={columns}
           data={rulesQuery.data ?? []}
           loading={rulesQuery.isLoading}

@@ -8,6 +8,7 @@ import {
   CornerDownLeft,
   Database,
   DatabaseBackup,
+  GitBranch,
   HardDrive,
   Keyboard,
   LayoutDashboard,
@@ -21,8 +22,10 @@ import {
   Settings,
   Shield,
   ShieldCheck,
+  Sparkles,
   Sun,
   Terminal,
+  UserRound,
   Users,
   Waypoints,
   Webhook,
@@ -32,6 +35,7 @@ import { useNavigate } from "react-router-dom"
 import { api, type ClusterResource, type ConnectionInventory } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
 import { useTheme, type ThemePreference } from "@/lib/theme"
+import { prefetchRoute } from "@/lib/routes"
 
 const pages = [
   { to: "/", label: "Fleet Overview", icon: Waypoints },
@@ -46,12 +50,15 @@ const pages = [
   { to: "/firewall", label: "Firewall", icon: Shield },
   { to: "/alerts", label: "Alerts", icon: AlertTriangle },
   { to: "/tasks", label: "Task Center", icon: Terminal },
+  { to: "/ai-assistant", label: "AI Assistant", icon: Sparkles },
+  { to: "/cluster", label: "Cluster & SDN", icon: GitBranch, adminOnly: true },
   { to: "/bulk-operations", label: "Bulk Operations", icon: Layers3, adminOnly: true },
   { to: "/connections", label: "Connections", icon: Network, adminOnly: true },
   { to: "/users", label: "Users", icon: Users, adminOnly: true },
   { to: "/webhooks", label: "Webhooks", icon: Webhook, adminOnly: true },
   { to: "/audit", label: "Audit Log", icon: ClipboardList, adminOnly: true },
   { to: "/settings", label: "Settings", icon: Settings, adminOnly: true },
+  { to: "/profile", label: "Profile & security", icon: UserRound },
 ]
 
 // cmdk mounts every item you hand it (its filter only hides non-matches with
@@ -197,6 +204,7 @@ export function CommandPalette() {
   }, [debouncedSearch, remoteResults, localGuests])
 
   function go(to: string) {
+    prefetchRoute(to)
     navigate(to)
     setOpen(false)
   }

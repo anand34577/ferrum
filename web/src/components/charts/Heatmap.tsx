@@ -56,7 +56,7 @@ export function Heatmap({ rows, columnLabels, valueFormatter, max, cellHeight = 
                 key={i}
                 className="truncate text-center"
                 style={{ ...cellStyleWidth, paddingTop: 1 }}
-                title={l}
+                data-tip={l}
               >
                 {i % labelEvery === 0 ? l : ""}
               </div>
@@ -65,7 +65,7 @@ export function Heatmap({ rows, columnLabels, valueFormatter, max, cellHeight = 
         )}
         {rows.map((row) => (
           <div key={row.label} className="flex items-center gap-0.5">
-            <span className="w-[86px] shrink-0 truncate pr-2 text-right text-xs text-[var(--text-muted)]" title={row.label}>
+            <span className="w-[86px] shrink-0 truncate pr-2 text-right text-xs text-[var(--text-muted)]" data-tip={row.label}>
               {row.label}
             </span>
             {Array.from({ length: colCount }, (_, c) => {
@@ -78,7 +78,9 @@ export function Heatmap({ rows, columnLabels, valueFormatter, max, cellHeight = 
                     typeof v !== "number" && "opacity-40",
                   )}
                   style={{ ...cellStyle(v), ...cellStyleWidth, height: cellHeight }}
-                  title={typeof v === "number" ? `${row.label} — ${valueFormatter(v)}` : `${row.label} — no data`}
+                  role="img"
+                  aria-label={typeof v === "number" ? `${row.label} — ${valueFormatter(v)}` : `${row.label} — no data`}
+                  data-tip={typeof v === "number" ? `${row.label} — ${valueFormatter(v)}` : `${row.label} — no data`}
                 />
               )
             })}

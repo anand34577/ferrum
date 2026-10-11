@@ -1,4 +1,5 @@
-import { useQueries, useQuery } from "@tanstack/react-query"
+import { useQueries, useQuery, type UseQueryResult } from "@tanstack/react-query"
+import { useCallback, useMemo } from "react"
 import { api, type ConnectionInventory, type Task } from "@/lib/api"
 
 export interface FleetTask extends Task {
@@ -19,29 +20,48 @@ export function useClusterTasks(scopeConnId?: string) {
     queryFn: ({ signal }) => api.get<ConnectionInventory[]>("/inventory/", { signal }),
   })
 
-  const targets =
-    inventory
-      ?.filter((conn) => !scopeConnId || scopeConnId === "all" || conn.connectionId === scopeConnId)
-      .map((conn) => ({ connId: conn.connectionId, connName: conn.name })) ?? []
+  // Keyed on the id/name pairs, not on `inventory` itself: the inventory
+  // payload changes identity on every poll (live CPU/memory numbers), but the
+  // set of connections almost never does.
+  const targetKey = JSON.stringify(
+    (inventory ?? [])
+      .filter((conn) => !scopeConnId || scopeConnId === "all" || conn.connectionId === scopeConnId)
+      .map((conn) => [conn.connectionId, conn.name]),
+  )
+  const targets = useMemo(
+    () => (JSON.parse(targetKey) as [string, string][]).map(([connId, connName]) => ({ connId, connName })),
+    [targetKey],
+  )
 
-  const taskQueries = useQueries({
+  // React Query only memoizes `combine` when the function itself is stable,
+  // hence useCallback. The merged, sorted list then keeps its identity until
+  // a connection's task data actually changes — built inline, every consumer
+  // got a brand-new array on every render, which re-ran each page's
+  // filter/column memos and re-sorted the whole log for unrelated state
+  // changes (opening a dialog, ticking a filter).
+  const combine = useCallback(
+    (results: UseQueryResult<Task[]>[]) => {
+      const tasks: FleetTask[] = results.flatMap((q, i) =>
+        (q.data ?? []).map((task) => ({ ...task, connId: targets[i].connId, connName: targets[i].connName })),
+      )
+      tasks.sort((a, b) => b.starttime - a.starttime)
+      return {
+        tasks,
+        isLoading: results.some((q) => q.isLoading),
+        isError: results.length > 0 && results.every((q) => q.isError),
+        refetch: () => results.forEach((q) => void q.refetch()),
+      }
+    },
+    [targets],
+  )
+
+  return useQueries({
     queries: targets.map((t) => ({
       queryKey: ["cluster-tasks", t.connId],
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         api.get<Task[]>(`/connections/${t.connId}/cluster/tasks`, { signal }),
       refetchInterval: 10_000,
     })),
+    combine,
   })
-
-  const tasks: FleetTask[] = targets.flatMap((t, i) =>
-    (taskQueries[i].data ?? []).map((task) => ({ ...task, connId: t.connId, connName: t.connName })),
-  )
-  tasks.sort((a, b) => b.starttime - a.starttime)
-
-  return {
-    tasks,
-    isLoading: taskQueries.some((q) => q.isLoading),
-    isError: taskQueries.length > 0 && taskQueries.every((q) => q.isError),
-    refetch: () => taskQueries.forEach((q) => q.refetch()),
-  }
 }

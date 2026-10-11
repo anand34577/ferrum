@@ -18,6 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { Timestamp } from "@/components/ui/timestamp"
 import { api, ApiError } from "@/lib/api"
+import { copyText } from "@/lib/clipboard"
 
 // Mirrors internal/api/webhooks.go's webhookDTO / webhookDeliveryDTO and the
 // knownEventTypes catalog.
@@ -265,9 +266,9 @@ export function WebhooksPage() {
               aria-label="Copy signing secret"
               onClick={() => {
                 if (!revealedSecret?.secret) return
-                navigator.clipboard.writeText(revealedSecret.secret).then(() => {
-                  toast.success("Copied to clipboard")
-                }).catch(() => toast.error("Could not copy to clipboard"))
+                void copyText(revealedSecret.secret).then((ok) =>
+                  ok ? toast.success("Copied to clipboard") : toast.error("Could not copy to clipboard"),
+                )
               }}
             >
               <Copy className="h-3.5 w-3.5" />
