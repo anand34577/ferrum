@@ -15,8 +15,10 @@ export interface LiveRates {
  * previous one. If the counter goes backwards (guest restarted) the rate is
  * skipped for one sample instead of reporting nonsense.
  */
-export function useLiveRates(status: GuestLiveStatus | undefined): LiveRates {
-  const prev = useRef<{ t: number; netin: number; netout: number; diskread: number; diskwrite: number } | null>(null)
+export function useLiveRates(status: GuestLiveStatus | undefined, guestKey?: string): LiveRates {
+  // guestKey: the previous sample must be the same guest's, or the first rate
+  // after switching guests is B's counters minus A's.
+  const prev = useRef<{ key?: string; t: number; netin: number; netout: number; diskread: number; diskwrite: number } | null>(null)
   const [rates, setRates] = useState<LiveRates>({})
 
   useEffect(() => {
@@ -25,7 +27,11 @@ export function useLiveRates(status: GuestLiveStatus | undefined): LiveRates {
       return
     }
     const now = Date.now() / 1000
-    const p = prev.current
+    let p = prev.current
+    if (p && p.key !== guestKey) {
+      p = null
+      setRates({})
+    }
     const cur = {
       netin: status.netin ?? 0,
       netout: status.netout ?? 0,
@@ -42,8 +48,8 @@ export function useLiveRates(status: GuestLiveStatus | undefined): LiveRates {
         diskwrite: rate(cur.diskwrite, p.diskwrite),
       })
     }
-    prev.current = { t: now, ...cur }
-  }, [status])
+    prev.current = { key: guestKey, t: now, ...cur }
+  }, [status, guestKey])
 
   if (!status || status.status !== "running") {
     return {}

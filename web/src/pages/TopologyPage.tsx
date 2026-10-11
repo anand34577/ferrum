@@ -107,7 +107,7 @@ function RootNameEditor({
 function RootNode({ data }: NodeProps<Node<{ label: string; connections: number; nodes: number; guests: number; editing: boolean; onStartEdit: () => void; onRename: (name: string) => void }>>) {
   return (
     <div className="flex min-w-52 flex-col items-center gap-0.5 rounded-xl bg-[var(--bg-elevated)] px-5 py-3 text-center shadow-lg ring-2 ring-brand-500/60">
-      <div onDoubleClick={data.onStartEdit} className="flex cursor-text items-center gap-1.5" title="Double-click to rename">
+      <div onDoubleClick={data.onStartEdit} className="flex cursor-text items-center gap-1.5" data-tip="Double-click to rename">
         <Waypoints className="h-4 w-4 shrink-0 text-brand-400" />
         {data.editing ? (
           <RootNameEditor
@@ -150,24 +150,24 @@ function ConnectionNode({ data }: NodeProps<Node<{ label: string; online: boolea
       <div className="flex items-center gap-2">
         <ServerCog className="h-4 w-4 shrink-0 text-brand-500" />
         <p className="truncate font-display text-sm font-semibold leading-tight">{data.label}</p>
-        <span className="ml-auto shrink-0" title={data.online ? "Online" : "Offline"}>
+        <span className="ml-auto shrink-0" role="img" aria-label={data.online ? "Online" : "Offline"} data-tip={data.online ? "Online" : "Offline"}>
           <StatusDot status={data.online ? "ok" : "error"} />
         </span>
       </div>
       {data.address && (
-        <p className="truncate font-mono text-[11px]" title={`https://${data.address}`}>
+        <p className="truncate font-mono text-[11px]" data-tip={`https://${data.address}`}>
           https://{data.address}
         </p>
       )}
       <div className="flex items-center gap-3 text-[10px] text-[var(--text-muted)]">
         {data.auth && (
-          <span className="flex min-w-0 items-center gap-1" title={data.auth}>
+          <span className="flex min-w-0 items-center gap-1" data-tip={data.auth}>
             <KeyRound className="h-3 w-3 shrink-0" />
             <span className="truncate font-mono">{data.auth}</span>
           </span>
         )}
         {data.verifyTls === false && (
-          <span className="flex shrink-0 items-center gap-1 text-[var(--status-warn)]" title="TLS certificate verification is disabled for this connection">
+          <span className="flex shrink-0 items-center gap-1 text-[var(--status-warn)]" data-tip="TLS certificate verification is disabled for this connection">
             <Lock className="h-3 w-3" /> no TLS verify
           </span>
         )}
@@ -191,8 +191,8 @@ function PveNode({ data }: NodeProps<Node<{ label: string; status: string; cpu: 
     <div className="w-52 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 shadow-sm">
       <div className="flex items-center gap-1.5">
         <Server className="h-3.5 w-3.5 shrink-0" style={{ color: STATUS_COLOR[data.status] ?? "var(--text-muted)" }} />
-        <span className="truncate text-xs font-semibold" title={data.label}>{data.label}</span>
-        <span className="ml-auto shrink-0" title={data.status}>
+        <span className="truncate text-xs font-semibold" data-tip={data.label}>{data.label}</span>
+        <span className="ml-auto shrink-0" role="img" aria-label={`Node ${data.status}`} data-tip={data.status}>
           <StatusDot status={data.status === "online" ? "ok" : data.status === "offline" ? "error" : "warn"} />
         </span>
       </div>
@@ -228,11 +228,11 @@ function GuestNode({ data }: NodeProps<Node<{ label: string; vmid: number; statu
   return (
     <div
       className="w-44 cursor-pointer rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-1.5 shadow-sm transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-hover)]"
-      title="Open in Inventory"
+      data-tip="Open in Inventory"
     >
       <div className="flex items-center gap-1.5">
         <TypeChip type={data.type} size="sm" />
-        <span className="truncate text-xs font-medium" title={data.label}>{data.label}</span>
+        <span className="truncate text-xs font-medium" data-tip={data.label}>{data.label}</span>
         <span className="ml-auto flex shrink-0 items-center gap-1">
           <span className="font-mono text-[9px] text-[var(--text-faint)] tabular">#{data.vmid}</span>
           <StatusDot status={data.status === "running" ? "ok" : "error"} />
@@ -510,7 +510,7 @@ export function TopologyPage() {
               type="button"
               size="sm"
               variant={snapEnabled ? "default" : "outline"}
-              title={snapEnabled ? "Snap to grid: on" : "Snap to grid: off"}
+              data-tip={snapEnabled ? "Snap to grid: on" : "Snap to grid: off"}
               onClick={() => {
                 const next = !snapEnabled
                 setSnapEnabled(next)

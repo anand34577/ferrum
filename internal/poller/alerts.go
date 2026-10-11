@@ -106,6 +106,10 @@ func (e *AlertEvaluator) Run(ctx context.Context, interval time.Duration) {
 }
 
 func (e *AlertEvaluator) evaluateOnce(ctx context.Context) {
+	// First, so an alert whose timed silence just ended is already active
+	// (and announced) by the time this tick re-evaluates its condition.
+	e.expireSilences(ctx)
+
 	rules, err := e.loadRules(ctx)
 	if err != nil {
 		slog.Error("alert evaluator: loading rules failed", "error", err)
@@ -385,7 +389,7 @@ func (e *AlertEvaluator) reconcileMissing(ctx context.Context, rules []rule, pol
 			}
 			now := time.Now().UTC().Format(time.RFC3339)
 			if _, err := e.db.ExecContext(ctx, `
-				UPDATE alert_instances SET status = 'resolved', resolved_at = ?, updated_at = ?
+				UPDATE alert_instances SET status = 'resolved', resolved_at = ?, updated_at = ?, silenced_until = NULL
 				WHERE id = ? AND status IN ('active', 'silenced')`, now, now, inst.id); err != nil {
 				slog.Error("alert evaluator: resolving vanished-resource alert failed", "error", err)
 				continue
@@ -404,16 +408,22 @@ func (e *AlertEvaluator) reconcileMissing(ctx context.Context, rules []rule, pol
 
 func (e *AlertEvaluator) upsertActive(ctx context.Context, ru rule, conn connections.Info, resourceID, resourceName string, value float64) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	var existingID string
+	var existingID, existingStatus string
 	// isNew must be answered by ErrNoRows specifically: any other lookup
 	// error is unknown state, so the whole upsert is skipped rather than
 	// risking a spurious "alert triggered" notification for an existing row.
-	err := e.db.QueryRowContext(ctx, `SELECT id FROM alert_instances WHERE rule_id = ? AND resource_id = ?`, ru.ID, resourceID).Scan(&existingID)
+	err := e.db.QueryRowContext(ctx, `SELECT id, status FROM alert_instances WHERE rule_id = ? AND resource_id = ?`, ru.ID, resourceID).Scan(&existingID, &existingStatus)
 	isNew := errors.Is(err, sql.ErrNoRows)
 	if err != nil && !isNew {
 		slog.Error("alert evaluator: checking for an existing instance failed", "rule", ru.ID, "resource", resourceID, "error", err)
 		return
 	}
+	// The instance row is reused for the life of a (rule, resource) pair, so
+	// "the row exists" is not "this incident was already announced": a
+	// resolved alert that breaches again is a new incident. Treating only a
+	// missing row as new meant each alert notified exactly once, ever — the
+	// second CPU spike on a node flipped the row back to active in silence.
+	isNew = isNew || existingStatus == "resolved"
 
 	// Atomic upsert: the unique (rule_id, resource_id) constraint decides
 	// insert vs update in one statement, so a racing evaluator can't create
@@ -423,7 +433,13 @@ func (e *AlertEvaluator) upsertActive(ctx context.Context, ru rule, conn connect
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
 		ON CONFLICT (rule_id, resource_id) DO UPDATE SET
 			value = excluded.value,
+			threshold = excluded.threshold,
+			severity = excluded.severity,
 			updated_at = excluded.updated_at,
+			connection_name = excluded.connection_name,
+			resource_name = excluded.resource_name,
+			triggered_at = CASE WHEN alert_instances.status = 'resolved' THEN excluded.triggered_at ELSE alert_instances.triggered_at END,
+			resolved_at = NULL,
 			status = CASE WHEN alert_instances.status = 'silenced' THEN 'silenced' ELSE 'active' END`,
 		uuid.NewString(), ru.ID, conn.ID, conn.Name, resourceID, resourceName, ru.Metric, value, ru.Threshold, ru.Severity, now, now,
 	); err != nil {
@@ -593,11 +609,87 @@ func nullableString(s string) *string {
 	return &s
 }
 
+// expireSilences returns alerts whose timed silence has run out to active.
+// Open-ended silences (silenced_until IS NULL) are untouched. Each one is
+// announced on the bus like a fresh trigger: from the operator's side an
+// alert they had muted is demanding attention again, and without the event
+// the header bell would only notice on its next slow poll. If the condition
+// has actually cleared in the meantime, this same tick's evaluation resolves
+// it straight away.
+func (e *AlertEvaluator) expireSilences(ctx context.Context) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	rows, err := e.db.QueryContext(ctx, `
+		SELECT id, rule_id, connection_id, connection_name, resource_id, resource_name, metric, value, threshold, severity
+		FROM alert_instances
+		WHERE status = 'silenced' AND silenced_until IS NOT NULL AND silenced_until <= ?`, now)
+	if err != nil {
+		slog.Error("alert evaluator: looking up expired silences failed", "error", err)
+		return
+	}
+	type expired struct {
+		id, ruleID, connID, connName, resourceID, resourceName, metric, severity string
+		value, threshold                                                       float64
+	}
+	var due []expired
+	for rows.Next() {
+		var x expired
+		if err := rows.Scan(&x.id, &x.ruleID, &x.connID, &x.connName, &x.resourceID, &x.resourceName, &x.metric, &x.value, &x.threshold, &x.severity); err != nil {
+			slog.Error("alert evaluator: reading an expired silence failed", "error", err)
+			continue
+		}
+		due = append(due, x)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("alert evaluator: looking up expired silences failed", "error", err)
+	}
+	// Closed before the updates below: sqlite allows one writer, and an open
+	// read cursor on the same table would make them wait on ourselves.
+	rows.Close()
+
+	for _, x := range due {
+		// The status guard makes this a no-op if an admin un-silenced (or
+		// re-silenced with a new deadline) between the SELECT and here.
+		res, err := e.db.ExecContext(ctx, `
+			UPDATE alert_instances SET status = 'active', silenced_until = NULL, updated_at = ?
+			WHERE id = ? AND status = 'silenced' AND silenced_until IS NOT NULL AND silenced_until <= ?`, now, x.id, now)
+		if err != nil {
+			slog.Error("alert evaluator: ending a timed silence failed", "alert", x.id, "error", err)
+			continue
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			continue
+		}
+		slog.Info("alert silence expired", "alert", x.id, "resource", x.resourceName)
+		if e.bus != nil {
+			e.bus.Publish(events.Event{
+				Type:         events.TypeAlertTriggered,
+				ConnectionID: x.connID,
+				ResourceID:   x.resourceID,
+				Payload: map[string]any{
+					"ruleId":         x.ruleID,
+					"metric":         x.metric,
+					"connectionName": x.connName,
+					"resourceName":   x.resourceName,
+					"value":          x.value,
+					"threshold":      x.threshold,
+					"severity":       x.severity,
+					"silenceExpired": true,
+				},
+			})
+		}
+	}
+}
+
+// resolveIfActive closes the open incident for a (rule, resource) pair whose
+// condition no longer holds. Silenced alerts are included: a mute is for the
+// incident it was applied to, and leaving the row 'silenced' after the
+// condition cleared carried the mute over to every later breach — the
+// resource could never alert again until someone noticed and un-silenced it.
 func (e *AlertEvaluator) resolveIfActive(ctx context.Context, ruleID, resourceID string) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := e.db.ExecContext(ctx, `
-		UPDATE alert_instances SET status = 'resolved', resolved_at = ?, updated_at = ?
-		WHERE rule_id = ? AND resource_id = ? AND status = 'active'`, now, now, ruleID, resourceID)
+		UPDATE alert_instances SET status = 'resolved', resolved_at = ?, updated_at = ?, silenced_until = NULL
+		WHERE rule_id = ? AND resource_id = ? AND status IN ('active', 'silenced')`, now, now, ruleID, resourceID)
 	if err != nil {
 		slog.Error("alert evaluator: resolving instance failed", "error", err)
 		return

@@ -1,5 +1,4 @@
-import { AnimatePresence } from "framer-motion"
-import { lazy, Suspense, useEffect, type ReactNode, type ReactElement } from "react"
+import { Suspense, useEffect, type ReactNode, type ReactElement } from "react"
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import { toast } from "sonner"
@@ -9,31 +8,35 @@ import { ErrorBoundary } from "@/components/ui/error-boundary"
 import { CardSkeleton } from "@/components/ui/skeleton"
 import { api, onErrorCode } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
+import { pages } from "@/lib/routes"
 import { SetupPage } from "@/pages/SetupPage"
 import { LoginPage } from "@/pages/LoginPage"
 import { ConsolePage } from "@/pages/ConsolePage"
 
-const AIAssistantPage = lazy(() => import("@/pages/AIAssistantPage").then((m) => ({ default: m.AIAssistantPage })))
-const AuditPage = lazy(() => import("@/pages/AuditPage").then((m) => ({ default: m.AuditPage })))
-const ClusterPage = lazy(() => import("@/pages/ClusterPage").then((m) => ({ default: m.ClusterPage })))
-const BackupsPage = lazy(() => import("@/pages/BackupsPage").then((m) => ({ default: m.BackupsPage })))
-const ConnectionsPage = lazy(() => import("@/pages/ConnectionsPage").then((m) => ({ default: m.ConnectionsPage })))
-const DashboardPage = lazy(() => import("@/pages/DashboardPage").then((m) => ({ default: m.DashboardPage })))
-const OverviewPage = lazy(() => import("@/pages/OverviewPage").then((m) => ({ default: m.OverviewPage })))
-const FirewallPage = lazy(() => import("@/pages/FirewallPage").then((m) => ({ default: m.FirewallPage })))
-const HAPage = lazy(() => import("@/pages/HAPage").then((m) => ({ default: m.HAPage })))
-const InventoryPage = lazy(() => import("@/pages/InventoryPage").then((m) => ({ default: m.InventoryPage })))
-const NodeDetailPage = lazy(() => import("@/pages/NodeDetailPage").then((m) => ({ default: m.NodeDetailPage })))
-const PoolsPage = lazy(() => import("@/pages/PoolsPage").then((m) => ({ default: m.PoolsPage })))
-const SettingsPage = lazy(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage })))
-const StoragePage = lazy(() => import("@/pages/StoragePage").then((m) => ({ default: m.StoragePage })))
-const TasksPage = lazy(() => import("@/pages/TasksPage").then((m) => ({ default: m.TasksPage })))
-const UsersPage = lazy(() => import("@/pages/UsersPage").then((m) => ({ default: m.UsersPage })))
-const AlertsPage = lazy(() => import("@/pages/AlertsPage").then((m) => ({ default: m.AlertsPage })))
-const TopologyPage = lazy(() => import("@/pages/TopologyPage").then((m) => ({ default: m.TopologyPage })))
-const ProfilePage = lazy(() => import("@/pages/ProfilePage").then((m) => ({ default: m.ProfilePage })))
-const BulkOperationsPage = lazy(() => import("@/pages/BulkOperationsPage").then((m) => ({ default: m.BulkOperationsPage })))
-const WebhooksPage = lazy(() => import("@/pages/WebhooksPage").then((m) => ({ default: m.WebhooksPage })))
+const {
+  "/": OverviewPage,
+  "/dashboard": DashboardPage,
+  "/inventory": InventoryPage,
+  "/nodes": NodeDetailPage,
+  "/topology": TopologyPage,
+  "/storage": StoragePage,
+  "/pbs": PBSPage,
+  "/pools": PoolsPage,
+  "/backups": BackupsPage,
+  "/ha": HAPage,
+  "/cluster": ClusterPage,
+  "/firewall": FirewallPage,
+  "/alerts": AlertsPage,
+  "/tasks": TasksPage,
+  "/ai-assistant": AIAssistantPage,
+  "/bulk-operations": BulkOperationsPage,
+  "/webhooks": WebhooksPage,
+  "/connections": ConnectionsPage,
+  "/users": UsersPage,
+  "/audit": AuditPage,
+  "/settings": SettingsPage,
+  "/profile": ProfilePage,
+} = pages
 
 function PageFallback() {
   return (
@@ -48,8 +51,8 @@ function PageFallback() {
   )
 }
 
-// Suspense sits INSIDE the animated route element so a lazy chunk loading
-// shows the fallback without cutting the outgoing page's exit animation.
+// Suspense sits INSIDE the animated route element so the skeleton fallback
+// fades in with the page rather than popping in ahead of it.
 function route(element: ReactElement, adminOnly = false): ReactNode {
   return (
     <PageTransition>
@@ -133,32 +136,31 @@ export default function App() {
       {/* Keyed by path: navigating away from a broken page clears the
           boundary, instead of trapping the user on the fallback forever. */}
       <ErrorBoundary key={location.pathname}>
-        <AnimatePresence mode="wait">
-          <Routes location={location} key={location.pathname}>
-            <Route path="/" element={route(<HomeRoute />)} />
-            <Route path="/dashboard" element={route(<DashboardPage />)} />
-            <Route path="/inventory" element={route(<InventoryPage />)} />
-            <Route path="/nodes/:connId/:node" element={route(<NodeDetailPage />)} />
-            <Route path="/topology" element={route(<TopologyPage />)} />
-            <Route path="/storage" element={route(<StoragePage />)} />
-            <Route path="/pools" element={route(<PoolsPage />)} />
-            <Route path="/backups" element={route(<BackupsPage />)} />
-            <Route path="/ha" element={route(<HAPage />)} />
-            <Route path="/cluster" element={route(<ClusterPage />, true)} />
-            <Route path="/firewall" element={route(<FirewallPage />)} />
-            <Route path="/alerts" element={route(<AlertsPage />)} />
-            <Route path="/tasks" element={route(<TasksPage />)} />
-            <Route path="/ai-assistant" element={route(<AIAssistantPage />)} />
-            <Route path="/bulk-operations" element={route(<BulkOperationsPage />, true)} />
-            <Route path="/webhooks" element={route(<WebhooksPage />, true)} />
-            <Route path="/connections" element={route(<ConnectionsPage />, true)} />
-            <Route path="/users" element={route(<UsersPage />, true)} />
-            <Route path="/audit" element={route(<AuditPage />, true)} />
-            <Route path="/settings" element={route(<SettingsPage />, true)} />
-            <Route path="/profile" element={route(<ProfilePage />)} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </AnimatePresence>
+        <Routes location={location} key={location.pathname}>
+          <Route path="/" element={route(<HomeRoute />)} />
+          <Route path="/dashboard" element={route(<DashboardPage />)} />
+          <Route path="/inventory" element={route(<InventoryPage />)} />
+          <Route path="/nodes/:connId/:node" element={route(<NodeDetailPage />)} />
+          <Route path="/topology" element={route(<TopologyPage />)} />
+          <Route path="/storage" element={route(<StoragePage />)} />
+          <Route path="/pbs" element={route(<PBSPage />)} />
+          <Route path="/pools" element={route(<PoolsPage />)} />
+          <Route path="/backups" element={route(<BackupsPage />)} />
+          <Route path="/ha" element={route(<HAPage />)} />
+          <Route path="/cluster" element={route(<ClusterPage />, true)} />
+          <Route path="/firewall" element={route(<FirewallPage />)} />
+          <Route path="/alerts" element={route(<AlertsPage />)} />
+          <Route path="/tasks" element={route(<TasksPage />)} />
+          <Route path="/ai-assistant" element={route(<AIAssistantPage />)} />
+          <Route path="/bulk-operations" element={route(<BulkOperationsPage />, true)} />
+          <Route path="/webhooks" element={route(<WebhooksPage />, true)} />
+          <Route path="/connections" element={route(<ConnectionsPage />, true)} />
+          <Route path="/users" element={route(<UsersPage />, true)} />
+          <Route path="/audit" element={route(<AuditPage />, true)} />
+          <Route path="/settings" element={route(<SettingsPage />, true)} />
+          <Route path="/profile" element={route(<ProfilePage />)} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
       </ErrorBoundary>
     </AppShell>
   )

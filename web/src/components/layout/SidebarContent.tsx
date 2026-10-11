@@ -1,7 +1,9 @@
-import type { LucideIcon } from "lucide-react"
+import { ChevronDown, type LucideIcon } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
 import { NavLink, useLocation } from "react-router-dom"
 import { cn } from "@/lib/utils"
 import { Hint } from "@/components/ui/tooltip"
+import { prefetchRoute } from "@/lib/routes"
 
 interface NavItemSpec {
   to: string
@@ -27,11 +29,44 @@ export function SidebarContent({
   onNavigate?: () => void
 }) {
   const { pathname } = useLocation()
+  const navRef = useRef<HTMLElement>(null)
+  // Which edges have more items scrolled out of view. On a laptop-height
+  // window the last section (Administration) sits below the fold with
+  // nothing to say so — the thin scrollbar is easy to miss on a dark rail,
+  // and it is hidden outright when the rail is collapsed.
+  const [overflow, setOverflow] = useState({ above: false, below: false })
+
+  useEffect(() => {
+    const nav = navRef.current
+    if (!nav) return
+    const measure = () => {
+      const above = nav.scrollTop > 4
+      const below = nav.scrollTop + nav.clientHeight < nav.scrollHeight - 4
+      setOverflow((prev) => (prev.above === above && prev.below === below ? prev : { above, below }))
+    }
+    measure()
+    nav.addEventListener("scroll", measure, { passive: true })
+    // Fires for window resizes and for the rail collapsing/expanding alike.
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure)
+    observer?.observe(nav)
+    return () => {
+      nav.removeEventListener("scroll", measure)
+      observer?.disconnect()
+    }
+  }, [groups, collapsed])
+
+  // Arriving on a page whose nav item is scrolled out of view (a deep link
+  // to Settings, the command palette) brings that item into view, so the
+  // rail always shows where you are.
+  useEffect(() => {
+    navRef.current?.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: "nearest" })
+  }, [pathname])
 
   return (
-    // When collapsed the rail is exactly one icon wide: hide the scrollbar
-    // (wheel/scroll still work) so it can't push the icons off-center.
-    <nav className={cn("flex-1 overflow-y-auto py-3", collapsed && "no-scrollbar")} aria-label="Main navigation">
+    <div className="relative flex min-h-0 flex-1 flex-col">
+    {/* When collapsed the rail is exactly one icon wide: hide the scrollbar
+        (wheel/scroll still work) so it can't push the icons off-center. */}
+    <nav ref={navRef} className={cn("flex-1 scroll-py-12 overflow-y-auto py-3", collapsed && "no-scrollbar")} aria-label="Main navigation">
       {groups.map((group) => (
         <div key={group.label} className={cn("mb-4 px-2.5 last:mb-0", collapsed && "px-2")}>
           {/* Full-opacity muted text: at 70% these 10px labels fell to ~3.7:1 on the rail. */}
@@ -69,6 +104,8 @@ export function SidebarContent({
                   to={item.to}
                   end={item.end}
                   onClick={onNavigate}
+                  onPointerEnter={() => prefetchRoute(item.to)}
+                  onFocus={() => prefetchRoute(item.to)}
                   className={linkClass}
                   aria-label={collapsed ? item.label : undefined}
                   aria-current={active ? "page" : undefined}
@@ -91,5 +128,23 @@ export function SidebarContent({
         </div>
       ))}
     </nav>
+    {/* Fades the edge that has more behind it — the standard "this scrolls" cue. */}
+    <div
+      aria-hidden
+      className={cn(
+        "pointer-events-none absolute inset-x-0 top-0 h-8 bg-gradient-to-b from-[var(--sidebar-bg)] to-transparent transition-opacity duration-200",
+        overflow.above ? "opacity-100" : "opacity-0",
+      )}
+    />
+    <div
+      aria-hidden
+      className={cn(
+        "pointer-events-none absolute inset-x-0 bottom-0 flex h-12 items-end justify-center bg-gradient-to-t from-[var(--sidebar-bg)] from-30% to-transparent pb-1 transition-opacity duration-200",
+        overflow.below ? "opacity-100" : "opacity-0",
+      )}
+    >
+      <ChevronDown className="h-3.5 w-3.5 text-[var(--sidebar-text-muted)]" />
+    </div>
+    </div>
   )
 }

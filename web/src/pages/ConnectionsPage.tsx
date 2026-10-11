@@ -481,7 +481,7 @@ export function ConnectionsPage() {
                 <div className="min-w-0 flex-1">
                   <p className="flex min-w-0 items-center gap-2 font-medium">
                     {status && (
-                      <span className="flex shrink-0 items-center" title={status.online ? "Reachable" : "Unreachable"}>
+                      <span className="flex shrink-0 items-center" data-tip={status.online ? "Reachable" : "Unreachable"}>
                         <StatusDot status={status.online ? "ok" : "error"} />
                         <span className="sr-only">{status.online ? "Reachable" : "Unreachable"}</span>
                       </span>
@@ -491,7 +491,7 @@ export function ConnectionsPage() {
                         hover tooltip — print it like Overview does, since
                         "red dot" alone doesn't fix a dead host. */}
                     {status && !status.online && (
-                      <span className="hidden min-w-0 truncate text-xs font-normal text-[var(--status-error)] sm:inline" title={status.error}>
+                      <span className="hidden min-w-0 truncate text-xs font-normal text-[var(--status-error)] sm:inline" data-tip={status.error}>
                         {status.error ?? "unreachable"}
                       </span>
                     )}

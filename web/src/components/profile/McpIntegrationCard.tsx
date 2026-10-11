@@ -6,14 +6,16 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { api } from "@/lib/api"
 import { useCopiedFlag } from "@/lib/useCopiedFlag"
+import { copyText } from "@/lib/clipboard"
 
 function CopyBlock({ text }: { text: string }) {
   const [copied, flashCopied] = useCopiedFlag(2000)
   function copy() {
-    navigator.clipboard.writeText(text).then(() => {
+    void copyText(text).then((ok) => {
+      if (!ok) return toast.error("Could not copy to clipboard")
       flashCopied()
       toast.success("Copied to clipboard")
-    }).catch(() => toast.error("Could not copy to clipboard"))
+    })
   }
   return (
     <div className="flex items-start gap-2">

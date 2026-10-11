@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { toast } from "sonner"
+import { useFormDirty } from "@/components/settings/use-form-dirty"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ErrorState } from "@/components/ui/error-state"
+import { FormError } from "@/components/ui/form-error"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -68,6 +70,11 @@ export function NotificationsSettingsCard() {
 function NotificationsForm({ initial }: { initial: NotificationSettings }) {
   const queryClient = useQueryClient()
   const [form, setForm] = useState({ ...initial, gotifyToken: "", smtpPassword: "" })
+  // The GET omits the stored Gotify token / SMTP password, so dirty is
+  // measured against the form's own initial state (secret fields start
+  // blank) — never the raw server response. Remounted via
+  // key={JSON.stringify(query.data)} on save, so dirty resets for free.
+  const dirty = useFormDirty(form, { ...initial, gotifyToken: "", smtpPassword: "" })
 
   const save = useMutation({
     mutationFn: () =>
@@ -88,7 +95,7 @@ function NotificationsForm({ initial }: { initial: NotificationSettings }) {
       toast.success("Notification settings saved")
       queryClient.setQueryData(["admin", "settings", "notifications"], data)
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to save notification settings"),
+    // Failure surfaces inline via <FormError> below, not a toast.
   })
 
   const testGotify = useMutation({
@@ -126,7 +133,7 @@ function NotificationsForm({ initial }: { initial: NotificationSettings }) {
             <p className="text-sm font-medium">Gotify</p>
             <p className="text-xs text-[var(--text-muted)]">Push notifications via a self-hosted Gotify server.</p>
           </div>
-          <Switch checked={form.gotifyEnabled} onCheckedChange={(v) => setForm({ ...form, gotifyEnabled: v })} />
+          <Switch aria-label="Gotify" checked={form.gotifyEnabled} onCheckedChange={(v) => setForm({ ...form, gotifyEnabled: v })} />
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
@@ -154,7 +161,7 @@ function NotificationsForm({ initial }: { initial: NotificationSettings }) {
             <p className="text-sm font-medium">Email (SMTP)</p>
             <p className="text-xs text-[var(--text-muted)]">Sends via any standard SMTP relay — port 465 uses implicit TLS automatically.</p>
           </div>
-          <Switch checked={form.smtpEnabled} onCheckedChange={(v) => setForm({ ...form, smtpEnabled: v })} />
+          <Switch aria-label="Email (SMTP)" checked={form.smtpEnabled} onCheckedChange={(v) => setForm({ ...form, smtpEnabled: v })} />
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
@@ -194,7 +201,7 @@ function NotificationsForm({ initial }: { initial: NotificationSettings }) {
         </div>
         <div className="flex items-center justify-between rounded-md border border-[var(--border)] px-3 py-2.5">
           <p className="text-sm font-medium">Use STARTTLS</p>
-          <Switch checked={form.smtpUseTls} onCheckedChange={(v) => setForm({ ...form, smtpUseTls: v })} />
+          <Switch aria-label="Use STARTTLS" checked={form.smtpUseTls} onCheckedChange={(v) => setForm({ ...form, smtpUseTls: v })} />
         </div>
         <Button
           size="sm"
@@ -207,7 +214,10 @@ function NotificationsForm({ initial }: { initial: NotificationSettings }) {
         </Button>
       </section>
 
-      <Button size="sm" loading={save.isPending} onClick={() => save.mutate()}>
+      <FormError
+        message={save.error instanceof ApiError ? save.error.message : save.error ? "Couldn't save notification settings — try again." : null}
+      />
+      <Button size="sm" loading={save.isPending} disabled={!dirty} onClick={() => save.mutate()}>
         Save notification settings
       </Button>
     </>

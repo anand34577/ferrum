@@ -1098,7 +1098,7 @@ func (s *Server) audit(r *http.Request, action, category, target string) {
 	if u != nil {
 		userID = u.ID
 	}
-	s.auditEntry(r.Context(), userID, action, category, target, r.RemoteAddr)
+	s.auditEntry(r.Context(), userID, action, category, target, clientIP(r))
 }
 
 // auditEntry is the shared insert behind both audit (REST handlers, which

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
-import { AlertTriangle, BellOff, ChartPie, Pencil, Plus, ShieldAlert, Trash2, WifiOff } from "lucide-react"
+import { AlertTriangle, BellOff, ChartPie, ChevronDown, Pencil, Plus, ShieldAlert, Trash2, WifiOff } from "lucide-react"
 import { useMemo, useState } from "react"
 import { Link } from "react-router-dom"
 import { toast } from "sonner"
@@ -19,7 +19,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Timestamp } from "@/components/ui/timestamp"
 import { Hint } from "@/components/ui/tooltip"
 import { api, ApiError, type AlertInstance, type AlertRule, type ConnectionHealth, type ConnectionInventory } from "@/lib/api"
-import { formatAlertValue, guestUrl } from "@/lib/utils"
+import { alertUrl, formatAlertValue, formatTimeLeft } from "@/lib/utils"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 
 /** How long ago `since` was, as a short "3h 12m" style duration — connection
  * downtime is the one alert-adjacent number worth reading at a glance. */
@@ -51,6 +52,14 @@ const METRIC_LABELS: Record<string, string> = {
 // metrics too (certificate expiry, connection staleness, orphaned volumes),
 // which the API rejects with a 400.
 const RULE_METRICS = ["node_cpu", "node_mem", "node_disk", "guest_cpu", "guest_mem", "storage_usage"] as const
+
+// Mirrors maxSilenceMinutes (30 days) in internal/api/alerts.go.
+const SILENCE_CHOICES = [
+  { minutes: 60, label: "1 hour" },
+  { minutes: 4 * 60, label: "4 hours" },
+  { minutes: 24 * 60, label: "24 hours" },
+  { minutes: 7 * 24 * 60, label: "7 days" },
+]
 
 interface RuleFormState {
   id?: string
@@ -100,13 +109,14 @@ export function AlertsPage() {
   // once whenever any one of them was clicked.
   const [silencingId, setSilencingId] = useState<string | null>(null)
   const silenceMutation = useMutation({
-    mutationFn: (id: string) => {
+    mutationFn: ({ id, minutes }: { id: string; minutes: number }) => {
       setSilencingId(id)
-      return api.post(`/alerts/${id}/silence`)
+      return api.post(`/alerts/${id}/silence`, { durationMinutes: minutes })
     },
     onSettled: () => setSilencingId(null),
-    onSuccess: () => {
-      toast.success("Alert silenced")
+    onSuccess: (_data, { minutes }) => {
+      const choice = SILENCE_CHOICES.find((c) => c.minutes === minutes)
+      toast.success(minutes > 0 ? `Alert silenced for ${choice?.label ?? `${minutes} minutes`}` : "Alert silenced until it resolves")
       queryClient.invalidateQueries({ queryKey: ["alerts"] })
       queryClient.invalidateQueries({ queryKey: ["alerts-summary"] })
     },
@@ -219,11 +229,7 @@ export function AlertsPage() {
         accessorKey: "resourceName",
         header: "Resource",
         cell: (c) => (
-          <Link
-            to={guestUrl(c.row.original.connectionId, undefined, c.row.original.resourceName)}
-            className="underline-offset-2 hover:underline"
-            title="Open this resource in Inventory"
-          >
+          <Link to={alertUrl(c.row.original)} className="underline-offset-2 hover:underline" data-tip="Open this resource">
             {c.getValue<string>()}
           </Link>
         ),
@@ -235,7 +241,7 @@ export function AlertsPage() {
         header: "Value",
         meta: { hideBelowMd: true },
         cell: (c) => (
-          <span className="font-mono text-xs tabular">
+          <span className="font-mono text-xs whitespace-nowrap tabular">
             {formatAlertValue(c.row.original.metric, c.row.original.value, c.row.original.threshold)}
           </span>
         ),
@@ -249,15 +255,33 @@ export function AlertsPage() {
         id: "actions",
         header: "",
         cell: (c) => (
-          <Button
-            size="sm"
-            variant="ghost"
-            loading={silencingId === c.row.original.id}
-            disabled={silencingId !== null && silencingId !== c.row.original.id}
-            onClick={() => silenceMutation.mutate(c.row.original.id)}
-          >
-            {silencingId !== c.row.original.id && <BellOff className="h-3.5 w-3.5" />} Silence
-          </Button>
+          // A menu rather than a single button: "mute this for the 4 hours
+          // the maintenance takes" is the common case, and an open-ended
+          // mute is the one people forget to undo.
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="sm"
+                variant="ghost"
+                loading={silencingId === c.row.original.id}
+                disabled={silencingId !== null && silencingId !== c.row.original.id}
+                aria-label={`Silence alert for ${c.row.original.resourceName}`}
+              >
+                {silencingId !== c.row.original.id && <BellOff className="h-3.5 w-3.5" />} Silence
+                <ChevronDown className="h-3 w-3 opacity-60" aria-hidden />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Silence for</DropdownMenuLabel>
+              {SILENCE_CHOICES.map((choice) => (
+                <DropdownMenuItem key={choice.minutes} onSelect={() => silenceMutation.mutate({ id: c.row.original.id, minutes: choice.minutes })}>
+                  {choice.label}
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => silenceMutation.mutate({ id: c.row.original.id, minutes: 0 })}>Until it resolves</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         ),
       },
     ],
@@ -276,10 +300,18 @@ export function AlertsPage() {
       { accessorKey: "connectionName", header: "Connection", meta: { hideBelowMd: true } },
       { accessorKey: "metric", header: "Metric", cell: (c) => METRIC_LABELS[c.getValue<string>()] ?? c.getValue<string>() },
       {
-        accessorKey: "updatedAt",
-        header: "Silenced",
-        meta: { hideBelowMd: true },
-        cell: (c) => <Timestamp iso={c.getValue<string>()} className="text-xs text-[var(--text-muted)]" />,
+        accessorKey: "silencedUntil",
+        header: "Returns",
+        cell: (c) => {
+          const until = c.getValue<string | undefined>()
+          const left = until ? formatTimeLeft(until) : ""
+          if (!until) return <span className="text-xs text-[var(--text-muted)]">When un-silenced or resolved</span>
+          return (
+            <span className="text-xs tabular" data-tip={new Date(until).toLocaleString()}>
+              {left ? `in ${left}` : "any moment"}
+            </span>
+          )
+        },
       },
       {
         id: "actions",
@@ -319,7 +351,11 @@ export function AlertsPage() {
         id: "scope",
         header: "Scope",
         meta: { hideBelowMd: true },
-        cell: (c) => (c.row.original.connectionId ? "One connection" : "All connections"),
+        cell: (c) => {
+          const id = c.row.original.connectionId
+          if (!id) return "All connections"
+          return inventory?.find((conn) => conn.connectionId === id)?.name ?? "One connection"
+        },
       },
       {
         id: "actions",
@@ -346,7 +382,7 @@ export function AlertsPage() {
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [deleteRuleMutation],
+    [deleteRuleMutation, inventory],
   )
 
   return (
@@ -386,7 +422,7 @@ export function AlertsPage() {
                 <div className="flex min-w-0 items-center gap-2">
                   <Badge variant="error">down</Badge>
                   <span className="font-medium">{h.connectionName}</span>
-                  {h.lastError && <span className="truncate text-xs text-[var(--text-muted)]" title={h.lastError}>{h.lastError}</span>}
+                  {h.lastError && <span className="truncate text-xs text-[var(--text-muted)]" data-tip={h.lastError}>{h.lastError}</span>}
                 </div>
                 <span className="shrink-0 text-xs text-[var(--text-muted)] tabular">unreachable for {ageFrom(h.since)}</span>
               </div>
@@ -432,6 +468,7 @@ export function AlertsPage() {
               <ErrorState title="Couldn't load active alerts" onRetry={activeAlertsQuery.refetch} />
             ) : (
               <DataTable
+                storageKey="alerts-1"
                 columns={alertColumns}
                 data={activeAlertsQuery.data ?? []}
                 loading={activeAlertsQuery.isLoading}
@@ -454,13 +491,14 @@ export function AlertsPage() {
               <BellOff className="h-4 w-4" /> Silenced alerts
               <Badge variant="outline">{silencedAlertsQuery.data?.length ?? 0}</Badge>
             </CardTitle>
-            <p className="text-xs text-[var(--text-muted)]">Muted on purpose — they stay muted until you un-silence them or they resolve on their own.</p>
+            <p className="text-xs text-[var(--text-muted)]">Muted on purpose. A timed silence ends by itself; any silence ends early if you un-silence it or the condition clears.</p>
           </CardHeader>
           <CardContent>
             {silencedAlertsQuery.isError ? (
               <ErrorState title="Couldn't load silenced alerts" onRetry={silencedAlertsQuery.refetch} />
             ) : (
               <DataTable
+                storageKey="alerts-2"
                 columns={silencedColumns}
                 data={silencedAlertsQuery.data ?? []}
                 loading={silencedAlertsQuery.isLoading}
@@ -510,10 +548,14 @@ export function AlertsPage() {
                 </Select>
               </div>
               <div className="space-y-1.5 sm:col-span-2">
-                <Label>Connection (optional — leave blank to apply everywhere)</Label>
-                <Select value={form.connectionId} onValueChange={(v) => setForm({ ...form, connectionId: v })}>
-                  <SelectTrigger><SelectValue placeholder="All connections" /></SelectTrigger>
+                <Label>Applies to</Label>
+                {/* "all" is a sentinel for the empty connectionId: a Select can't
+                    choose "no value", so without an explicit option a rule
+                    scoped to one connection could never be widened again. */}
+                <Select value={form.connectionId || "all"} onValueChange={(v) => setForm({ ...form, connectionId: v === "all" ? "" : v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="all">All connections</SelectItem>
                     {inventory?.map((c) => (
                       <SelectItem key={c.connectionId} value={c.connectionId}>{c.name}</SelectItem>
                     ))}
@@ -549,6 +591,7 @@ export function AlertsPage() {
             <ErrorState title="Couldn't load alert rules" onRetry={rulesQuery.refetch} />
           ) : (
             <DataTable
+              storageKey="alerts-3"
               columns={ruleColumns}
               data={rulesQuery.data ?? []}
               loading={rulesQuery.isLoading}

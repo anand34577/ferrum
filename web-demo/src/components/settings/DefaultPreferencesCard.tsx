@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { toast } from "sonner"
+import { useFormDirty } from "@/components/settings/use-form-dirty"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ErrorState } from "@/components/ui/error-state"
+import { FormError } from "@/components/ui/form-error"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -38,6 +40,9 @@ const ACCENTS: { value: Accent; label: string }[] = [
   { value: "verdant", label: "Verdant" },
   { value: "violet", label: "Violet" },
   { value: "slate", label: "Slate" },
+  { value: "amber", label: "Amber" },
+  { value: "rose", label: "Rose" },
+  { value: "teal", label: "Teal" },
 ]
 const LANDING_PAGES = [
   { value: "/", label: "Fleet Overview" },
@@ -92,6 +97,9 @@ export function DefaultPreferencesCard() {
 function DefaultPreferencesForm({ initial }: { initial: DefaultPreferences }) {
   const queryClient = useQueryClient()
   const [form, setForm] = useState(initial)
+  // Remounted via key={JSON.stringify(query.data)} on save, so dirty resets
+  // for free; `initial` is the form's own starting state.
+  const dirty = useFormDirty(form, initial)
 
   const save = useMutation({
     mutationFn: () => api.put<DefaultPreferences>("/admin/settings/defaults", form),
@@ -99,7 +107,7 @@ function DefaultPreferencesForm({ initial }: { initial: DefaultPreferences }) {
       toast.success("Default preferences saved")
       queryClient.setQueryData(["admin", "settings", "defaults"], data)
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to save defaults"),
+    // Failure surfaces inline via <FormError> below, not a toast.
   })
 
   return (
@@ -154,7 +162,10 @@ function DefaultPreferencesForm({ initial }: { initial: DefaultPreferences }) {
         </div>
       </div>
 
-      <Button size="sm" loading={save.isPending} onClick={() => save.mutate()}>
+      <FormError
+        message={save.error instanceof ApiError ? save.error.message : save.error ? "Couldn't save defaults — try again." : null}
+      />
+      <Button size="sm" loading={save.isPending} disabled={!dirty} onClick={() => save.mutate()}>
         Save defaults
       </Button>
     </>

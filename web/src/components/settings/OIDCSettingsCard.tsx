@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { api, ApiError } from "@/lib/api"
+import { copyText } from "@/lib/clipboard"
 
 interface OIDCSettings {
   enabled: boolean
@@ -135,10 +136,9 @@ function OIDCSettingsForm({ initial }: { initial: OIDCSettings }) {
               size="sm"
               variant="outline"
               onClick={() => {
-                navigator.clipboard
-                  .writeText(form.postLogoutRedirectUrl!)
-                  .then(() => toast.success("Copied"))
-                  .catch(() => toast.error("Could not copy to clipboard"))
+                void copyText(form.postLogoutRedirectUrl!).then((ok) =>
+                  ok ? toast.success("Copied to clipboard") : toast.error("Could not copy to clipboard"),
+                )
               }}
             >
               Copy

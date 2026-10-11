@@ -5,6 +5,7 @@ import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { CollapsibleCard } from "@/components/ui/collapsible-card"
 import { Combobox } from "@/components/ui/combobox"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { EmptyState } from "@/components/ui/empty-state"
@@ -24,9 +25,10 @@ export function PoolsPage() {
   const confirm = useConfirm()
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
-  const { data: inventory, isLoading, isError, refetch } = useQuery({
+  const { data: inventory, isLoading, isError, refetch, isRefetching } = useQuery({
     queryKey: ["inventory"],
     queryFn: () => api.get<ConnectionInventory[]>("/inventory/"),
+    refetchInterval: 30_000,
   })
   const connections = inventory ?? []
 
@@ -85,6 +87,12 @@ export function PoolsPage() {
         title="Resource Pools"
         description="Group guests and storage by team, project, or tenant — independent of which node or connection they live on."
         icon={Layers}
+        onRefresh={() => {
+          void queryClient.invalidateQueries({ queryKey: ["inventory"] })
+          void queryClient.invalidateQueries({ queryKey: ["pools"] })
+          void queryClient.invalidateQueries({ queryKey: ["pool-detail"] })
+        }}
+        refreshing={isRefetching}
       />
 
       {isError ? (
@@ -102,11 +110,7 @@ export function PoolsPage() {
         />
       ) : (
         <>
-          <Card>
-            <CardHeader>
-              <CardTitle>New pool</CardTitle>
-            </CardHeader>
-            <CardContent>
+          <CollapsibleCard title="New pool">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div className="space-y-1.5">
                   <Label>Connection</Label>
@@ -133,8 +137,7 @@ export function PoolsPage() {
               <Button className="mt-3" size="sm" loading={createPool.isPending} disabled={!connId || !poolId} onClick={() => createPool.mutate()}>
                 {!createPool.isPending && <Plus className="h-3.5 w-3.5" />} Create pool
               </Button>
-            </CardContent>
-          </Card>
+          </CollapsibleCard>
 
           {connections.map((c, i) => {
             const q = poolQueries[i]
@@ -190,6 +193,9 @@ function PoolRow({
     queryKey: ["pool-detail", connId, pool.poolid],
     queryFn: () => api.get<PoolDetail>(`/connections/${connId}/pools/${encodeURIComponent(pool.poolid)}`),
     enabled: expanded,
+    // Membership can change from the PVE side while a pool sits expanded —
+    // the lazy fetch used to go permanently stale until collapsed/re-opened.
+    refetchInterval: expanded ? 30_000 : false,
   })
   const queryClient = useQueryClient()
   const confirm = useConfirm()
@@ -230,8 +236,8 @@ function PoolRow({
         <Hint label="Delete pool">
           <Button
             size="icon"
-            variant="ghost"
-            className="shrink-0 hover:bg-[color-mix(in_oklab,var(--status-error)_12%,transparent)] hover:text-[var(--status-error)]"
+            variant="ghost-danger"
+            className="shrink-0"
             aria-label={`Delete pool ${pool.poolid}`}
             onClick={onDelete}
           >
@@ -247,7 +253,7 @@ function PoolRow({
               <Skeleton className="h-5 w-52" />
             </div>
           )}
-          {detailQuery.isError && <p className="text-xs text-[var(--text-muted)]">Couldn't load pool members.</p>}
+          {detailQuery.isError && <ErrorState className="py-6" title="Couldn't load this pool's members" onRetry={detailQuery.refetch} />}
           {detailQuery.data?.members?.length === 0 && <p className="text-xs text-[var(--text-muted)]">No members yet — add a guest below.</p>}
           {(detailQuery.data?.members?.length ?? 0) > 8 && (
             <ListSearch value={memberFilter} onChange={setMemberFilter} placeholder="Search members..." className="mb-1.5" />
@@ -268,7 +274,7 @@ function PoolRow({
                   <Hint label="Remove from pool">
                     <Button
                       size="icon-sm"
-                      variant="ghost"
+                      variant="ghost-danger"
                       aria-label={`Remove ${m.name ?? m.vmid} from pool`}
                       onClick={async () => {
                         if (await confirm({ title: `Remove ${m.name ?? m.vmid} from pool?`, destructive: false, confirmLabel: "Remove" })) {

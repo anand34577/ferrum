@@ -1273,6 +1273,29 @@ body {
   -webkit-backdrop-filter: blur(12px);
 }
 
+/* Page-enter fade for PageTransition — replaces the framer-motion wrapper. */
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+.page-enter {
+  animation: page-enter 180ms ease-out both;
+}
+
+/* ui/input's NumberField draws its own themed stepper; the browser's spin
+   buttons would otherwise sit underneath it. */
+.number-field {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+.number-field::-webkit-inner-spin-button,
+.number-field::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 /* Respect the OS "reduce motion" setting: kill decorative movement but keep
    opacity fades (they don't cause vestibular issues and state changes still
    need to be perceivable). */

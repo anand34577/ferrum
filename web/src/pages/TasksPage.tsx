@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
-import { CheckCircle2, CircleSlash, Loader2, ScrollText, Square, Terminal, XCircle } from "lucide-react"
+import { CheckCircle2, Loader2, ScrollText, Square, Terminal, XCircle } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import { Link, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
@@ -128,6 +128,11 @@ export function TasksPage() {
     [tasks],
   )
 
+  // The summary tiles are one-click status filters: "3 failed" is the
+  // question, the three failed rows are the answer.
+  const onlyStatus = statusFilter.length === 1 ? statusFilter[0] : null
+  const toggleStatus = (status: string) => setStatusFilter(onlyStatus === status ? [] : [status])
+
   const filtered = useMemo(() => {
     let rows = tasks
     if (connFilter.length > 0) rows = rows.filter((t) => connFilter.includes(t.connName))
@@ -151,14 +156,14 @@ export function TasksPage() {
           </div>
         ),
       },
-      { accessorKey: "connName", header: "Cluster", cell: (c) => <span className="block max-w-36 truncate text-xs font-medium" title={c.getValue<string>()}>{c.getValue<string>()}</span> },
-      { accessorKey: "node", header: "Node", cell: (c) => <span className="block max-w-28 truncate font-mono text-xs" title={c.getValue<string>()}>{c.getValue<string>()}</span> },
+      { accessorKey: "connName", header: "Cluster", cell: (c) => <span className="block max-w-36 truncate text-xs font-medium" data-tip={c.getValue<string>()}>{c.getValue<string>()}</span> },
+      { accessorKey: "node", header: "Node", cell: (c) => <span className="block max-w-28 truncate font-mono text-xs" data-tip={c.getValue<string>()}>{c.getValue<string>()}</span> },
       {
         accessorKey: "type",
         header: "Task",
         cell: (c) => {
           const vmid = guestVmid(c.row.original)
-          const label = <span className="block max-w-40 truncate text-xs" title={c.getValue<string>()}>{taskLabel(c.row.original)}</span>
+          const label = <span className="block max-w-40 truncate text-xs" data-tip={c.getValue<string>()}>{taskLabel(c.row.original)}</span>
           // Guest-scoped tasks link straight to the guest — "which VM was
           // this backup/migration for" shouldn't require a manual search.
           return vmid !== null ? (
@@ -170,7 +175,7 @@ export function TasksPage() {
           )
         },
       },
-      { accessorKey: "user", header: "User", meta: { hideBelowMd: true }, cell: (c) => <span className="block max-w-32 truncate font-mono text-xs text-[var(--text-muted)]" title={c.getValue<string>()}>{c.getValue<string>()}</span> },
+      { accessorKey: "user", header: "User", meta: { hideBelowMd: true }, cell: (c) => <span className="block max-w-32 truncate font-mono text-xs text-[var(--text-muted)]" data-tip={c.getValue<string>()}>{c.getValue<string>()}</span> },
       {
         id: "duration",
         header: "Duration",
@@ -190,7 +195,7 @@ export function TasksPage() {
             <div className="min-w-0 max-w-64">
               <Badge variant={failed ? "error" : raw === "OK" ? "ok" : "warn"}>{failed ? "failed" : raw || "running"}</Badge>
               {failed && (
-                <p className="mt-0.5 truncate font-mono text-[11px] text-[var(--text-muted)]" title={raw}>
+                <p className="mt-0.5 truncate font-mono text-[11px] text-[var(--text-muted)]" data-tip={raw}>
                   {raw}
                 </p>
               )}
@@ -241,9 +246,9 @@ export function TasksPage() {
       />
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <SummaryChip label="Running" value={counts.running} tone="warn" icon={<CircleSlash className="h-3.5 w-3.5" />} />
-        <SummaryChip label="Finished OK" value={counts.ok} tone="ok" icon={<CheckCircle2 className="h-3.5 w-3.5" />} />
-        <SummaryChip label="Failed" value={counts.failed} tone="error" icon={<XCircle className="h-3.5 w-3.5" />} />
+        <SummaryChip label="Running" value={counts.running} tone="warn" icon={<Loader2 className={cn("h-3.5 w-3.5", counts.running > 0 && "animate-spin")} />} active={onlyStatus === "running"} onClick={() => toggleStatus("running")} />
+        <SummaryChip label="Finished OK" value={counts.ok} tone="ok" icon={<CheckCircle2 className="h-3.5 w-3.5" />} active={onlyStatus === "ok"} onClick={() => toggleStatus("ok")} />
+        <SummaryChip label="Failed" value={counts.failed} tone="error" icon={<XCircle className="h-3.5 w-3.5" />} active={onlyStatus === "failed"} onClick={() => toggleStatus("failed")} />
       </div>
 
       {isError && (
@@ -254,11 +259,13 @@ export function TasksPage() {
       <Card>
         <CardContent className="pt-4">
           <DataTable
+            storageKey="tasks-1"
             columns={columns}
             data={filtered}
             loading={isLoading}
             searchPlaceholder="Search tasks by type, node, user…"
             emptyMessage={tasks.length === 0 ? "No tasks yet — actions you take on the fleet will show up here." : "No tasks match the current filters."}
+            exportName={`ferrum-tasks-${new Date().toISOString().slice(0, 10)}`}
             toolbar={
               <div className="flex flex-wrap items-center gap-2">
                 <MultiSelect
@@ -328,9 +335,33 @@ export function TasksPage() {
   )
 }
 
-function SummaryChip({ label, value, tone, icon }: { label: string; value: number; tone: "ok" | "warn" | "error"; icon?: React.ReactNode }) {
+function SummaryChip({
+  label,
+  value,
+  tone,
+  icon,
+  active,
+  onClick,
+}: {
+  label: string
+  value: number
+  tone: "ok" | "warn" | "error"
+  icon?: React.ReactNode
+  active: boolean
+  onClick: () => void
+}) {
   return (
-    <div className={cn("flex items-center gap-2.5 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-2.5")}>
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      aria-label={`${value} ${label.toLowerCase()} — ${active ? "clear filter" : "show only these"}`}
+      className={cn(
+        "flex cursor-pointer items-center gap-2.5 rounded-lg border bg-[var(--bg-surface)] px-3.5 py-2.5 text-left transition-colors",
+        "hover:border-[var(--border-strong)] hover:bg-[var(--bg-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
+        active ? "border-brand-500 bg-[color-mix(in_oklab,var(--color-brand-500)_6%,var(--bg-surface))]" : "border-[var(--border)]",
+      )}
+    >
       <span
         className={cn(
           "flex h-7 w-7 items-center justify-center rounded-sm",
@@ -345,6 +376,6 @@ function SummaryChip({ label, value, tone, icon }: { label: string; value: numbe
         <p className="font-display text-lg font-semibold leading-none tabular">{value}</p>
         <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">{label}</p>
       </div>
-    </div>
+    </button>
   )
 }

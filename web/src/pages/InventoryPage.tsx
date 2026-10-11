@@ -536,8 +536,9 @@ export function InventoryPage() {
                     {nodes.length} node{nodes.length === 1 ? "" : "s"} · {connGuestCount} guest{connGuestCount === 1 ? "" : "s"}
                   </span>
                 </button>
-                <span className="flex shrink-0 items-center gap-1.5 text-xs" title={conn.online ? "Online" : conn.error ?? "Offline"}>
+                <span className="flex shrink-0 items-center gap-1.5 text-xs" data-tip={conn.online ? "Online" : conn.error ?? "Offline"}>
                   <StatusDot status={conn.online ? "ok" : "error"} />
+                  {conn.online && <span className="sr-only">Online</span>}
                   {!conn.online && <span className="max-w-48 truncate text-[var(--status-error)]">{conn.error ?? "Offline"}</span>}
                 </span>
                 {conn.online && (
@@ -582,13 +583,15 @@ export function InventoryPage() {
                             <Link
                               to={`/nodes/${conn.connectionId}/${node.node}`}
                               className="min-w-0 truncate text-sm font-medium underline-offset-2 hover:underline"
-                              title={`Open ${node.node}`}
+                              data-tip={`Open ${node.node}`}
                             >
                               {node.node}
                             </Link>
                             <span
                               className="flex shrink-0 items-center"
-                              title={node.status === "online" ? "Node online" : node.status === "offline" ? "Node offline" : `Node status: ${node.status ?? "unknown"}`}
+                              role="img"
+                              aria-label={node.status === "online" ? "Node online" : node.status === "offline" ? "Node offline" : `Node status: ${node.status ?? "unknown"}`}
+                              data-tip={node.status === "online" ? "Node online" : node.status === "offline" ? "Node offline" : `Node status: ${node.status ?? "unknown"}`}
                             >
                               <StatusDot status={node.status === "online" ? "ok" : node.status === "offline" ? "error" : "warn"} />
                             </span>
@@ -631,7 +634,9 @@ export function InventoryPage() {
                                       the identity, and HA/tags stay on the right. */}
                                   <span
                                     className="flex shrink-0 items-center"
-                                    title={`Status: ${guest.status ?? "unknown"}`}
+                                    role="img"
+                                    aria-label={`Status: ${guest.status ?? "unknown"}`}
+                                    data-tip={`Status: ${guest.status ?? "unknown"}`}
                                   >
                                     <StatusDot status={guestDotStatus(guest.status)} />
                                   </span>

@@ -54,7 +54,7 @@ export function RankedBarChart<T extends RankedBarRow>({
             key={row.name + i}
             className="flex items-center gap-2 text-xs animate-in fade-in duration-300"
             style={{ height: rowHeight }}
-            title={`${row.name} — ${tip}: ${labelFormatter(row.value)}`}
+            data-tip={`${row.name} — ${tip}: ${labelFormatter(row.value)}`}
           >
             <span className="shrink-0 truncate text-[var(--text-muted)]" style={{ width: nameWidth }}>
               {row.name}

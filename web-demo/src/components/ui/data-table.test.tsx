@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react"
+import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ColumnDef } from "@tanstack/react-table"
 import { describe, expect, it } from "vitest"
@@ -74,5 +74,43 @@ describe("DataTable", () => {
     expect(screen.getByText(/page 2 of 2/i)).toBeInTheDocument()
     expect(nextButton).toBeDisabled()
     expect(rowNames()).toEqual(Array.from({ length: 10 }, (_, i) => `Row ${i + 10}`))
+  })
+  it("stays on the current page when polling hands it a fresh data array", async () => {
+    const user = userEvent.setup()
+    const make = (): Row[] => Array.from({ length: 20 }, (_, i) => ({ name: `Row ${i}`, age: i }))
+    const { rerender } = render(<DataTable columns={columns} data={make()} pageSize={10} />)
+
+    await user.click(screen.getByRole("button", { name: "Next page" }))
+    expect(screen.getByText(/page 2 of 2/i)).toBeInTheDocument()
+
+    // What every refetch does: same rows, new array identity.
+    rerender(<DataTable columns={columns} data={make()} pageSize={10} />)
+    // The table's auto-reset runs on a microtask — let it land before asserting.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(screen.getByText(/page 2 of 2/i)).toBeInTheDocument()
+  })
+
+  it("falls back to the last page when the data shrinks under the current page", async () => {
+    const user = userEvent.setup()
+    const make = (n: number): Row[] => Array.from({ length: n }, (_, i) => ({ name: `Row ${i}`, age: i }))
+    const { rerender } = render(<DataTable columns={columns} data={make(30)} pageSize={10} />)
+
+    await user.click(screen.getByRole("button", { name: "Next page" }))
+    await user.click(screen.getByRole("button", { name: "Next page" }))
+    expect(screen.getByText(/page 3 of 3/i)).toBeInTheDocument()
+
+    rerender(<DataTable columns={columns} data={make(15)} pageSize={10} />)
+    expect(await screen.findByText(/page 2 of 2/i)).toBeInTheDocument()
+  })
+
+  it("reports the filtered row count, not the unfiltered total", async () => {
+    const user = userEvent.setup()
+    const bigData: Row[] = Array.from({ length: 40 }, (_, i) => ({ name: i < 25 ? `Web ${i}` : `Db ${i}`, age: i }))
+    render(<DataTable columns={columns} data={bigData} pageSize={10} searchPlaceholder="Search..." />)
+
+    await user.type(screen.getByPlaceholderText("Search..."), "web")
+    expect(screen.getByText(/25 of 40 rows/i)).toBeInTheDocument()
   })
 })

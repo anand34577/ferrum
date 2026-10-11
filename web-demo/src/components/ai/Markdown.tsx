@@ -4,9 +4,11 @@ import ReactMarkdown from "react-markdown"
 import rehypeKatex from "rehype-katex"
 import remarkGfm from "remark-gfm"
 import remarkMath from "remark-math"
-import { memo, useState } from "react"
+import { memo } from "react"
 import { toast } from "sonner"
+import { useCopiedFlag } from "@/lib/useCopiedFlag"
 import { cn } from "@/lib/utils"
+import { copyText } from "@/lib/clipboard"
 
 /**
  * Full CommonMark + GFM (tables, strikethrough, task lists, autolinks) +
@@ -77,12 +79,12 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
 })
 
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
-  const [copied, setCopied] = useState(false)
+  const [copied, flashCopied] = useCopiedFlag()
   function copy() {
-    navigator.clipboard.writeText(code).then(() => {
-      setCopied(true)
+    void copyText(code).then((ok) => {
+      if (!ok) return toast.error("Could not copy to clipboard")
+      flashCopied()
       toast.success("Copied to clipboard")
-      setTimeout(() => setCopied(false), 1500)
     })
   }
   return (

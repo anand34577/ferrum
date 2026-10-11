@@ -180,15 +180,19 @@ func (e *AlertEvaluator) nodeCertificates(ctx context.Context, connID, node stri
 // worse instead of a percentage where higher is worse.
 func (e *AlertEvaluator) upsertSystemAlert(ctx context.Context, ruleID, metric string, conn connections.Info, resourceID, resourceName string, value, threshold float64, severity string) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	var existingID string
+	var existingID, existingStatus string
 	// Only ErrNoRows means "new"; any other lookup error is unknown state —
 	// skip the whole upsert rather than risk a duplicate notification.
-	err := e.db.QueryRowContext(ctx, `SELECT id FROM alert_instances WHERE rule_id = ? AND resource_id = ?`, ruleID, resourceID).Scan(&existingID)
+	err := e.db.QueryRowContext(ctx, `SELECT id, status FROM alert_instances WHERE rule_id = ? AND resource_id = ?`, ruleID, resourceID).Scan(&existingID, &existingStatus)
 	isNew := errors.Is(err, sql.ErrNoRows)
 	if err != nil && !isNew {
 		slog.Error("alert evaluator: checking for an existing built-in alert failed", "rule", ruleID, "resource", resourceID, "error", err)
 		return
 	}
+	// A resolved instance firing again is a new incident — see upsertActive.
+	// Without this, a certificate that was renewed and later drifted toward
+	// expiry again would never warn a second time.
+	isNew = isNew || existingStatus == "resolved"
 
 	if _, err := e.db.ExecContext(ctx, `
 		INSERT INTO alert_instances (id, rule_id, connection_id, connection_name, resource_id, resource_name, metric, value, threshold, severity, status, triggered_at, updated_at)
@@ -198,6 +202,10 @@ func (e *AlertEvaluator) upsertSystemAlert(ctx context.Context, ruleID, metric s
 			threshold = excluded.threshold,
 			severity = excluded.severity,
 			updated_at = excluded.updated_at,
+			connection_name = excluded.connection_name,
+			resource_name = excluded.resource_name,
+			triggered_at = CASE WHEN alert_instances.status = 'resolved' THEN excluded.triggered_at ELSE alert_instances.triggered_at END,
+			resolved_at = NULL,
 			status = CASE WHEN alert_instances.status = 'silenced' THEN 'silenced' ELSE 'active' END`,
 		uuid.NewString(), ruleID, conn.ID, conn.Name, resourceID, resourceName, metric, value, threshold, severity, now, now,
 	); err != nil {

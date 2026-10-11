@@ -282,9 +282,10 @@ export interface DemoAlert {
   value: number
   threshold: number
   severity: "warning" | "critical"
-  status: "active" | "resolved"
+  status: "active" | "resolved" | "silenced"
   triggeredAt: string
   updatedAt: string
+  silencedUntil?: string
 }
 
 export const alerts: DemoAlert[] = [

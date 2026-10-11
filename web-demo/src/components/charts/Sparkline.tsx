@@ -1,3 +1,4 @@
+import { useId } from "react"
 import { Area, AreaChart, Line, LineChart, ResponsiveContainer } from "recharts"
 
 interface SparklineProps {
@@ -12,10 +13,15 @@ interface SparklineProps {
 /** Tiny inline trend chart without axes — gives KPI cards an at-a-glance
  * history without competing with the main charts for space. */
 export function Sparkline({ data, color = "var(--chart-1)", height = 30, variant = "area" }: SparklineProps) {
+  // useId, not just the color — two sparklines sharing a color would
+  // otherwise emit duplicate <linearGradient id>s, and the browser renders
+  // both using whichever <defs> came first. Same fix as GaugeChart. Called
+  // unconditionally, before the early return below, per the Rules of Hooks.
+  const autoId = useId()
   const rows = data.map((v, i) => ({ i, v: typeof v === "number" && Number.isFinite(v) ? v : undefined }))
   if (rows.length < 2) return <div style={{ height }} />
   const Chart = variant === "line" ? LineChart : AreaChart
-  const gradId = `spark-${color.replace(/[^a-z0-9]/gi, "")}`
+  const gradId = `spark-${color.replace(/[^a-z0-9]/gi, "")}${autoId.replace(/[^a-z0-9]/gi, "")}`
   return (
     // Purely decorative trend cue — the KpiCard it lives in already states the
     // number and label in text, so screen readers should skip this entirely

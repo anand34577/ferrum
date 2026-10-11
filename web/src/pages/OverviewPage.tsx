@@ -279,8 +279,8 @@ export function OverviewPage() {
               <li key={c.connectionId} className="flex flex-wrap items-baseline gap-x-2 text-xs">
                 <span className="font-medium">{c.name}</span>
                 <span className="font-mono text-[var(--text-muted)]">{c.host}:{c.port}</span>
-                <span className="min-w-0 truncate text-[var(--status-error)]" title={c.error}>{c.error ?? "offline"}</span>
-                <span className="ml-auto shrink-0 text-[var(--text-faint)] tabular" title={c.checkedAt}>checked {formatRelativeTime(c.checkedAt)}</span>
+                <span className="min-w-0 truncate text-[var(--status-error)]" data-tip={c.error}>{c.error ?? "offline"}</span>
+                <span className="ml-auto shrink-0 text-[var(--text-faint)] tabular" data-tip={c.checkedAt}>checked {formatRelativeTime(c.checkedAt)}</span>
               </li>
             ))}
           </ul>
@@ -387,7 +387,7 @@ export function OverviewPage() {
                     <th className="w-36 px-3 py-2">{sortButton("memory", "Memory")}</th>
                     <th className="w-36 px-3 py-2">{sortButton("storage", "Storage")}</th>
                     <th className="px-3 py-2 text-right">{sortButton("alerts", "Alerts")}</th>
-                    <th className="px-3 py-2 text-right" title="Round-trip time of the last fleet poll — orange at 300ms, red at 800ms">{sortButton("latency", "Latency")}</th>
+                    <th className="px-3 py-2 text-right" data-tip="Round-trip time of the last fleet poll — orange at 300ms, red at 800ms">{sortButton("latency", "Latency")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -435,7 +435,7 @@ export function OverviewPage() {
                           <span className="text-[var(--text-faint)]">0</span>
                         )}
                       </td>
-                      <td className="px-3 py-2.5 text-right tabular" title="Round-trip time of the last fleet poll">
+                      <td className="px-3 py-2.5 text-right tabular" data-tip="Round-trip time of the last fleet poll">
                         {c.online && c.latencyMs !== undefined ? (
                           <span className={cn("text-xs", toneClass[latencyTone(c.latencyMs)])}>{c.latencyMs} ms</span>
                         ) : (
@@ -469,7 +469,7 @@ export function OverviewPage() {
               <ul className="mt-3 space-y-2.5">
                 {hotGuests.map((g) => (
                   <li key={g.id} className="flex items-center gap-3 text-xs">
-                    <span className="shrink-0 text-[var(--text-muted)]" title={g.isVm ? "Virtual machine" : "Container"}>
+                    <span className="shrink-0 text-[var(--text-muted)]" data-tip={g.isVm ? "Virtual machine" : "Container"}>
                       {g.isVm ? <Box className="h-3.5 w-3.5" /> : <Container className="h-3.5 w-3.5" />}
                     </span>
                     {/* Name is the only flexible column: every other cell is a
@@ -480,13 +480,13 @@ export function OverviewPage() {
                     <Link
                       to={guestUrl(g.connId, g.vmid, g.name)}
                       className="min-w-0 flex-1 truncate font-medium underline-offset-2 hover:text-[var(--text)] hover:underline"
-                      title={`${g.name} — ${g.conn}`}
+                      data-tip={`${g.name} — ${g.conn}`}
                     >
                       {g.name}
                     </Link>
                     <span className="hidden w-28 shrink-0 truncate text-[10px] text-[var(--text-muted)] lg:block">{g.conn}</span>
                     <Meter value={g.cpuPct} size="md" showLabel label="CPU" className="w-32 shrink-0 sm:w-44" />
-                    <span className="hidden w-16 shrink-0 text-right text-[10px] text-[var(--text-faint)] tabular sm:block" title="Memory usage">
+                    <span className="hidden w-16 shrink-0 text-right text-[10px] text-[var(--text-faint)] tabular sm:block" data-tip="Memory usage">
                       mem {g.memPct.toFixed(0)}%
                     </span>
                   </li>
@@ -520,11 +520,11 @@ export function OverviewPage() {
                       className={cn("h-1.5 w-1.5 shrink-0 rounded-full", a.severity === "critical" ? "bg-[var(--status-error)]" : "bg-[var(--status-warn)]")}
                       aria-label={a.severity}
                     />
-                    <span className="w-36 min-w-0 shrink-0 truncate font-medium" title={a.resourceName}>{a.resourceName}</span>
+                    <span className="w-36 min-w-0 shrink-0 truncate font-medium" data-tip={a.resourceName}>{a.resourceName}</span>
                     <span className="hidden min-w-0 flex-1 truncate text-[10px] text-[var(--text-muted)] md:block">
                       {ALERT_METRIC_LABELS[a.metric] ?? a.metric} · {a.connectionName}
                     </span>
-                    <span className="ml-auto shrink-0 tabular text-[var(--text-muted)]" title="Value vs threshold">
+                    <span className="ml-auto shrink-0 tabular text-[var(--text-muted)]" data-tip="Value vs threshold">
                       {formatAlertValue(a.metric, a.value, a.threshold)}
                     </span>
                   </li>
@@ -647,7 +647,7 @@ function ResourceCard({
           .slice(0, 5)
           .map((r) => (
             <div key={r.name} className="flex items-center gap-2 text-xs">
-              <span className="w-24 shrink-0 truncate text-[var(--text-muted)]" title={r.name}>{r.name}</span>
+              <span className="w-24 shrink-0 truncate text-[var(--text-muted)]" data-tip={r.name}>{r.name}</span>
               <Meter value={r.pct} size="md" showLabel label="Utilization" className="flex-1" />
               <span className="hidden w-28 shrink-0 text-right text-[10px] text-[var(--text-faint)] tabular sm:block lg:hidden xl:block">{r.detail}</span>
             </div>

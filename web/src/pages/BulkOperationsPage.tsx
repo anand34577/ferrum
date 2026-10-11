@@ -225,7 +225,7 @@ export function BulkOperationsPage() {
           ) : (
             // Error text stays inline (title only as a tooltip) — a failure
             // you have to hover for is a failure nobody reads.
-            <span className="inline-flex items-center gap-1 text-[var(--status-error)]" title={result.error}>
+            <span className="inline-flex items-center gap-1 text-[var(--status-error)]" data-tip={result.error}>
               <XCircle className="h-3.5 w-3.5" /> {result.error}
             </span>
           )
@@ -269,6 +269,7 @@ export function BulkOperationsPage() {
       <Card>
         <CardContent className="pt-4">
           <DataTable
+            storageKey="bulkoperations-1"
             columns={columns}
             data={rows}
             loading={isLoading}

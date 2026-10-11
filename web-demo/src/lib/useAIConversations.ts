@@ -1,12 +1,16 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useRef, useState } from "react"
 import { toast } from "sonner"
 import type { AIChatMessage } from "@/lib/api"
+import { useAuth } from "@/lib/auth"
 
 /** One completed tool call, kept alongside the assistant message it belongs
  * to so the evidence for an answer (what was checked, and what it returned)
  * survives after streaming ends — not just visible transiently while the
  * response is still typing out. */
 export interface ToolCallEntry {
+  // The provider's tool_call_id, when the SSE stream carried one — used to
+  // correlate a result back to its call without guessing by name+order.
+  id?: string
   name: string
   ok: boolean
   args?: unknown
@@ -57,7 +61,10 @@ export interface Conversation {
   updatedAt: string
 }
 
-const STORAGE_KEY = "ferrum.ai-assistant.conversations.v1"
+// Per-user key: history (including tool results about the infrastructure)
+// must not be shown to the next person who signs in on a shared browser.
+const LEGACY_STORAGE_KEY = "ferrum.ai-assistant.conversations.v1"
+const storageKey = (userId: string) => `${LEGACY_STORAGE_KEY}.${userId}`
 const MAX_CONVERSATIONS = 50
 // A long-running chat (lots of tool-call evidence attached to each answer)
 // keeps growing forever otherwise — cap what's persisted per conversation so
@@ -69,9 +76,16 @@ function newId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
 }
 
-function load(): Conversation[] {
+function load(key: string): Conversation[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    // One-time migration of the old unscoped key to whoever opens the
+    // assistant first after upgrading, then it's gone for everyone else.
+    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY)
+    if (legacy !== null) {
+      if (localStorage.getItem(key) === null) localStorage.setItem(key, legacy)
+      localStorage.removeItem(LEGACY_STORAGE_KEY)
+    }
+    const raw = localStorage.getItem(key)
     if (!raw) return []
     const parsed = JSON.parse(raw)
     return Array.isArray(parsed) ? parsed : []
@@ -82,14 +96,14 @@ function load(): Conversation[] {
 
 let warnedAboutSaveFailure = false
 
-function save(conversations: Conversation[]) {
+function save(key: string, conversations: Conversation[]) {
   try {
     const trimmed = conversations.slice(0, MAX_CONVERSATIONS).map((c) =>
       c.messages.length > MAX_MESSAGES_PER_CONVERSATION
         ? { ...c, messages: c.messages.slice(-MAX_MESSAGES_PER_CONVERSATION) }
         : c,
     )
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed))
+    localStorage.setItem(key, JSON.stringify(trimmed))
   } catch {
     // Private browsing / storage quota — the chat still works for this tab,
     // it just won't survive a reload. Once per session is enough to tell the
@@ -117,10 +131,23 @@ function titleFrom(text: string): string {
  * (there's nothing here an admin or another device needs to see).
  */
 export function useAIConversations(defaultModelId: string) {
-  const [conversations, setConversations] = useState<Conversation[]>(load)
-  const [activeId, setActiveId] = useState<string | null>(() => load()[0]?.id ?? null)
+  const { user } = useAuth()
+  const key = storageKey(user?.id ?? "anonymous")
+  const [conversations, setConversationsState] = useState<Conversation[]>(() => load(key))
+  const [activeId, setActiveId] = useState<string | null>(() => conversations[0]?.id ?? null)
 
-  useEffect(() => save(conversations), [conversations])
+  // Writes go through a ref and hit localStorage synchronously, not via an
+  // effect: a stream that finishes (or is aborted) after the page unmounted
+  // still persists its partial answer — a setState then would be dropped.
+  const convRef = useRef(conversations)
+  const setConversations = useCallback(
+    (update: (prev: Conversation[]) => Conversation[]) => {
+      convRef.current = update(convRef.current)
+      save(key, convRef.current)
+      setConversationsState(convRef.current)
+    },
+    [key],
+  )
 
   const active = conversations.find((c) => c.id === activeId) ?? null
 
@@ -131,15 +158,22 @@ export function useAIConversations(defaultModelId: string) {
       setActiveId(conv.id)
       return conv.id
     },
-    [defaultModelId],
+    [defaultModelId, setConversations],
   )
 
   const deleteConversation = useCallback(
     (id: string) => {
-      setConversations((prev) => prev.filter((c) => c.id !== id))
-      setActiveId((cur) => (cur === id ? null : cur))
+      setConversations((prev) => {
+        const remaining = prev.filter((c) => c.id !== id)
+        // Falling back to the next most-recent chat (list is sorted that
+        // way) matches every mainstream chat UI — dropping to a blank
+        // "no conversation selected" screen when others still exist is
+        // just extra clicks for no reason.
+        setActiveId((cur) => (cur === id ? (remaining[0]?.id ?? null) : cur))
+        return remaining
+      })
     },
-    [],
+    [setConversations],
   )
 
   /** Bulk counterpart to deleteConversation — for the sidebar's multi-select
@@ -147,9 +181,12 @@ export function useAIConversations(defaultModelId: string) {
    * clicking the trash icon once per conversation. */
   const deleteConversations = useCallback((ids: string[]) => {
     const doomed = new Set(ids)
-    setConversations((prev) => prev.filter((c) => !doomed.has(c.id)))
-    setActiveId((cur) => (cur && doomed.has(cur) ? null : cur))
-  }, [])
+    setConversations((prev) => {
+      const remaining = prev.filter((c) => !doomed.has(c.id))
+      setActiveId((cur) => (cur && doomed.has(cur) ? (remaining[0]?.id ?? null) : cur))
+      return remaining
+    })
+  }, [setConversations])
 
   const updateConversation = useCallback((id: string, patch: Partial<Pick<Conversation, "title" | "modelId" | "reasoningEffort" | "messages">>) => {
     setConversations((prev) =>
@@ -158,16 +195,16 @@ export function useAIConversations(defaultModelId: string) {
         // Most-recently-updated first, like every chat product's sidebar.
         .sort((a, b) => (a.id === id ? -1 : b.id === id ? 1 : 0)),
     )
-  }, [])
+  }, [setConversations])
 
   const setMessages = useCallback(
     (id: string, messages: DisplayMessage[]) => {
       const firstUser = messages.find((m) => m.role === "user")
-      const conv = conversations.find((c) => c.id === id)
+      const conv = convRef.current.find((c) => c.id === id)
       const title = conv && conv.title !== "New chat" ? conv.title : firstUser ? titleFrom(firstUser.content) : "New chat"
       updateConversation(id, { messages, title })
     },
-    [conversations, updateConversation],
+    [updateConversation],
   )
 
   return { conversations, active, activeId, setActiveId, createConversation, deleteConversation, deleteConversations, updateConversation, setMessages }

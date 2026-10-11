@@ -120,6 +120,30 @@ export function guestUrl(connId: string, vmid: number | string | undefined, name
   return `/inventory?${params.toString()}`
 }
 
+/** Where to go to act on an alert: the node's own page, the guest's detail
+ * dialog, the storage view, or the connection list — chosen by what the
+ * alert's metric measures. Every alert used to link to the same generic
+ * place regardless of what it was about. */
+export function alertUrl(alert: { metric: string; connectionId: string; resourceName: string }): string {
+  const { metric, connectionId, resourceName } = alert
+  if (metric.startsWith("node_")) return `/nodes/${connectionId}/${encodeURIComponent(resourceName)}`
+  if (metric.startsWith("guest_")) return guestUrl(connectionId, undefined, resourceName)
+  if (metric.startsWith("storage_")) return "/storage"
+  if (metric === "connection_stale") return "/connections"
+  return "/alerts"
+}
+
+/** Time left until an ISO instant as "45m" / "3h 20m" / "2d 4h"; "" once past. */
+export function formatTimeLeft(iso: string): string {
+  const mins = Math.ceil((new Date(iso).getTime() - Date.now()) / 60_000)
+  if (!Number.isFinite(mins) || mins <= 0) return ""
+  if (mins < 60) return `${mins}m`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return mins % 60 ? `${hours}h ${mins % 60}m` : `${hours}h`
+  const days = Math.floor(hours / 24)
+  return hours % 24 ? `${days}d ${hours % 24}h` : `${days}d`
+}
+
 /** Badge tone for a guest/node running state — shared so "running"/"online"
  * vs "stopped"/"offline" doesn't drift between pages. */
 export function guestStatusVariant(status?: string): "ok" | "warn" | "error" | "default" {

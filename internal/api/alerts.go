@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -166,11 +168,13 @@ type alertInstanceDTO struct {
 	TriggeredAt    string  `json:"triggeredAt"`
 	UpdatedAt      string  `json:"updatedAt"`
 	ResolvedAt     *string `json:"resolvedAt,omitempty"`
+	// Set only for a timed silence; absent on an open-ended one.
+	SilencedUntil *string `json:"silencedUntil,omitempty"`
 }
 
 func (s *Server) listAlerts(w http.ResponseWriter, r *http.Request) {
 	statusFilter := r.URL.Query().Get("status")
-	query := `SELECT id, rule_id, connection_id, connection_name, resource_name, metric, value, threshold, severity, status, triggered_at, updated_at, resolved_at FROM alert_instances`
+	query := `SELECT id, rule_id, connection_id, connection_name, resource_name, metric, value, threshold, severity, status, triggered_at, updated_at, resolved_at, silenced_until FROM alert_instances`
 	args := []any{}
 	if statusFilter != "" {
 		query += ` WHERE status = ?`
@@ -188,7 +192,7 @@ func (s *Server) listAlerts(w http.ResponseWriter, r *http.Request) {
 	out := []alertInstanceDTO{}
 	for rows.Next() {
 		var a alertInstanceDTO
-		if err := rows.Scan(&a.ID, &a.RuleID, &a.ConnectionID, &a.ConnectionName, &a.ResourceName, &a.Metric, &a.Value, &a.Threshold, &a.Severity, &a.Status, &a.TriggeredAt, &a.UpdatedAt, &a.ResolvedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.RuleID, &a.ConnectionID, &a.ConnectionName, &a.ResourceName, &a.Metric, &a.Value, &a.Threshold, &a.Severity, &a.Status, &a.TriggeredAt, &a.UpdatedAt, &a.ResolvedAt, &a.SilencedUntil); err != nil {
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -244,14 +248,42 @@ func (s *Server) connectionHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, health)
 }
 
+// maxSilenceMinutes caps a timed silence at 30 days. Anything meant to last
+// longer is a decision about the rule (raise the threshold, delete it), not
+// about one alert — and an open-ended silence is still available.
+const maxSilenceMinutes = 30 * 24 * 60
+
+type silenceAlertRequest struct {
+	// How long to mute for. Omitted or 0 means open-ended: until someone
+	// un-silences the alert or its condition clears.
+	DurationMinutes int `json:"durationMinutes"`
+}
+
 func (s *Server) silenceAlert(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	var req silenceAlertRequest
+	// The body is optional — existing clients (and the MCP tool) POST none.
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.DurationMinutes < 0 || req.DurationMinutes > maxSilenceMinutes {
+		writeErrorMsg(w, http.StatusBadRequest, "durationMinutes must be between 0 and 43200 (30 days)")
+		return
+	}
+	now := time.Now().UTC()
+	var until *string
+	if req.DurationMinutes > 0 {
+		ts := now.Add(time.Duration(req.DurationMinutes) * time.Minute).Format(time.RFC3339)
+		until = &ts
+	}
 	// The status guard keeps the update from "succeeding" against an
 	// already-resolved (or nonexistent) alert, so zero rows reliably means
-	// the client named something that can't be silenced.
+	// the client named something that can't be silenced. Re-silencing an
+	// already-silenced alert is allowed: it replaces the deadline.
 	res, err := s.db.ExecContext(r.Context(),
-		`UPDATE alert_instances SET status = 'silenced', updated_at = ? WHERE id = ? AND status IN ('active', 'silenced')`,
-		time.Now().UTC().Format(time.RFC3339), id)
+		`UPDATE alert_instances SET status = 'silenced', silenced_until = ?, updated_at = ? WHERE id = ? AND status IN ('active', 'silenced')`,
+		until, now.Format(time.RFC3339), id)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -271,7 +303,7 @@ func (s *Server) silenceAlert(w http.ResponseWriter, r *http.Request) {
 func (s *Server) unSilenceAlert(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	res, err := s.db.ExecContext(r.Context(),
-		`UPDATE alert_instances SET status = 'active', updated_at = ? WHERE id = ? AND status = 'silenced'`,
+		`UPDATE alert_instances SET status = 'active', silenced_until = NULL, updated_at = ? WHERE id = ? AND status = 'silenced'`,
 		time.Now().UTC().Format(time.RFC3339), id)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)

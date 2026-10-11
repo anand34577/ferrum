@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
-import { Combobox } from "@/components/ui/combobox"
+import { Combobox, type ComboboxOption } from "@/components/ui/combobox"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { FormError } from "@/components/ui/form-error"
 import { Input } from "@/components/ui/input"
@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { UploadTemplateDialog } from "@/components/inventory/UploadTemplateDialog"
 import { useConfirm } from "@/components/ui/confirm-dialog"
-import { api, ApiError, type ClusterResource, type TemplateItem } from "@/lib/api"
+import { api, ApiError, type ClusterResource, type NetworkInterface, type Storage, type TemplateItem } from "@/lib/api"
 import { dangerousExtraKeys, parseExtraLines } from "@/lib/utils"
 
 interface CreateGuestDialogProps {
@@ -34,6 +34,89 @@ const lxcDefaults = {
   extraText: "",
 }
 
+// Node-local storage + interface lists feeding the storage/bridge pick-lists.
+// Keyed exactly like NodeDetailPage's queries so both share one cache entry
+// per node; only fetched once the form actually has a node to ask about.
+function useNodePickLists(connId: string, node: string, open: boolean) {
+  const storage = useQuery({
+    queryKey: ["node-storage", connId, node],
+    queryFn: () => api.get<Storage[]>(`/connections/${connId}/nodes/${node}/storage`),
+    enabled: open && !!node,
+  })
+  const network = useQuery({
+    queryKey: ["node-network", connId, node],
+    queryFn: () => api.get<NetworkInterface[]>(`/connections/${connId}/nodes/${node}/network`),
+    enabled: open && !!node,
+  })
+  return { storage, network }
+}
+
+// PVE's `content` is a comma-separated list of what a storage can hold
+// (e.g. "images,rootdir") — each tab only offers storages that can hold what
+// it creates: VM disks ("images") vs container roots ("rootdir").
+function storagesFor(entries: Storage[] | undefined, content: string): ComboboxOption[] {
+  return (entries ?? [])
+    .filter((s) => (s.content ?? "").split(",").map((c) => c.trim()).includes(content))
+    .map((s) => ({ value: s.storage, label: s.storage }))
+}
+
+// Bridges are the node interfaces with type "bridge" (vmbr0 et al.) — the
+// only valid targets for a guest NIC's bridge=.
+function bridgesFor(entries: NetworkInterface[] | undefined): ComboboxOption[] {
+  return (entries ?? []).filter((n) => n.type === "bridge").map((n) => ({ value: n.iface, label: n.iface }))
+}
+
+/** Storage/bridge field shared by both tabs. With a loaded list it renders as
+ * a searchable pick-list — typos in these ids otherwise only surface as
+ * cryptic PVE server errors. A failed or empty lookup falls back to free
+ * text plus a hint, so a broken fetch can never wedge the form. A failed
+ * *refetch* with cached rows keeps the pick-list: flipping the field to free
+ * text mid-interaction (every window refetch could do it) would be worse
+ * than showing a stale list. */
+function ListField({
+  label,
+  value,
+  onChange,
+  options,
+  isLoading,
+  searchPlaceholder,
+  showFallbackHint,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  options: ComboboxOption[]
+  isLoading: boolean
+  searchPlaceholder: string
+  /** False before a node is picked — nothing has been loaded yet, so a
+   * "couldn't load" hint would be a lie. */
+  showFallbackHint: boolean
+}) {
+  const manual = !isLoading && options.length === 0
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      {manual ? (
+        <>
+          <Input value={value} onChange={(e) => onChange(e.target.value)} />
+          {showFallbackHint && <p className="text-xs text-[var(--text-muted)]">Couldn't load the list — enter it manually.</p>}
+        </>
+      ) : (
+        <Combobox
+          value={value}
+          onChange={onChange}
+          placeholder={isLoading ? "Loading..." : "Select..."}
+          searchPlaceholder={searchPlaceholder}
+          // Keep the current value visible even when the loaded list doesn't
+          // contain it (e.g. the blank-state defaults) — showing the bare
+          // placeholder would hide that a value is about to be submitted.
+          options={value && !options.some((o) => o.value === value) ? [{ value, label: value }, ...options] : options}
+        />
+      )}
+    </div>
+  )
+}
+
 
 export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateGuestDialogProps) {
   const queryClient = useQueryClient()
@@ -49,6 +132,11 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
   })
   const isos = templatesQuery.data?.filter((t) => t.content === "iso") ?? []
   const vztmpls = templatesQuery.data?.filter((t) => t.content === "vztmpl") ?? []
+
+  // Per-tab node lookups for the storage/bridge pick-lists — the VM and LXC
+  // tabs can point at different nodes, so each form asks about its own.
+  const vmLists = useNodePickLists(connId, vmForm.node, open)
+  const lxcLists = useNodePickLists(connId, lxcForm.node, open)
 
   // Single-node connections are the common case — don't make the admin pick
   // the only option that exists. Only fills the field when it's still blank,
@@ -138,18 +226,28 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
                 <Label>Memory (MB)</Label>
                 <Input type="number" min={16} value={vmForm.memoryMb} onChange={(e) => setVmForm({ ...vmForm, memoryMb: Number(e.target.value) })} />
               </div>
-              <div className="space-y-1.5">
-                <Label>Storage</Label>
-                <Input value={vmForm.storage} onChange={(e) => setVmForm({ ...vmForm, storage: e.target.value })} />
-              </div>
+              <ListField
+                label="Storage"
+                value={vmForm.storage}
+                onChange={(v) => setVmForm({ ...vmForm, storage: v })}
+                options={storagesFor(vmLists.storage.data, "images")}
+                isLoading={vmLists.storage.isLoading}
+                searchPlaceholder="Search storage..."
+                showFallbackHint={!!vmForm.node}
+              />
               <div className="space-y-1.5">
                 <Label>Disk (GB)</Label>
                 <Input type="number" min={1} value={vmForm.diskGb} onChange={(e) => setVmForm({ ...vmForm, diskGb: Number(e.target.value) })} />
               </div>
-              <div className="space-y-1.5">
-                <Label>Network bridge</Label>
-                <Input value={vmForm.bridge} onChange={(e) => setVmForm({ ...vmForm, bridge: e.target.value })} />
-              </div>
+              <ListField
+                label="Network bridge"
+                value={vmForm.bridge}
+                onChange={(v) => setVmForm({ ...vmForm, bridge: v })}
+                options={bridgesFor(vmLists.network.data)}
+                isLoading={vmLists.network.isLoading}
+                searchPlaceholder="Search bridges..."
+                showFallbackHint={!!vmForm.node}
+              />
               <div className="col-span-2 space-y-1.5">
                 <div className="flex items-center justify-between">
                   <Label>Boot ISO (optional — omit when cloning a cloud-init template)</Label>
@@ -243,18 +341,28 @@ export function CreateGuestDialog({ connId, nodes, open, onOpenChange }: CreateG
                 <Label>Memory (MB)</Label>
                 <Input type="number" min={16} value={lxcForm.memoryMb} onChange={(e) => setLxcForm({ ...lxcForm, memoryMb: Number(e.target.value) })} />
               </div>
-              <div className="space-y-1.5">
-                <Label>Storage</Label>
-                <Input value={lxcForm.storage} onChange={(e) => setLxcForm({ ...lxcForm, storage: e.target.value })} />
-              </div>
+              <ListField
+                label="Storage"
+                value={lxcForm.storage}
+                onChange={(v) => setLxcForm({ ...lxcForm, storage: v })}
+                options={storagesFor(lxcLists.storage.data, "rootdir")}
+                isLoading={lxcLists.storage.isLoading}
+                searchPlaceholder="Search storage..."
+                showFallbackHint={!!lxcForm.node}
+              />
               <div className="space-y-1.5">
                 <Label>Disk (GB)</Label>
                 <Input type="number" min={1} value={lxcForm.diskGb} onChange={(e) => setLxcForm({ ...lxcForm, diskGb: Number(e.target.value) })} />
               </div>
-              <div className="space-y-1.5">
-                <Label>Network bridge</Label>
-                <Input value={lxcForm.bridge} onChange={(e) => setLxcForm({ ...lxcForm, bridge: e.target.value })} />
-              </div>
+              <ListField
+                label="Network bridge"
+                value={lxcForm.bridge}
+                onChange={(v) => setLxcForm({ ...lxcForm, bridge: v })}
+                options={bridgesFor(lxcLists.network.data)}
+                isLoading={lxcLists.network.isLoading}
+                searchPlaceholder="Search bridges..."
+                showFallbackHint={!!lxcForm.node}
+              />
               <div className="space-y-1.5">
                 <Label>Root password</Label>
                 <Input type="password" value={lxcForm.password} onChange={(e) => setLxcForm({ ...lxcForm, password: e.target.value })} />

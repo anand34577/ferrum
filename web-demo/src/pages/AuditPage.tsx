@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query"
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { Bot, CheckCircle2, ClipboardList, XCircle } from "lucide-react"
 import { useMemo, useState } from "react"
@@ -9,7 +9,11 @@ import { ErrorState } from "@/components/ui/error-state"
 import { MultiSelect } from "@/components/ui/multi-select"
 import { PageHeader } from "@/components/ui/page-header"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Timestamp } from "@/components/ui/timestamp"
 import { api, type ToolCallRecord } from "@/lib/api"
+import { DateRangePicker } from "@/components/ui/date-range-picker"
+import { type DateRange, rangeToInstants } from "@/lib/dates"
+import { cn } from "@/lib/utils"
 
 interface AuditEntry {
   id: string
@@ -28,9 +32,18 @@ const categoryVariant: Record<string, "ok" | "warn" | "error" | "default"> = {
 }
 
 export function AuditPage() {
+  const queryClient = useQueryClient()
   return (
     <div className="space-y-4">
-      <PageHeader title="Audit Log" description="Every action taken through this Ferrum instance." icon={ClipboardList} />
+      <PageHeader
+        title="Audit Log"
+        description="Every action taken through this Ferrum instance."
+        icon={ClipboardList}
+        onRefresh={() => {
+          void queryClient.invalidateQueries({ queryKey: ["audit"] })
+          void queryClient.invalidateQueries({ queryKey: ["admin", "ai", "activity"] })
+        }}
+      />
       <Tabs defaultValue="audit">
         <TabsList>
           <TabsTrigger value="audit">General audit log</TabsTrigger>
@@ -43,9 +56,28 @@ export function AuditPage() {
   )
 }
 
+// Mirrors auditLogDefaultLimit / auditLogMaxLimit in internal/api/users.go.
+const RECENT_LIMIT = 200
+const RANGE_LIMIT = 5000
+
 function GeneralAuditLog() {
-  const { data, isLoading, isError, refetch } = useQuery({ queryKey: ["audit"], queryFn: () => api.get<AuditEntry[]>("/audit") })
+  const [range, setRange] = useState<DateRange>({})
+  const { from, to } = rangeToInstants(range)
+  const limit = from ? RANGE_LIMIT : RECENT_LIMIT
+  const { data, isLoading, isError, refetch, isPlaceholderData } = useQuery({
+    queryKey: ["audit", from ?? null, to ?? null],
+    queryFn: () => {
+      const params = new URLSearchParams({ limit: String(limit) })
+      if (from) params.set("from", from)
+      if (to) params.set("to", to)
+      return api.get<AuditEntry[]>(`/audit?${params.toString()}`)
+    },
+    // Keep the previous rows on screen while a new range loads instead of
+    // collapsing the table to skeletons on every calendar click.
+    placeholderData: keepPreviousData,
+  })
   const [category, setCategory] = useState<string[]>([])
+  const truncated = (data?.length ?? 0) >= limit
 
   const categories = useMemo(() => Array.from(new Set((data ?? []).map((e) => e.category))).sort(), [data])
   const filtered = useMemo(
@@ -58,7 +90,8 @@ function GeneralAuditLog() {
       {
         accessorKey: "createdAt",
         header: "Time",
-        cell: (c) => <span className="text-xs text-[var(--text-muted)] tabular">{new Date(c.getValue<string>()).toLocaleString()}</span>,
+        // Forensic surface: absolute first, relative age on hover.
+        cell: (c) => <Timestamp iso={c.getValue<string>()} mode="absolute" className="text-xs text-[var(--text-muted)]" />,
       },
       { accessorKey: "username", header: "User" },
       {
@@ -80,25 +113,41 @@ function GeneralAuditLog() {
   if (isError) return <ErrorState title="Couldn't load the audit log" onRetry={refetch} />
 
   return (
-    <Card>
+    // Dimmed while a newly-picked range is loading: the rows still on screen
+    // belong to the previous range.
+    <Card className={cn("transition-opacity", isPlaceholderData && "opacity-60")} aria-busy={isPlaceholderData || undefined}>
       <CardContent className="pt-4">
         <DataTable
+          storageKey="audit-1"
           columns={columns}
           data={filtered}
           loading={isLoading}
           searchPlaceholder="Search audit log..."
-          emptyMessage="No activity recorded yet."
+          emptyMessage={range.from ? "Nothing was recorded in this date range." : "No activity recorded yet."}
+          exportName={`ferrum-audit-${new Date().toISOString().slice(0, 10)}`}
           toolbar={
-            <MultiSelect
-              options={categories.map((c) => ({ value: c, label: c }))}
-              selected={category}
-              onChange={setCategory}
-              allLabel="All categories"
-              label="Filter by category"
-              className="w-44"
-            />
+            <>
+              <DateRangePicker value={range} onChange={setRange} maxDate={new Date()} className="w-full sm:w-56" />
+              <MultiSelect
+                options={categories.map((c) => ({ value: c, label: c }))}
+                selected={category}
+                onChange={setCategory}
+                allLabel="All categories"
+                label="Filter by category"
+                className="w-44"
+              />
+            </>
           }
         />
+        {/* The server caps how much it returns — say so, and say how to see
+            the rest, instead of letting a partial log pass for a complete one. */}
+        {!isLoading && truncated && (
+          <p className="mt-3 text-xs text-[var(--text-muted)]">
+            {range.from
+              ? `Showing the newest ${limit.toLocaleString()} entries in this range — narrow the dates to see earlier ones.`
+              : `Showing the latest ${limit.toLocaleString()} entries — pick a date range to look further back.`}
+          </p>
+        )}
       </CardContent>
     </Card>
   )
@@ -116,7 +165,7 @@ function AIActivityLog() {
       {
         accessorKey: "createdAt",
         header: "Time",
-        cell: (c) => <span className="text-xs text-[var(--text-muted)] tabular">{new Date(c.getValue<string>()).toLocaleString()}</span>,
+        cell: (c) => <Timestamp iso={c.getValue<string>()} mode="absolute" className="text-xs text-[var(--text-muted)]" />,
       },
       { accessorKey: "username", header: "User" },
       {
@@ -132,7 +181,16 @@ function AIActivityLog() {
           c.getValue<boolean>() ? (
             <span className="inline-flex items-center gap-1 text-xs text-[var(--status-ok)]"><CheckCircle2 className="h-3.5 w-3.5" /> OK</span>
           ) : (
-            <span className="inline-flex items-center gap-1 text-xs text-[var(--status-error)]" title={c.row.original.error}><XCircle className="h-3.5 w-3.5" /> Failed</span>
+            // The provider's error text renders right in the cell — a
+            // title-only tooltip is unreachable by keyboard and easy to miss.
+            <span className="inline-flex max-w-56 flex-col items-start text-xs text-[var(--status-error)]">
+              <span className="inline-flex items-center gap-1"><XCircle className="h-3.5 w-3.5" /> Failed</span>
+              {c.row.original.error && (
+                <span className="w-full truncate text-[10px] text-[var(--text-muted)]" data-tip={c.row.original.error}>
+                  {c.row.original.error}
+                </span>
+              )}
+            </span>
           ),
       },
     ],
@@ -145,10 +203,12 @@ function AIActivityLog() {
     <Card>
       <CardContent className="pt-4">
         <DataTable
+          storageKey="audit-2"
           columns={columns}
           data={data ?? []}
           loading={isLoading}
           searchPlaceholder="Search tool calls..."
+          exportName={`ferrum-ai-activity-${new Date().toISOString().slice(0, 10)}`}
           emptyMessage="No AI or MCP tool calls recorded yet."
         />
         {!isLoading && (data?.length ?? 0) === 0 && (

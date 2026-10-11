@@ -311,7 +311,7 @@ function ContentTab({ connId, store, isAdmin }: { connId: string; store: string;
         header: "Comment",
         meta: { hideBelowMd: true },
         cell: (c) => (
-          <span className="block max-w-48 truncate text-[var(--text-muted)]" title={c.getValue<string>()}>
+          <span className="block max-w-48 truncate text-[var(--text-muted)]" data-tip={c.getValue<string>()}>
             {c.getValue<string>() || "—"}
           </span>
         ),
@@ -344,6 +344,7 @@ function ContentTab({ connId, store, isAdmin }: { connId: string; store: string;
         <ErrorState title={`Couldn't load groups for ${store}`} onRetry={() => void groupsQuery.refetch()} />
       ) : (
         <DataTable
+          storageKey="pbs-1"
           columns={columns}
           data={groupsQuery.data ?? []}
           loading={groupsQuery.isLoading}
@@ -591,7 +592,7 @@ function JobsTab({ connId, store, isAdmin }: { connId: string; store: string; is
         cell: (c) => {
           const j = c.row.original
           return (
-            <span className="block max-w-52 truncate font-mono text-xs text-[var(--text-muted)]" title={`${j.remote ?? ""}${j["remote-ns"] ? `:${j["remote-ns"]}` : ""}/${j["remote-store"]}`}>
+            <span className="block max-w-52 truncate font-mono text-xs text-[var(--text-muted)]" data-tip={`${j.remote ?? ""}${j["remote-ns"] ? `:${j["remote-ns"]}` : ""}/${j["remote-store"]}`}>
               {j.remote ? `${j.remote}/${j["remote-store"]}` : j["remote-store"]}
               {j["remote-ns"] ? ` (${j["remote-ns"]})` : ""}
             </span>
@@ -678,6 +679,7 @@ function JobsTab({ connId, store, isAdmin }: { connId: string; store: string; is
           <ErrorState title="Couldn't load sync jobs" onRetry={() => void syncQuery.refetch()} />
         ) : (
           <DataTable
+            storageKey="pbs-2"
             columns={syncColumns}
             data={syncJobs}
             loading={syncQuery.isLoading}
@@ -692,6 +694,7 @@ function JobsTab({ connId, store, isAdmin }: { connId: string; store: string; is
           <ErrorState title="Couldn't load verify jobs" onRetry={() => void verifyQuery.refetch()} />
         ) : (
           <DataTable
+            storageKey="pbs-3"
             columns={verifyColumns}
             data={verifyJobs}
             loading={verifyQuery.isLoading}

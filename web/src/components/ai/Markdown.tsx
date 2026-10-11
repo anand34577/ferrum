@@ -8,6 +8,7 @@ import { memo } from "react"
 import { toast } from "sonner"
 import { useCopiedFlag } from "@/lib/useCopiedFlag"
 import { cn } from "@/lib/utils"
+import { copyText } from "@/lib/clipboard"
 
 /**
  * Full CommonMark + GFM (tables, strikethrough, task lists, autolinks) +
@@ -80,10 +81,11 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
   const [copied, flashCopied] = useCopiedFlag()
   function copy() {
-    navigator.clipboard.writeText(code).then(() => {
+    void copyText(code).then((ok) => {
+      if (!ok) return toast.error("Could not copy to clipboard")
       flashCopied()
       toast.success("Copied to clipboard")
-    }).catch(() => toast.error("Could not copy to clipboard"))
+    })
   }
   return (
     <div className="overflow-hidden rounded-md border border-[var(--border)]">

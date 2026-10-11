@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { api, type AlertInstance } from "@/lib/api"
 import { useSseEvents } from "@/lib/sse"
-import { cn, formatAlertValue } from "@/lib/utils"
+import { alertUrl, cn, formatAlertValue } from "@/lib/utils"
 
 const SEVERITY_DOT: Record<string, string> = { critical: "bg-[var(--status-error)]", warning: "bg-[var(--status-warn)]" }
 
@@ -50,10 +50,15 @@ export function NotificationBell() {
     queryClient.invalidateQueries({ queryKey: ["alerts-summary"] })
     queryClient.invalidateQueries({ queryKey: ["alerts", "active"] })
     if (evt.type === "alert.triggered") {
-      const payload = evt.payload as { severity?: string; resourceName?: string } | undefined
+      const payload = evt.payload as { severity?: string; resourceName?: string; metric?: string; silenceExpired?: boolean } | undefined
       if (payload?.severity === "critical") {
-        toast.error(payload.resourceName ? `Critical alert: ${payload.resourceName}` : "New critical alert", {
-          action: { label: "View", onClick: () => navigate("/alerts") },
+        const target =
+          payload.resourceName && payload.metric && evt.connectionId
+            ? alertUrl({ metric: payload.metric, connectionId: evt.connectionId, resourceName: payload.resourceName })
+            : "/alerts"
+        const what = payload.silenceExpired ? "Silence ended, still critical" : "Critical alert"
+        toast.error(payload.resourceName ? `${what}: ${payload.resourceName}` : "New critical alert", {
+          action: { label: "View", onClick: () => navigate(target) },
         })
       }
     }
@@ -93,7 +98,7 @@ export function NotificationBell() {
           <div className="px-2.5 py-4 text-center text-xs text-[var(--text-muted)]">Nothing needs attention.</div>
         )}
         {activeAlertsQuery.data?.slice(0, 8).map((a) => (
-          <DropdownMenuItem key={a.id} onSelect={() => navigate("/alerts")} className="items-start gap-2.5">
+          <DropdownMenuItem key={a.id} onSelect={() => navigate(alertUrl(a))} className="items-start gap-2.5">
             <span className={cn("mt-1 h-1.5 w-1.5 shrink-0 rounded-full", SEVERITY_DOT[a.severity] ?? "bg-[var(--text-faint)]")} aria-hidden />
             <div className="min-w-0">
               <p className="truncate text-sm font-medium">{a.resourceName}</p>

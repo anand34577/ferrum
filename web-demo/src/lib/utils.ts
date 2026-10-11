@@ -107,6 +107,43 @@ export function formatRelativeTime(iso: string): string {
   return `${Math.floor(secs / 86400)}d ago`
 }
 
+/** Deep link to a guest: Inventory scoped to the guest's connection, with
+ * the guest's detail dialog auto-opened on arrival (see InventoryPage's
+ * focusGuest handling). Guests have no route of their own — the detail view
+ * is a dialog over the tree — so this is the one shareable/bookmarkable URL
+ * for "show me this VM", used by Task Center rows, alerts, topology, and
+ * paste-into-an-incident-channel links. */
+export function guestUrl(connId: string, vmid: number | string | undefined, name?: string): string {
+  const params = new URLSearchParams({ conn: connId })
+  if (vmid !== undefined && vmid !== null) params.set("focusGuest", String(vmid))
+  else if (name) params.set("focusGuest", name)
+  return `/inventory?${params.toString()}`
+}
+
+/** Where to go to act on an alert: the node's own page, the guest's detail
+ * dialog, the storage view, or the connection list — chosen by what the
+ * alert's metric measures. Every alert used to link to the same generic
+ * place regardless of what it was about. */
+export function alertUrl(alert: { metric: string; connectionId: string; resourceName: string }): string {
+  const { metric, connectionId, resourceName } = alert
+  if (metric.startsWith("node_")) return `/nodes/${connectionId}/${encodeURIComponent(resourceName)}`
+  if (metric.startsWith("guest_")) return guestUrl(connectionId, undefined, resourceName)
+  if (metric.startsWith("storage_")) return "/storage"
+  if (metric === "connection_stale") return "/connections"
+  return "/alerts"
+}
+
+/** Time left until an ISO instant as "45m" / "3h 20m" / "2d 4h"; "" once past. */
+export function formatTimeLeft(iso: string): string {
+  const mins = Math.ceil((new Date(iso).getTime() - Date.now()) / 60_000)
+  if (!Number.isFinite(mins) || mins <= 0) return ""
+  if (mins < 60) return `${mins}m`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return mins % 60 ? `${hours}h ${mins % 60}m` : `${hours}h`
+  const days = Math.floor(hours / 24)
+  return hours % 24 ? `${days}d ${hours % 24}h` : `${days}d`
+}
+
 /** Badge tone for a guest/node running state — shared so "running"/"online"
  * vs "stopped"/"offline" doesn't drift between pages. */
 export function guestStatusVariant(status?: string): "ok" | "warn" | "error" | "default" {
@@ -138,6 +175,42 @@ export function parseExtraLines(text: string): Record<string, string> | undefine
     extra[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim()
   }
   return Object.keys(extra).length > 0 ? extra : undefined
+}
+
+/** Parses one PVE "property string" value — the comma-separated key=value
+ * format PVE itself uses for a single hardware line: netN
+ * ("name=eth0,bridge=vmbr0,ip=10.0.0.5/24,firewall=1"), diskN
+ * ("local-lvm:vm-100-disk-0,size=32G,ssd=1"), and others. Unlike
+ * parseExtraLines (one key=value per whole *line*, for the multi-key
+ * "extra options" escape hatch), this is one key=value per comma *within* a
+ * single line's value — the shared building block for turning any one of
+ * those raw strings into editable fields instead of one text blob, the way
+ * Proxmox's own UI does. A bare flag with no "=" is kept as an empty-value
+ * key (PVE uses this for a disk's leading "storage:volume" segment) rather
+ * than dropped, so round-tripping through stringifyPropertyString doesn't
+ * silently lose it. */
+export function parsePropertyString(value: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (!value) return out
+  for (const part of value.split(",")) {
+    const eq = part.indexOf("=")
+    if (eq === -1) {
+      if (part.trim()) out[part.trim()] = ""
+      continue
+    }
+    out[part.slice(0, eq).trim()] = part.slice(eq + 1).trim()
+  }
+  return out
+}
+
+/** Inverse of parsePropertyString. Keys with an empty value round-trip as a
+ * bare flag (no "="); drop a key entirely by deleting it from the object
+ * before calling this, not by setting it to "". */
+export function stringifyPropertyString(fields: Record<string, string>): string {
+  return Object.entries(fields)
+    .filter(([, v]) => v !== undefined)
+    .map(([k, v]) => (v === "" ? k : `${k}=${v}`))
+    .join(",")
 }
 
 /** Config keys that hand the guest/host arbitrary code execution or bypass

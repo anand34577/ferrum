@@ -7,8 +7,8 @@ import { cn, formatRelativeTime } from "@/lib/utils"
  * the audit's consistency findings.
  *
  * Default renders relative ("4m ago") with the full locale timestamp on
- * hover/title; `mode="absolute"` renders the full timestamp inline (audit /
- * forensic surfaces) with the relative age in the title instead. `tabular`
+ * hover (data-tip); `mode="absolute"` renders the full timestamp inline (audit /
+ * forensic surfaces) with the relative age in the tip instead. `tabular`
  * keeps digits aligned in table columns.
  */
 export function Timestamp({
@@ -25,7 +25,7 @@ export function Timestamp({
   if (Number.isNaN(d.getTime())) return <span className={className}>{iso}</span>
   const full = d.toLocaleString([], { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
   return (
-    <span className={cn("tabular", className)} title={mode === "absolute" ? formatRelativeTime(iso) : full}>
+    <span className={cn("tabular whitespace-nowrap", className)} data-tip={mode === "absolute" ? formatRelativeTime(iso) : full}>
       {mode === "absolute" ? full : formatRelativeTime(iso)}
     </span>
   )

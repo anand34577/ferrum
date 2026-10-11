@@ -88,6 +88,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
+// Provider and its consumer hook live in one file on purpose (React's context
+// pattern); splitting the hook out would churn every consumer file for no
+// runtime gain.
+// eslint-disable-next-line react/only-export-components
 export function useAuth() {
   const ctx = useContext(AuthContext)
   if (!ctx) throw new Error("useAuth must be used within AuthProvider")

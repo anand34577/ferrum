@@ -4,6 +4,7 @@ import { WIDGET_CATALOG, widgetLabel, type SettingField, type WidgetSettings, ty
 import { useConnections } from "@/lib/fleet"
 import { cn } from "@/lib/utils"
 import { ErrorBoundary } from "@/components/ui/error-boundary"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 interface WidgetChromeProps {
   type: WidgetType
@@ -103,18 +104,22 @@ export function WidgetChrome({ type, editing, onRemove, settings, onSettingsChan
       {settingsOpen && fields && (
         <div className="shrink-0 space-y-2 border-b border-[var(--border)] bg-[var(--bg-muted)] px-3 py-2">
           {fields.map((f) => (
-            <label key={f.key} className="flex items-center justify-between gap-2 text-xs">
+            <div key={f.key} className="flex items-center justify-between gap-2 text-xs">
               <span className="text-[var(--text-muted)]">{f.label}</span>
-              <select
+              <Select
                 value={settings[f.key] ?? (f.dynamic === "connections" ? "all" : f.options[0]?.value)}
-                onChange={(e) => onSettingsChange({ ...settings, [f.key]: e.target.value })}
-                className="max-w-40 rounded-sm border border-[var(--border)] bg-[var(--bg-surface)] px-1.5 py-0.5 text-xs transition-colors hover:border-[var(--border-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+                onValueChange={(v) => onSettingsChange({ ...settings, [f.key]: v })}
               >
-                {optionsFor(f).map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-            </label>
+                <SelectTrigger className="h-7 w-40 px-2 text-xs" aria-label={f.label}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {optionsFor(f).map((o) => (
+                    <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           ))}
         </div>
       )}

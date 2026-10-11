@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Loader2, Wrench } from "lucide-react"
+import { Wrench } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -112,14 +112,14 @@ export function ProvisionDiskDialog({ connId, node, disk, onOpenChange }: Provis
             <p className="text-sm font-medium">Register as storage</p>
             <p className="text-xs text-[var(--text-muted)]">Make it immediately usable for VM disks/backups on this node.</p>
           </div>
-          <Switch checked={addStorage} onCheckedChange={setAddStorage} />
+          <Switch aria-label="Register as storage" checked={addStorage} onCheckedChange={setAddStorage} />
         </div>
 
         <FormError message={mutation.error instanceof ApiError ? mutation.error.message : mutation.error ? "Provisioning failed" : undefined} />
 
         <DialogFooter>
-          <Button variant="destructive" disabled={!name || mutation.isPending} onClick={() => provision()}>
-            {mutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wrench className="h-3.5 w-3.5" />}
+          <Button variant="destructive" disabled={!name} loading={mutation.isPending} onClick={() => provision()}>
+            {!mutation.isPending && <Wrench className="h-3.5 w-3.5" />}
             Erase & provision
           </Button>
         </DialogFooter>

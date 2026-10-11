@@ -51,13 +51,13 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, token, err := s.auth.Login(r.Context(), req.Username, req.Password, r.RemoteAddr, r.UserAgent())
+	user, token, err := s.auth.Login(r.Context(), req.Username, req.Password, clientIP(r), r.UserAgent())
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	slog.Info("setup completed, first admin created", "username", user.Username)
-	s.auditEntry(r.Context(), user.ID, "auth.setup", "auth", user.Username, r.RemoteAddr)
+	s.auditEntry(r.Context(), user.ID, "auth.setup", "auth", user.Username, clientIP(r))
 	auth.SetSessionCookie(w, token, s.cookieSecure(r), s.auth.SessionTTL())
 	writeJSON(w, http.StatusCreated, user)
 }
@@ -77,7 +77,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	limiterKey := clientIP(r) + "|" + strings.ToLower(req.Username)
 	if allowed, retryAfter := s.logins.Allowed(limiterKey); !allowed {
 		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retryAfter.Seconds()))))
-		slog.Warn("login rate-limited", "remote", r.RemoteAddr)
+		slog.Warn("login rate-limited", "remote", clientIP(r))
 		writeErrorMsg(w, http.StatusTooManyRequests, "too many failed attempts — try again later")
 		return
 	}
@@ -85,8 +85,8 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	user, err := s.auth.VerifyPassword(r.Context(), req.Username, req.Password)
 	if err != nil {
 		s.logins.RecordFailure(limiterKey)
-		slog.Warn("login failed", "remote", r.RemoteAddr)
-		s.auditEntry(r.Context(), "", "auth.login.failed", "auth", req.Username, r.RemoteAddr)
+		slog.Warn("login failed", "remote", clientIP(r))
+		s.auditEntry(r.Context(), "", "auth.login.failed", "auth", req.Username, clientIP(r))
 		writeErrorMsg(w, http.StatusUnauthorized, "invalid username or password")
 		return
 	}
@@ -98,13 +98,13 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := s.auth.CreateSession(r.Context(), user.ID, r.RemoteAddr, r.UserAgent())
+	token, err := s.auth.CreateSession(r.Context(), user.ID, clientIP(r), r.UserAgent())
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	slog.Info("login succeeded", "username", user.Username)
-	s.auditEntry(r.Context(), user.ID, "auth.login", "auth", user.Username, r.RemoteAddr)
+	s.auditEntry(r.Context(), user.ID, "auth.login", "auth", user.Username, clientIP(r))
 	auth.SetSessionCookie(w, token, s.cookieSecure(r), s.auth.SessionTTL())
 	writeJSON(w, http.StatusOK, user)
 }
@@ -138,14 +138,14 @@ func (s *Server) authLoginTOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.auth.VerifyTOTPStep(r.Context(), userID, req.Code); err != nil {
 		s.logins.RecordFailure(totpKey)
-		slog.Warn("totp verification failed", "userId", userID, "remote", r.RemoteAddr)
-		s.auditEntry(r.Context(), userID, "auth.login.totp_failed", "auth", userID, r.RemoteAddr)
+		slog.Warn("totp verification failed", "userId", userID, "remote", clientIP(r))
+		s.auditEntry(r.Context(), userID, "auth.login.totp_failed", "auth", userID, clientIP(r))
 		writeErrorMsg(w, http.StatusUnauthorized, "invalid authentication code")
 		return
 	}
 	s.logins.RecordSuccess(totpKey)
 
-	token, err := s.auth.CreateSession(r.Context(), userID, r.RemoteAddr, r.UserAgent())
+	token, err := s.auth.CreateSession(r.Context(), userID, clientIP(r), r.UserAgent())
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -156,7 +156,7 @@ func (s *Server) authLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("login succeeded (totp)", "username", user.Username)
-	s.auditEntry(r.Context(), user.ID, "auth.login", "auth", user.Username+" (totp)", r.RemoteAddr)
+	s.auditEntry(r.Context(), user.ID, "auth.login", "auth", user.Username+" (totp)", clientIP(r))
 	auth.SetSessionCookie(w, token, s.cookieSecure(r), s.auth.SessionTTL())
 	writeJSON(w, http.StatusOK, user)
 }

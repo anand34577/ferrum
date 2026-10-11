@@ -97,7 +97,7 @@ export function CapacityPlanningWidget({ settings }: { settings: WidgetSettings 
                 style={{ width: `${Math.min(100, usedPct)}%` }}
               />
               {allocPct > 100 && (
-                <div className="absolute inset-y-0 right-0 w-1 bg-[var(--status-warn)]" title="Allocated exceeds physical capacity" />
+                <div className="absolute inset-y-0 right-0 w-1 bg-[var(--status-warn)]" data-tip="Allocated exceeds physical capacity" />
               )}
             </div>
             <div className="flex gap-4 text-[10px] text-[var(--text-faint)]">

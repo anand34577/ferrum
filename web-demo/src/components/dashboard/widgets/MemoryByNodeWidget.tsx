@@ -37,7 +37,7 @@ export function MemoryByNodeWidget({ settings }: { settings: WidgetSettings }) {
     <div className="flex h-full flex-col justify-center gap-1.5 overflow-auto">
       {nodes.map((n) => (
         <div key={n.name} className="flex items-center gap-2 text-xs">
-          <span className="w-24 shrink-0 truncate text-[var(--text-muted)]" title={n.name}>{n.name}</span>
+          <span className="w-24 shrink-0 truncate text-[var(--text-muted)]" data-tip={n.name}>{n.name}</span>
           <Meter value={n.pct} size="md" showLabel label={`${n.name} memory`} className="flex-1" />
           <span className="hidden w-32 shrink-0 text-right text-[10px] text-[var(--text-faint)] tabular sm:block">
             {formatBytes(n.used)} / {formatBytes(n.total)}

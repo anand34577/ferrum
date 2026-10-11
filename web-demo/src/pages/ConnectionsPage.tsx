@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Download, Network, Pencil, Plus, Trash2, Wifi } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
+import { useFormDirty } from "@/components/settings/use-form-dirty"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -17,6 +18,7 @@ import { PageHeader } from "@/components/ui/page-header"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusDot } from "@/components/ui/status-dot"
+import { Textarea } from "@/components/ui/textarea"
 import { Hint } from "@/components/ui/tooltip"
 import { api, ApiError, type Connection, type ConnectionInventory } from "@/lib/api"
 
@@ -32,6 +34,12 @@ interface FormState {
   tokenSecret: string
   verifyTls: boolean
   behindReverseProxy: boolean
+  // "" means SSH access isn't configured for this connection at all.
+  sshAuthType: "" | "password" | "key"
+  sshUsername: string
+  sshPort: number
+  sshPassword: string
+  sshPrivateKey: string
 }
 
 const emptyForm: FormState = {
@@ -44,8 +52,13 @@ const emptyForm: FormState = {
   password: "",
   tokenId: "",
   tokenSecret: "",
-  verifyTls: false,
+  verifyTls: true,
   behindReverseProxy: false,
+  sshAuthType: "",
+  sshUsername: "",
+  sshPort: 22,
+  sshPassword: "",
+  sshPrivateKey: "",
 }
 
 const DEFAULT_PORT: Record<FormState["type"], number> = { pve: 8006, pbs: 8007 }
@@ -56,16 +69,24 @@ export function ConnectionsPage() {
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<FormState>(emptyForm)
+  // Dirty baseline: a snapshot of the form as it was when create/edit began.
+  // startEdit puts blanks in the secret fields (the API never returns stored
+  // credentials), so this is the form's own initial state — never raw server
+  // data. startCreate/startEdit always re-snapshot both, so dirty can't go
+  // stale across opens; the save-success handlers reset them together.
+  const [formInitial, setFormInitial] = useState<FormState>(emptyForm)
+  const formDirty = useFormDirty(form, formInitial)
 
   function startCreate() {
     setEditingId(null)
     setForm(emptyForm)
+    setFormInitial(emptyForm)
     setShowForm(true)
   }
 
   function startEdit(conn: Connection) {
     setEditingId(conn.id)
-    setForm({
+    const next: FormState = {
       name: conn.name,
       type: conn.type,
       host: conn.host,
@@ -77,11 +98,18 @@ export function ConnectionsPage() {
       tokenSecret: "",
       verifyTls: conn.verifyTls,
       behindReverseProxy: conn.behindReverseProxy,
-    })
+      sshAuthType: (conn.sshAuthType as FormState["sshAuthType"]) || "",
+      sshUsername: conn.sshUsername ?? "",
+      sshPort: conn.sshPort || 22,
+      sshPassword: "",
+      sshPrivateKey: "",
+    }
+    setForm(next)
+    setFormInitial(next)
     setShowForm(true)
   }
 
-  const { data, isLoading, isError, refetch } = useQuery({
+  const { data, isLoading, isError, refetch, isRefetching } = useQuery({
     queryKey: ["connections"],
     queryFn: () => api.get<Connection[]>("/connections/"),
   })
@@ -94,7 +122,7 @@ export function ConnectionsPage() {
 
   const testMutation = useMutation({
     mutationFn: () => api.post<{ status: string; version: string }>("/connections/test", form),
-    onSuccess: (res) => toast.success(`Connected — PVE ${res.version}`),
+    onSuccess: (res) => toast.success(`Connected — ${form.type === "pbs" ? "PBS" : "PVE"} ${res.version}`),
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Test failed"),
   })
 
@@ -105,6 +133,7 @@ export function ConnectionsPage() {
       queryClient.invalidateQueries({ queryKey: ["connections"] })
       queryClient.invalidateQueries({ queryKey: ["inventory"] })
       setForm(emptyForm)
+      setFormInitial(emptyForm)
       setShowForm(false)
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Failed to add connection"),
@@ -130,6 +159,13 @@ export function ConnectionsPage() {
         body.username = form.username
         if (form.password) body.password = form.password
       }
+      body.sshAuthType = form.sshAuthType
+      if (form.sshAuthType) {
+        body.sshUsername = form.sshUsername
+        body.sshPort = form.sshPort
+        if (form.sshPassword) body.sshPassword = form.sshPassword
+        if (form.sshPrivateKey) body.sshPrivateKey = form.sshPrivateKey
+      }
       return api.put(`/connections/${editingId}`, body)
     },
     onSuccess: () => {
@@ -137,6 +173,7 @@ export function ConnectionsPage() {
       queryClient.invalidateQueries({ queryKey: ["connections"] })
       queryClient.invalidateQueries({ queryKey: ["inventory"] })
       setForm(emptyForm)
+      setFormInitial(emptyForm)
       setEditingId(null)
       setShowForm(false)
     },
@@ -190,6 +227,11 @@ export function ConnectionsPage() {
         title="Connections"
         description="Proxmox clusters and standalone hosts."
         icon={Network}
+        onRefresh={() => {
+          void queryClient.invalidateQueries({ queryKey: ["connections"] })
+          void queryClient.invalidateQueries({ queryKey: ["inventory"] })
+        }}
+        refreshing={isRefetching}
         actions={
           <Button onClick={() => (showForm ? setShowForm(false) : startCreate())}>
             <Plus className="h-4 w-4" /> Add connection
@@ -243,7 +285,13 @@ export function ConnectionsPage() {
                 <Label>Port</Label>
                 <Input
                   type="number"
+                  min={1}
+                  max={65535}
                   value={form.port}
+                  // Clearing the field or typing 0 would otherwise PUT a
+                  // portless/invalid connection — snap back to the type's
+                  // default on blur instead.
+                  onBlur={() => setForm((f) => ({ ...f, port: f.port >= 1 && f.port <= 65535 ? f.port : DEFAULT_PORT[f.type] }))}
                   onChange={(e) => setForm({ ...form, port: Number(e.target.value) })}
                 />
               </div>
@@ -266,6 +314,7 @@ export function ConnectionsPage() {
                     <Label>Token ID</Label>
                     <Input
                       placeholder="root@pam!ferrum"
+                      autoComplete="off"
                       value={form.tokenId}
                       onChange={(e) => setForm({ ...form, tokenId: e.target.value })}
                     />
@@ -274,6 +323,7 @@ export function ConnectionsPage() {
                     <Label>{editingId ? "Token secret (leave blank to keep current)" : "Token secret"}</Label>
                     <Input
                       type="password"
+                      autoComplete="new-password"
                       value={form.tokenSecret}
                       onChange={(e) => setForm({ ...form, tokenSecret: e.target.value })}
                     />
@@ -285,6 +335,7 @@ export function ConnectionsPage() {
                     <Label>Username</Label>
                     <Input
                       placeholder="root@pam"
+                      autoComplete="off"
                       value={form.username}
                       onChange={(e) => setForm({ ...form, username: e.target.value })}
                     />
@@ -293,6 +344,7 @@ export function ConnectionsPage() {
                     <Label>{editingId ? "Password (leave blank to keep current)" : "Password"}</Label>
                     <Input
                       type="password"
+                      autoComplete="new-password"
                       value={form.password}
                       onChange={(e) => setForm({ ...form, password: e.target.value })}
                     />
@@ -315,6 +367,55 @@ export function ConnectionsPage() {
               </label>
             </div>
 
+            <div className="space-y-3 rounded-md border border-[var(--border)] p-3">
+              <div className="space-y-1.5">
+                <Label>SSH access (optional)</Label>
+                <p className="text-xs text-[var(--text-muted)]">
+                  Lets "SSH Shell" in Inventory connect straight to this host without retyping a password every time.
+                </p>
+                <Select value={form.sshAuthType || "none"} onValueChange={(v) => setForm({ ...form, sshAuthType: v === "none" ? "" : (v as FormState["sshAuthType"]) })}>
+                  <SelectTrigger className="max-w-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Not configured</SelectItem>
+                    <SelectItem value="password">Username / password</SelectItem>
+                    <SelectItem value="key">Username / private key</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {form.sshAuthType && (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label>SSH username</Label>
+                    <Input placeholder="root" autoComplete="off" value={form.sshUsername} onChange={(e) => setForm({ ...form, sshUsername: e.target.value })} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>SSH port</Label>
+                    <Input type="number" min={1} max={65535} value={form.sshPort} onChange={(e) => setForm({ ...form, sshPort: Number(e.target.value) })} />
+                  </div>
+                  {form.sshAuthType === "password" ? (
+                    <div className="space-y-1.5 sm:col-span-2">
+                      <Label>{editingId ? "SSH password (leave blank to keep current)" : "SSH password"}</Label>
+                      <Input type="password" autoComplete="new-password" value={form.sshPassword} onChange={(e) => setForm({ ...form, sshPassword: e.target.value })} />
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5 sm:col-span-2">
+                      <Label>{editingId ? "SSH private key (leave blank to keep current)" : "SSH private key"}</Label>
+                      <Textarea
+                        rows={4}
+                        placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                        className="font-mono text-xs"
+                        value={form.sshPrivateKey}
+                        onChange={(e) => setForm({ ...form, sshPrivateKey: e.target.value })}
+                      />
+                      <p className="text-xs text-[var(--text-muted)]">Unencrypted (no passphrase) keys only, for now.</p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             <FormError
               message={(() => {
                 const err = testMutation.error ?? (editingId ? updateMutation.error : createMutation.error)
@@ -322,6 +423,9 @@ export function ConnectionsPage() {
               })()}
             />
 
+            {(!form.name || !form.host) && (
+              <p className="text-xs text-[var(--text-muted)]">Name and host are required.</p>
+            )}
             <div className="flex flex-wrap gap-2">
               <Button
                 variant="secondary"
@@ -330,12 +434,12 @@ export function ConnectionsPage() {
                 disabled={!form.host}
               >
                 {!testMutation.isPending && <Wifi className="h-4 w-4" />}
-                Test
+                Test connection
               </Button>
               <Button
                 onClick={() => (editingId ? updateMutation.mutate() : createMutation.mutate())}
                 loading={saving}
-                disabled={!form.name || !form.host}
+                disabled={!formDirty || !form.name || !form.host}
               >
                 {editingId ? "Save changes" : "Save connection"}
               </Button>
@@ -376,19 +480,27 @@ export function ConnectionsPage() {
               <CardContent className="flex flex-wrap items-center justify-between gap-2 py-3">
                 <div className="min-w-0 flex-1">
                   <p className="flex min-w-0 items-center gap-2 font-medium">
-                    {status && <StatusDot status={status.online ? "ok" : "error"} />}
+                    {status && (
+                      <span className="flex shrink-0 items-center" data-tip={status.online ? "Reachable" : "Unreachable"}>
+                        <StatusDot status={status.online ? "ok" : "error"} />
+                        <span className="sr-only">{status.online ? "Reachable" : "Unreachable"}</span>
+                      </span>
+                    )}
                     <span className="truncate">{conn.name}</span>
+                    {/* The reason a connection is down used to live only in a
+                        hover tooltip — print it like Overview does, since
+                        "red dot" alone doesn't fix a dead host. */}
+                    {status && !status.online && (
+                      <span className="hidden min-w-0 truncate text-xs font-normal text-[var(--status-error)] sm:inline" data-tip={status.error}>
+                        {status.error ?? "unreachable"}
+                      </span>
+                    )}
                   </p>
                   <p className="truncate text-xs text-[var(--text-muted)]">
                     {conn.host}:{conn.port} · {conn.authType === "token" ? "API token" : "username / password"}
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  {status && (
-                    <span className="flex shrink-0 items-center" title={status.online ? "Online" : "Unreachable"}>
-                      <StatusDot status={status.online ? "ok" : "error"} />
-                    </span>
-                  )}
                   <Badge variant="outline">{conn.type === "pbs" ? "PBS" : "PVE"}</Badge>
                   <Badge variant={conn.verifyTls ? "ok" : "default"}>{conn.verifyTls ? "TLS verified" : "TLS insecure"}</Badge>
                   {conn.type === "pve" && (
@@ -416,8 +528,7 @@ export function ConnectionsPage() {
                   <Hint label="Remove connection">
                     <Button
                       size="icon"
-                      variant="ghost"
-                      className="hover:bg-[color-mix(in_oklab,var(--status-error)_12%,transparent)] hover:text-[var(--status-error)]"
+                      variant="ghost-danger"
                       onClick={() => removeConnection(conn)}
                       aria-label={`Remove ${conn.name}`}
                     >
